@@ -1,18 +1,22 @@
 # EffectPython: Architectural Proof of Concept Plan
 
-This document outlines the architecture and implementation specification for **EffectPython**, a Python dialect that introduces native algebraic effect management using the RPython framework. The goal is to maintain 100% syntactically valid Python 3 code (allowing standard IDEs, formatters, and linters to parse it without errors) while leveraging RPython's `rlib.rstacklet.continulet` primitives for delimited stack suspension and resumption.
+This document outlines the architecture and implementation specification for **EffectPython**, a Python dialect that introduces native algebraic effect management using the RPython framework. The goal is to maintain 100% syntactically valid Python 3 code (allowing standard IDEs, formatters, and linters to parse it without errors) while leveraging RPython's `rlib.rstacklet` stacklets (the primitive under PyPy's app-level `continulet`) for delimited stack suspension and resumption.
+
+**Toolchain.** RPython is a subset of Python 2.7, and the translation toolchain runs on CPython 2.7 or PyPy2. Everything under `effectpython/` (lexer, parser, checker, interpreter) is therefore Python 2 code under RPython's restrictions, run and tested with a Python 2 `pytest` (4.6 is the last release that supports 2.7). The `.epy` programs that the interpreter reads are Python 3 syntax. The two never mix: the host interpreter parses `.epy` files with its own `rply` grammar and never imports them.
 
 ---
 
 ## Phase 1: Syntax and Semantics (The "Valid Python 3" Design)
 
-To ensure every `.epy` file is valid Python 3 syntax (parsable by `ast.parse` and `rply`), EffectPython uses standard Python 3.10+ constructs (`class`, type annotations, `try`/`except`, or `with` + `match`) rather than invalid custom keywords.
+To ensure every `.epy` file is valid Python 3 syntax (accepted by `ast.parse`), EffectPython uses standard Python 3 constructs (`class`, type annotations, `try`/`except`, and `with`) rather than custom keywords. The `rply` grammar in Phase 2 accepts a subset of that syntax.
+
+Validity is syntactic. A type checker such as `mypy` rejects `str / [FileIO]` as an annotation, and CPython 3.13 and earlier evaluate annotations at definition time, so the `/` between a type and a list raises a `TypeError` when the module is imported. CPython 3.14 and later defer annotation evaluation and import the file. Either way, a `.epy` file is input for the EffectPython interpreter and for editors, not a module for CPython.
 
 ### 1.1 Declaring Effects and Operations
 Effects are declared as classes inheriting from `Effect`, where methods define effect operations and their argument/return type signatures:
 
 ```python
-from effectpython import Effect, perform, handle, Resume
+from effectpython import Effect, perform, handle
 
 class FileIO(Effect):
     def read(path: str) -> str: ...
@@ -21,6 +25,8 @@ class FileIO(Effect):
 class DBQuery(Effect):
     def execute(sql: str) -> str: ...
 ```
+
+The `import` line exists so an editor can resolve the names; the EffectPython parser accepts it and ignores it (2.1).
 
 ### 1.2 Declaring Effect Rows in Function Signatures
 Function return annotations use the `/` binary operator over type hints to separate the return type from the effect row (`ReturnType / [Effect1, Effect2]`):
@@ -34,7 +40,7 @@ def read_config(path: str) -> str / [FileIO]:
 *   **Effect granularity:** Effect rows track **Effect interfaces** (e.g., `FileIO`), while handlers must cover all operations of an effect interface to discharge that effect from the row.
 
 ### 1.3 Triggering Effects (`perform`)
-`perform(EffectClass.operation(*args))` is a built-in runtime primitive. Evaluating `FileIO.read(path)` constructs an `EffectOperation` descriptor value, and `perform(...)` suspends the current delimited continuation up to the nearest enclosing handler for `FileIO`.
+`perform(EffectClass.operation(*args))` is a built-in runtime primitive. Evaluating `FileIO.read(path)` constructs an effect payload (a `W_EffectPayload` at runtime, see 3.1) that records the effect, the operation, and the evaluated arguments, and `perform(...)` suspends the current delimited continuation up to the nearest enclosing handler for `FileIO`.
 
 ### 1.4 Handling Effects (Valid Python 3 Syntax)
 To remain valid Python 3 syntax while supporting multi-clause effect handling and resumption, EffectPython uses a `try` / `except` handler block with `handle()` (or handler functions):
@@ -46,7 +52,7 @@ def main() -> int / []:
             config = read_config("settings.json")
             print(config)
     except FileIO.read as eff:
-        # eff binds (.args, .resume) where eff.args = (path,)
+        # eff exposes the operation's parameters by name, plus eff.resume
         path = eff.path
         actual_data = read_host_file(path)
         eff.resume(actual_data)
@@ -56,7 +62,7 @@ def main() -> int / []:
     return 0
 ```
 
-> **Note on Execution Semantics:** Even though the surface syntax uses `try` / `except` with `with handle(...)` for Python 3 parser compatibility, the EffectPython AST evaluator compiles this construct into an **algebraic effect handler frame** (not a stack-unwinding exception). Calling `eff.resume(val)` returns control directly to the suspended `perform()` call site, and when the `with handle(...)` body completes normally, execution proceeds past the `try`/`except` block.
+> **Note on Execution Semantics:** Even though the surface syntax uses `try` / `except` with `with handle(...)` for Python 3 parser compatibility, the EffectPython AST evaluator compiles this construct into an **algebraic effect handler frame** (not a stack-unwinding exception). Calling `eff.resume(val)` returns control directly to the suspended `perform()` call site and runs the body until it performs again or finishes; `eff.resume(val)` then returns to the clause. When the `with handle(...)` body completes normally, execution proceeds past the `try`/`except` block. A clause that finishes without calling `eff.resume(...)` also proceeds past the block, and the suspended body is abandoned (3.4, step 5).
 
 ---
 
@@ -65,21 +71,22 @@ def main() -> int / []:
 The frontend guarantees at compile-time that no effect is triggered without a matching handler up the call stack, and that all handlers for an effect interface are exhaustive.
 
 ### 2.1 Minimal Grammar Subset (`rply`)
-Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`), identifiers (`NAME`), literals (`INT`, `STRING`), operators (`+`, `-`, `*`, `/`, `==`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`).
+`rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `try`, `except`, `as`, `with`, `from`, `import`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `/`, `==`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`).
 *   **Statements:**
+    *   `from effectpython import <names>` (accepted and ignored)
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, `pass`, assignment `<name> = <expr>`, expression statements
     *   `if <expr>: <suite> else: <suite>`
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
-*   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls, attribute calls (`Effect.op(...)`), `perform(<expr>)`, and `<name>.resume(<expr>)`.
+*   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, and `<name>.resume(<expr>)`.
 
 ### 2.2 Static Effect Inference & Verification Algorithm
 The static analyzer runs in three passes over the AST before execution:
 
 1.  **Pass 1 — Effect & Function Signature Collection:**
-    *   Collects all `Effect` subclasses and their declared operations (`op_name -> (arg_types, return_type)`).
+    *   Collects all `Effect` subclasses and their declared operations (`op_name -> (param_names, arg_types, return_type)`).
     *   Collects all function signatures (`func_name -> (param_types, return_type, declared_effect_row)`).
     *   Allows recursive and mutually recursive functions by seeding the symbol table from explicit annotations before checking function bodies.
 2.  **Pass 2 — Intra-Procedural Effect Verification:**
@@ -88,7 +95,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `CallNode(callee, args)`: looks up `callee` in the function table and unions `callee.declared_effect_row` into the current scope's `inferred_effects`.
         *   `HandleNode(handled_effects, body, clauses)`:
             1. Verifies that for every `E` in `handled_effects`, `clauses` provide an `except E.op as eff:` clause for **every** operation declared on `E` (exhaustiveness check).
-            2. Verifies that inside each clause, `eff.resume(val)` is called with a `val` matching `E.op`'s return type.
+            2. Types `eff.<param>` inside each clause from `E.op`'s parameter names and types, and verifies that `eff.resume(val)` is called with a `val` matching `E.op`'s return type.
             3. Computes the net effect of the `HandleNode` as:
                $$\text{Effects}(\text{HandleNode}) = (\text{Effects}(\text{body}) \setminus \text{handled\_effects}) \cup \bigcup_{c \in \text{clauses}} \text{Effects}(c)$$
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
@@ -97,9 +104,9 @@ The static analyzer runs in three passes over the AST before execution:
 
 ---
 
-## Phase 3: The Backend Runtime (RPython Object Model & Continulets)
+## Phase 3: The Backend Runtime (RPython Object Model & Stacklets)
 
-RPython is a statically typed subset of Python that compiles to C. The interpreter cannot pass untyped Python objects around; it requires a boxed object hierarchy and explicit side-channel mailboxes to transfer data across `continulet` stack switches.
+RPython is a statically typed subset of Python 2 that compiles to C. The interpreter cannot pass untyped Python objects around; it requires a boxed object hierarchy, and since a stacklet switch carries no value (3.2), a mailbox object to transfer data across switches.
 
 ### 3.1 Boxed Runtime Value Hierarchy (`W_Root`)
 All runtime values inherit from a single base class `W_Root` so `eval_ast` has a uniform RPython return type:
@@ -123,18 +130,40 @@ class W_EffectPayload(W_Root):
 
 class W_EffBinding(W_Root):
     """Bound to `eff` in `except Effect.op as eff:`"""
-    def __init__(self, payload, handler_frame):
-        self.payload = payload          # W_EffectPayload
+    def __init__(self, payload, handler_frame, h_body):
+        self.payload = payload              # W_EffectPayload
         self.handler_frame = handler_frame  # HandlerFrame
+        self.h_body = h_body                # stacklet handle of the suspended body; consumed by resume()
 ```
 
-### 3.2 How `rlib.rstacklet.continulet` Actually Works
-In RPython, `continulet` is a **one-shot delimited continuation** primitive that captures the C stack between a delimiter base and a suspension point:
-1.  **Creation at `handle` (NOT at `perform`):** A `continulet` must be initialized **when entering the `with handle(...)` block**. `continulet.__init__(cont, body_thunk, ...)` starts running `body_thunk` in a new stacklet frame anchored at the handler.
-2.  **No Payload in `switch()`:** `cont.switch()` only swaps C stack pointers; it does **not** pass `W_Root` values directly. Values are exchanged via a `HandlerFrame` mailbox object shared between the handler and the suspended `perform` site.
+`eff.path` resolves through the operation's declared parameter names: the interpreter looks up `(effect_name, op_name)` in the signature table from Pass 1 and indexes `args_w` by the parameter's position.
+
+### 3.2 How `rlib.rstacklet` Works
+`rpython.rlib.rstacklet` is the RPython-level primitive under PyPy's app-level `continulet`; there is no `continulet` class at the RPython level. The module exposes one class, `StackletThread`, with four methods:
+
+```python
+from rpython.rlib import rstacklet
+sthread = rstacklet.StackletThread()  # one per OS thread; EffectPython creates one at startup
+h = sthread.new(callback, arg)        # start a stacklet running callback(h, arg); returns when it switches away or finishes
+h = sthread.switch(h)                 # jump to the stacklet behind h; returns when something switches back
+sthread.is_empty_handle(h)            # True when the stacklet behind h has finished
+sthread.get_null_handle()             # placeholder for a field that holds no handle yet
+```
+
+Four rules follow from that API, and 3.3 and 3.4 are built on them:
+
+1.  **`new()` runs the body at once.** Unlike the app-level `continulet`, whose callable waits for the first `switch()`, `new()` enters `callback` immediately. The callback has the signature `callback(h, arg)`, where `h` is the handle of the side that called `new()`. The callback must return a handle, and the stacklet finishes by switching to that handle.
+2.  **Handles are one-shot and change on every switch.** `switch(h)` consumes `h` and returns a fresh handle for whichever stacklet just switched into the caller. The same holds for the handle `new()` returns. Switching to a consumed handle is undefined behavior at the C level, so the interpreter enforces one-shot resumption itself (3.4, step 4).
+3.  **A finished stacklet yields an empty handle.** When the callback returns, the side it switches to receives a handle for which `is_empty_handle()` is true. That is the only completion signal, so the mailbox carries the result.
+4.  **Nothing crosses a switch except control.** `switch()` carries no value, and `new()`'s `arg` is a raw `llmemory.Address`, unusable for `W_Root` objects. PyPy's `_continuation` module passes the continulet to its callback through a module-level `global_state` object and transports exceptions the same way (`global_state.propagate_exception`). EffectPython does the same: a `HandlerFrame` mailbox holds everything that travels between the handler and the body, including any exception the body raises, because an RPython exception that escapes the callback cannot propagate across the switch.
+
+Two constraints on translation and testing:
+
+*   Translation needs `--continuation` (`rstacklet` asserts `config.translation.continuation`). The `shadowstack` GC root finder, the default, is the one that supports stacklets, and `--gc=boehm` is incompatible with `--continuation`.
+*   `rstacklet`'s own test suite runs compiled. Its root-finder selection has an untranslated branch (`gcrootfinder = 'n/a'`, commented `# for tests`), and PyPy's `_continuation` application-level tests use it, so the untranslated path should work under a Python 2.7 `pytest`. Treat the translated run in Milestone 4 as the proof, since only it exercises the GC's view of suspended stacks.
 
 ### 3.3 The `HandlerFrame` and Context Stack
-The interpreter maintains `execution_context.handler_stack: list[HandlerFrame]`. Each `HandlerFrame` holds:
+The interpreter holds one module-level `sthread = StackletThread()`, a module-level `global_state` object whose `frame` field carries the `HandlerFrame` into the body callback, and `execution_context.handler_stack: list[HandlerFrame]`. Each `HandlerFrame` holds:
 
 ```python
 class HandlerFrame(object):
@@ -142,63 +171,67 @@ class HandlerFrame(object):
         self.handled_effects = handled_effects  # list[str]
         self.clauses = clauses                  # dict[(effect, op), ClauseAST]
         self.env = env                          # Environment
-        self.cont = None                        # continulet instance
-        # Mailbox fields for communicating across cont.switch():
+        self.h_handler = sthread.get_null_handle()  # handle of the handler side, held by the body; replaced on every switch
+        # Mailbox fields for communicating across a switch:
         self.status = STATUS_RUNNING            # RUNNING | SUSPENDED | COMPLETED
         self.pending_payload = None             # W_EffectPayload set by perform()
         self.resume_value = None                # W_Root set by eff.resume(val)
-        self.body_result = None                 # W_Root set when body finishes
-        self.resumed_once = False               # Enforces one-shot resumption
+        self.body_result = None                 # W_Root set when the body finishes
+        self.pending_exception = None           # exception raised by the body, re-raised on the handler side
+        self.saved_frames = None                # list[HandlerFrame]: this frame and the inner frames, hidden while a clause runs
 ```
+
+The handle of the suspended body lives in the `W_EffBinding`, not in the frame, so each suspension has its own one-shot token.
 
 ### 3.4 Step-by-Step Control Flow (`handle` -> `perform` -> `resume`)
 
 ```mermaid
 sequenceDiagram
-    participant Caller as Outer eval_ast
-    participant HFrame as HandlerFrame (with handle)
-    participant Cont as Continulet (Body Stacklet)
-    participant Clause as Handler Clause (except Effect.op)
+    participant Handler as Handler side (eval of try / with handle)
+    participant Body as Body stacklet (run_body_callback)
+    participant Clause as Handler clause (except Effect.op)
 
-    Caller->>HFrame: Push HandlerFrame to handler_stack
-    HFrame->>Cont: new continulet(run_handler_body, HFrame)
-    Note over Cont: Executes body AST inside stacklet
-    Cont->>Cont: Hits perform(FileIO.read("cfg.json"))
-    Cont->>HFrame: Lookup nearest HandlerFrame for FileIO
-    Cont->>HFrame: Set HFrame.status = SUSPENDED
-    Cont->>HFrame: Set HFrame.pending_payload = W_EffectPayload("FileIO", "read", ["cfg.json"])
-    Cont->>HFrame: HFrame.cont.switch() (suspends C stack of body)
-    HFrame->>Clause: Pop HFrame temporarily; bind `eff` = W_EffBinding
-    Clause->>Clause: Compute actual_data
-    Clause->>HFrame: Call eff.resume(actual_data)
-    HFrame->>HFrame: Set HFrame.resume_value = actual_data, status = RUNNING
-    HFrame->>Cont: Re-push HFrame; call HFrame.cont.switch()
-    Cont->>Cont: Wakes up at perform(), returns HFrame.resume_value
-    Cont->>HFrame: Body finishes: set HFrame.status = COMPLETED, HFrame.body_result = res
-    Cont-->>Caller: Continulet finishes and returns to HFrame loop
+    Handler->>Handler: push HandlerFrame; global_state.frame = frame
+    Handler->>Body: h = sthread.new(run_body_callback)
+    Body->>Body: frame.h_handler = h; evaluate body AST
+    Body->>Body: perform(FileIO.read("cfg.json")): find frame; hide frame and inner frames
+    Body->>Body: frame.status = SUSPENDED; frame.pending_payload = payload
+    Body->>Handler: frame.h_handler = sthread.switch(frame.h_handler)
+    Note over Handler: new() returns h_body (not empty)
+    Handler->>Clause: dispatch(frame, h_body): bind eff = W_EffBinding(payload, frame, h_body); run clause
+    Clause->>Clause: compute actual_data
+    Clause->>Body: eff.resume(actual_data): resume_value = actual_data; status = RUNNING; h = sthread.switch(eff.h_body)
+    Body->>Body: switch() returns inside perform(); restore hidden frames; return resume_value
+    Body->>Body: body finishes: status = COMPLETED; body_result = res
+    Body->>Clause: callback returns frame.h_handler (stacklet finishes)
+    Note over Clause: switch() inside eff.resume() returns an empty handle
+    Clause->>Clause: dispatch sees the empty handle; eff.resume() returns body_result
+    Clause->>Handler: clause finishes; pop frame; continue after try / except
 ```
 
 1.  **Entering `with handle(...)`:**
-    *   Instantiate `frame = HandlerFrame(...)` and push it onto `handler_stack`.
-    *   Initialize `frame.cont = continulet(run_body_trampoline, frame)` which immediately enters `run_body_trampoline` and evaluates the `with` body AST.
+    *   Instantiate `frame = HandlerFrame(...)`, push it onto `handler_stack`, and set `global_state.frame = frame`.
+    *   Call `h = sthread.new(run_body_callback)`. `run_body_callback(h, arg)` reads `frame` from `global_state`, stores `frame.h_handler = h`, and evaluates the `with` body AST inside a `try`/`except` that stores any exception in `frame.pending_exception`. It then sets `frame.status = STATUS_COMPLETED` and `frame.body_result`, and returns `frame.h_handler`, which finishes the stacklet.
+    *   `new()` returns on the handler side either when the body first performs (with a live handle) or when it finishes (with an empty handle). Call `dispatch(frame, h)` (step 3). Afterwards, if `frame.status == STATUS_COMPLETED`, pop `frame` and re-raise `frame.pending_exception` if it is set; otherwise the body was abandoned and `perform` (step 2) has already removed the frame.
 2.  **Executing `perform(Effect.op(*args))`:**
     *   Evaluate `args` to `list[W_Root]`.
-    *   Search `handler_stack` from top to bottom for the nearest `HandlerFrame` handling `Effect`.
+    *   Search `handler_stack` from top to bottom for the nearest `HandlerFrame` handling `Effect`, at index `i`.
+    *   Hide the frame and everything above it, so effects performed *inside* the handler clause resolve to outer handlers: `frame.saved_frames = handler_stack[i:]`, then `del handler_stack[i:]`. The inner frames' stacklets stay suspended inside the body's C stack slice.
     *   Store `frame.pending_payload = W_EffectPayload(Effect, op, args_w)` and `frame.status = STATUS_SUSPENDED`.
-    *   Call `frame.cont.switch()` to pause the C stack slice (including any intermediate function calls between `handle` and `perform`) and return control to the `HandlerFrame` loop.
-3.  **Dispatching the Handler Clause & `eff.resume(val)`:**
-    *   Back in the `HandlerFrame` loop, observe `frame.status == STATUS_SUSPENDED`.
-    *   Temporarily pop `frame` (and any inner frames above it stays encapsulated inside the suspended stacklet) so effects performed *inside* the handler clause resolve to outer handlers.
-    *   Bind `eff = W_EffBinding(frame.pending_payload, frame)` in the clause's local environment and evaluate the matching `except Effect.op as eff:` suite.
-    *   When the clause evaluates `eff.resume(val_w)`:
-        *   Check `if frame.resumed_once:` -> raise runtime `OneShotContinuationError("Cannot resume a continulet more than once")`.
-        *   Set `frame.resumed_once = True` (for this suspension), `frame.resume_value = val_w`, `frame.status = STATUS_RUNNING`.
-        *   Call `frame.cont.switch()` to swap the C stack back to the paused `perform()` site.
-4.  **Returning from `perform()`:**
-    *   Execution inside the stacklet resumes immediately after `frame.cont.switch()`.
-    *   Reset `frame.resumed_once = False` (so subsequent `perform()` calls inside the same `handle` block can suspend again), extract `val_w = frame.resume_value`, and return `val_w` as the result of `perform(...)`.
+    *   Call `frame.h_handler = sthread.switch(frame.h_handler)`. This pauses the C stack slice (including any intermediate function calls between `handle` and `perform`) and returns control to the handler side, which is either `new()` in step 1 or `switch()` inside an earlier `eff.resume()` (step 4). The assignment stores the fresh handle of whichever side resumes the body.
+3.  **Dispatching the Handler Clause (`dispatch(frame, h)`):**
+    *   If `sthread.is_empty_handle(h)`, the body finished: return `frame.body_result`.
+    *   Otherwise `frame.status == STATUS_SUSPENDED`. Bind `eff = W_EffBinding(frame.pending_payload, frame, h)` in the clause's local environment, look up the clause by `(effect, op)` (the checker guarantees one exists), and evaluate its suite.
+    *   When the suite finishes, return the value that `eff.resume(...)` produced, or `W_None` if the clause never resumed (step 5).
+4.  **Resuming with `eff.resume(val_w)`:**
+    *   If `eff.h_body` is the null handle, the binding was already consumed: raise a runtime `OneShotContinuationError("Cannot resume a suspended body more than once")`.
+    *   Take `h = eff.h_body`, set `eff.h_body` to the null handle, set `frame.resume_value = val_w` and `frame.status = STATUS_RUNNING`.
+    *   Call `h2 = sthread.switch(h)`, which swaps the C stack back to the paused `perform()` site. Inside the body, `switch()` returns, `perform` restores `handler_stack.extend(frame.saved_frames)`, clears `frame.saved_frames`, and returns `frame.resume_value` as the result of `perform(...)`.
+    *   `switch(h)` returns on the handler side when the body performs again or finishes. Return `dispatch(frame, h2)`, so `eff.resume(...)` evaluates to the body's result once the body completes.
+    *   This makes the handler deep: the clause for the body's second `perform` runs nested inside the first clause's `eff.resume()` call, so N sequential performs nest N clause evaluations on the handler side's C stack. A PoC accepts that; a later version can treat an `eff.resume(...)` in tail position of a clause as a switch with no nested dispatch.
 5.  **Non-Resuming Handlers (Abort / Early Exit):**
-    *   If a handler clause finishes without calling `eff.resume(...)`, the `with handle(...)` block terminates early and returns the handler clause's result.
+    *   If a handler clause finishes without calling `eff.resume(...)`, `dispatch` returns `W_None`, the suspended body is abandoned, and execution proceeds past the `try`/`except` block.
+    *   `StackletThread` has no `destroy` method. The `shadowstack` backend frees an abandoned stacklet from its GC destructor when the handle object becomes unreachable, so dropping the `W_EffBinding` (and setting `eff.h_body` to the null handle) is the whole cleanup.
 
 ---
 
@@ -215,7 +248,7 @@ effectpython/
 │   ├── ast_nodes.py        # RPython-compatible AST node classes
 │   ├── checker.py          # Static effect row inference & exhaustiveness checker
 │   ├── model.py            # W_Root, W_Int, W_Str, W_EffectPayload, W_EffBinding
-│   ├── interpreter.py      # AST evaluator, HandlerFrame, continulet integration
+│   ├── interpreter.py      # AST evaluator, HandlerFrame, rstacklet integration
 │   └── errors.py           # EffectError, UnhandledEffectError, OneShotContinuationError
 └── tests/
     ├── test_parser.py
@@ -227,20 +260,23 @@ effectpython/
 
 1.  **Milestone 1: The Core Evaluator (`ast_nodes.py`, `model.py`, `interpreter.py`)**
     *   Build the `W_Root` hierarchy and an RPython-compliant AST evaluator supporting functions, local lexical environments, arithmetic, conditionals, and `print`.
-    *   *Acceptance test:* Run a recursive Fibonacci `.epy` script untranslated under pytest.
+    *   *Acceptance test:* Run a recursive Fibonacci `.epy` script untranslated under a Python 2.7 `pytest`.
 2.  **Milestone 2: The Frontend & Static Effect Checker (`lexer.py`, `parser.py`, `checker.py`)**
     *   Implement the `rply` parser for the EffectPython grammar subset and the 3-pass static effect analyzer.
     *   *Acceptance test:*
         *   Reject a function that calls `perform(FileIO.read("a"))` without `/ [FileIO]` in its signature (`UnhandledEffectError`).
         *   Reject a `with handle(FileIO):` block missing an `except` clause for one of `FileIO`'s declared operations.
         *   Accept a valid program where `main() -> int / []` handles all effects of its callees.
-3.  **Milestone 3: Delimited Suspension & Resumption (`rlib.rstacklet.continulet`)**
+3.  **Milestone 3: Delimited Suspension & Resumption (`rlib.rstacklet`)**
     *   Implement `HandlerFrame`, the handler context stack, `perform` suspension across nested function calls, and `eff.resume(val)` resumption.
     *   *Acceptance test:*
         *   Single `perform` and `resume` across a 3-function-deep call chain (`main` -> `load_app` -> `read_config` -> `perform`).
         *   Multiple sequential `perform` calls inside the same `with handle(...)` block.
         *   Nested `with handle(DBQuery):` inside `with handle(FileIO):` routing effects to the correct handler frame.
         *   Raising `OneShotContinuationError` if a handler calls `eff.resume()` twice.
+        *   A clause that finishes without resuming, after which execution continues past the `try`/`except` block.
+        *   An exception raised inside the handled body, re-raised on the handler side.
+    *   Run these untranslated first (3.2 describes the untranslated stacklet path). If stack switching under CPython 2.7 proves unreliable, run them only through the translated binary from Milestone 4.
 4.  **Milestone 4: RPython Translation (`targeteffectpython.py`)**
     *   Write `entry_point(argv)` and `target(driver, args)` conforming to RPython's static typing constraints (no dynamic attribute creation, homogeneous lists, uniform `W_Root` returns).
-    *   *Acceptance test:* Translate with `rpython targeteffectpython.py` into a standalone native executable (`effectpython-c`) and execute sample `.epy` programs natively.
+    *   *Acceptance test:* Translate with `rpython --continuation targeteffectpython.py` into a standalone native executable (`effectpython-c`), execute sample `.epy` programs natively, and run the Milestone 3 programs against the binary.
