@@ -5,11 +5,16 @@ in checker.py walk them with isinstance dispatch, so one node class serves
 both. Every list field is homogeneous (all Stmt or all Expr), as RPython
 requires. lineno is 0 for nodes built by hand; the parser fills it in.
 
+Node extends rply's BaseBox so that parser productions can return nodes
+directly: RPython needs every value on the parse stack to share one type,
+and BaseBox is the type rply gives it. BaseBox adds no fields or behavior.
+
 The surface syntax each node represents is given in its docstring.
 """
+from rply.token import BaseBox
 
 
-class Node(object):
+class Node(BaseBox):
     _attrs_ = ['lineno']
 
     def __init__(self, lineno=0):

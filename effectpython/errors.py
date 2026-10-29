@@ -25,3 +25,16 @@ class UnhandledEffectError(EffectError):
 class OneShotContinuationError(EffectError):
     """Runtime: a handler clause called eff.resume() twice (plan 3.4, step 4).
     Raised by the interpreter in Milestone 3."""
+
+
+class InvalidSyntax(EffectError):
+    """Compile-time: the lexer or parser rejected the source. lineno and
+    colno are 1-based; lineno is 0 when the error is at end of input and
+    there is no position to report."""
+
+    def __init__(self, lineno, colno, what):
+        self.lineno = lineno
+        self.colno = colno
+        if lineno > 0:
+            what = "line %d, column %d: %s" % (lineno, colno, what)
+        EffectError.__init__(self, what)

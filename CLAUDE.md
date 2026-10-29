@@ -50,7 +50,7 @@ The RPython source tree is `~/pypy/pypy2.7-v8.0.1-src`. No CPython 2.7 is instal
 pypy2 -m pytest
 
 # Run a target or experiment untranslated
-PYTHONPATH=~/pypy/pypy2.7-v8.0.1-src pypy2 targeteffectpython.py [n]
+PYTHONPATH=~/pypy/pypy2.7-v8.0.1-src pypy2 targeteffectpython.py tests/programs/fib.epy
 
 # Translate (about 15 seconds for a small target)
 pypy2 ~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython --batch --continuation \

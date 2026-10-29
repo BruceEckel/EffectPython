@@ -7,11 +7,10 @@ Translate with:
 
 Run untranslated with:
 
-    PYTHONPATH=~/pypy/pypy2.7-v8.0.1-src pypy2 targeteffectpython.py [n]
+    PYTHONPATH=~/pypy/pypy2.7-v8.0.1-src pypy2 targeteffectpython.py program.epy
 
-Until the parser exists (Milestone 2) the binary runs one hand-built
-program, the recursive Fibonacci from effectpython.samples, with n taken
-from the command line (default 20).
+The binary parses the .epy file named on the command line and runs its
+main(). Exit code 1 reports an error in the program, 2 a usage error.
 """
 import sys
 
@@ -19,7 +18,7 @@ from rpython.rlib import rvmprof
 
 from effectpython.errors import EffectError
 from effectpython.interpreter import Interpreter
-from effectpython.samples import build_fib_module
+from effectpython.parser import parse
 
 
 # --- vmprof workaround ------------------------------------------------------
@@ -42,25 +41,27 @@ def fake_vmprof_main(code, num):
     return 42
 
 
-def usage(argv):
-    print "usage: %s [n]    (prints fib(n); n defaults to 20)" % argv[0]
+def read_source(path):
+    f = open(path, 'r')
+    try:
+        return f.read()
+    finally:
+        f.close()
 
 
 def entry_point(argv):
     if len(argv) == 0:  # never true; see the vmprof workaround above
         fake_vmprof_main(FakeVMProfCode(), 42)
-    n = 20
-    if len(argv) > 2:
-        usage(argv)
+    if len(argv) != 2:
+        print "usage: %s program.epy" % argv[0]
         return 2
-    if len(argv) == 2:
-        try:
-            n = int(argv[1])
-        except ValueError:
-            usage(argv)
-            return 2
     try:
-        interp = Interpreter(build_fib_module(n))
+        source = read_source(argv[1])
+    except IOError:
+        print "error: cannot read %s" % argv[1]
+        return 2
+    try:
+        interp = Interpreter(parse(source))
         return interp.run_main()
     except EffectError as e:
         print "error:", e.msg
