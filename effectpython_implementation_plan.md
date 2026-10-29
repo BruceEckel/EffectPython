@@ -250,6 +250,7 @@ effectpython/
 │   ├── checker.py          # Static effect row inference & exhaustiveness checker
 │   ├── model.py            # W_Root, W_Int, W_Str, W_EffectPayload, W_EffBinding
 │   ├── interpreter.py      # AST evaluator, HandlerFrame, rstacklet integration
+│   ├── samples.py          # Hand-built ASTs for acceptance programs until the parser exists
 │   └── errors.py           # EffectError, UnhandledEffectError, OneShotContinuationError
 └── tests/
     ├── test_parser.py
@@ -261,7 +262,7 @@ effectpython/
 
 1.  **Milestone 1: The Core Evaluator (`ast_nodes.py`, `model.py`, `interpreter.py`)**
     *   Build the `W_Root` hierarchy and an RPython-compliant AST evaluator supporting functions, local lexical environments, arithmetic, conditionals, and `print`.
-    *   *Acceptance test:* Run a recursive Fibonacci `.epy` script untranslated under a Python 2.7 `pytest`.
+    *   *Acceptance test:* Run a recursive Fibonacci `.epy` script untranslated under a Python 2.7 `pytest`. Done 2026-10-28 with a hand-built AST (`samples.build_fib_module`), since the parser comes in Milestone 2; `tests/test_interpreter.py` runs it with `pypy2 -m pytest`, and `targeteffectpython.py` runs it both untranslated and as a translated binary.
 2.  **Milestone 2: The Frontend & Static Effect Checker (`lexer.py`, `parser.py`, `checker.py`)**
     *   Implement the `rply` parser for the EffectPython grammar subset and the 3-pass static effect analyzer.
     *   *Acceptance test:*
