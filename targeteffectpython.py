@@ -20,7 +20,6 @@ from effectpython.errors import EffectError
 from effectpython.interpreter import Interpreter
 from effectpython.parser import parse
 
-
 # --- vmprof workaround ------------------------------------------------------
 # rstacklet calls rvmprof.save_stack(), which links rvmprof.c into the binary.
 # That file references __vmprof_eval_vmprof, a symbol the translator emits
@@ -40,14 +39,12 @@ rvmprof.register_code_object_class(FakeVMProfCode, lambda code: 'name')
 def fake_vmprof_main(code, num):
     return 42
 
-
 def read_source(path):
     f = open(path, 'r')
     try:
         return f.read()
     finally:
         f.close()
-
 
 def entry_point(argv):
     if len(argv) == 0:  # never true; see the vmprof workaround above
@@ -67,11 +64,9 @@ def entry_point(argv):
         print "error:", e.msg
         return 1
 
-
 def target(driver, args):
     driver.exe_name = "effectpython-c"
     return entry_point, None
-
 
 if __name__ == "__main__":
     sys.exit(entry_point(sys.argv))

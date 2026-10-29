@@ -15,7 +15,6 @@ from effectpython.errors import EffectPythonRuntimeError
 from effectpython.model import (W_Root, W_Int, W_Str, W_Bool,
                                 w_None, wrap_bool)
 
-
 class Environment(object):
     """One lexical scope: a name -> W_Root table with an optional parent."""
 
@@ -34,7 +33,6 @@ class Environment(object):
     def define(self, name, w_value):
         self.vars[name] = w_value
 
-
 class Output(object):
     """Where print() writes. The default writes to file descriptor 1, which
     behaves the same untranslated and translated; tests substitute a
@@ -43,11 +41,9 @@ class Output(object):
     def write_line(self, text):
         os.write(1, text + "\n")
 
-
 class ReturnSignal(Exception):
     def __init__(self, w_value):
         self.w_value = w_value
-
 
 class Interpreter(object):
 
@@ -194,7 +190,6 @@ class Interpreter(object):
         raise EffectPythonRuntimeError(
             "unsupported operand types for %s: %s and %s" %
             (op, type_name(w_left), type_name(w_right)))
-
 
 def type_name(w):
     if isinstance(w, W_Int):

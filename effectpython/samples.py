@@ -6,7 +6,6 @@ stands for; when the parser exists, these become .epy files under tests/.
 """
 from effectpython import ast_nodes as ast
 
-
 def build_fib_module(n):
     """
     def fib(n: int) -> int:

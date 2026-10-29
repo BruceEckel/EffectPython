@@ -8,7 +8,6 @@ RPython does not support __str__ or __repr__ on application objects, so the
 text forms are ordinary methods: str() for print(), repr() for diagnostics.
 """
 
-
 class W_Root(object):
     _attrs_ = []
 
@@ -21,7 +20,6 @@ class W_Root(object):
     def is_true(self):
         return True
 
-
 class W_None(W_Root):
     _attrs_ = []
 
@@ -30,7 +28,6 @@ class W_None(W_Root):
 
     def is_true(self):
         return False
-
 
 class W_Bool(W_Root):
     _attrs_ = ['val']
@@ -46,7 +43,6 @@ class W_Bool(W_Root):
     def is_true(self):
         return self.val
 
-
 class W_Int(W_Root):
     _attrs_ = ['val']
 
@@ -58,7 +54,6 @@ class W_Int(W_Root):
 
     def is_true(self):
         return self.val != 0
-
 
 class W_Str(W_Root):
     _attrs_ = ['val']
@@ -74,7 +69,6 @@ class W_Str(W_Root):
 
     def is_true(self):
         return len(self.val) > 0
-
 
 class W_EffectPayload(W_Root):
     """What evaluating FileIO.read(path) produces: the effect, the
@@ -93,12 +87,10 @@ class W_EffectPayload(W_Root):
             parts.append(w.repr())
         return "%s.%s(%s)" % (self.effect_name, self.op_name, ", ".join(parts))
 
-
 # Prebuilt singletons. RPython allows prebuilt instances as module globals.
 w_None = W_None()
 w_True = W_Bool(True)
 w_False = W_Bool(False)
-
 
 def wrap_bool(b):
     if b:
