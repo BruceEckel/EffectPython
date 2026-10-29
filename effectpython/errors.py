@@ -14,9 +14,29 @@ class EffectPythonRuntimeError(EffectError):
     a type mismatch in an operator, a call with the wrong number of
     arguments."""
 
+def _at(lineno, what):
+    if lineno > 0:
+        return "line %d: %s" % (lineno, what)
+    return what
+
 class UnhandledEffectError(EffectError):
-    """Compile-time: a function body performs an effect its signature does
-    not declare (plan 2.2, Pass 2). Raised by the checker in Milestone 2."""
+    """Compile-time: a function body performs or calls into an effect its
+    signature does not declare, or main() declares one (plan 2.2,
+    Pass 2 and Pass 3)."""
+
+    def __init__(self, lineno, what):
+        self.lineno = lineno
+        EffectError.__init__(self, _at(lineno, what))
+
+class InvalidProgram(EffectError):
+    """Compile-time: any other mistake the checker finds, such as an
+    unknown effect or operation, a handle block missing a clause, a
+    perform() or resume() with the wrong arguments, or a call to an
+    undefined function (plan 2.2)."""
+
+    def __init__(self, lineno, what):
+        self.lineno = lineno
+        EffectError.__init__(self, _at(lineno, what))
 
 class OneShotContinuationError(EffectError):
     """Runtime: a handler clause called eff.resume() twice (plan 3.4, step 4).

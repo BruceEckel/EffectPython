@@ -9,14 +9,15 @@ Run untranslated with:
 
     PYTHONPATH=~/pypy/pypy2.7-v8.0.1-src pypy2 targeteffectpython.py program.epy
 
-The binary parses the .epy file named on the command line and runs its
-main(). Exit code 1 reports an error in the program, 2 a usage error.
+The binary parses the .epy file named on the command line, runs the
+static effect checker over it, and then runs its main(). Exit code 1 reports an error in the program, 2 a usage error.
 """
 import sys
 
 from rpython.rlib import rvmprof
 
 from effectpython.errors import EffectError
+from effectpython.checker import check
 from effectpython.interpreter import Interpreter
 from effectpython.parser import parse
 
@@ -58,8 +59,9 @@ def entry_point(argv):
         print "error: cannot read %s" % argv[1]
         return 2
     try:
-        interp = Interpreter(parse(source))
-        return interp.run_main()
+        module = parse(source)
+        check(module)
+        return Interpreter(module).run_main()
     except EffectError as e:
         print "error:", e.msg
         return 1

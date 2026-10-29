@@ -1,0 +1,28 @@
+# Milestone 3's first acceptance program: one perform and resume across
+# a three-function call chain (main -> load_app -> read_config -> perform),
+# followed by a second operation of the same effect.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+    def write(path: str, content: str) -> int: ...
+
+def read_config(path: str) -> str / [FileIO]:
+    return perform(FileIO.read(path))
+
+def load_app(name: str) -> int / [FileIO]:
+    config = read_config(name + ".json")
+    print(config)
+    return perform(FileIO.write(name, config))
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            print(load_app("settings"))
+    except FileIO.read as eff:
+        eff.resume("contents of " + eff.path)
+    except FileIO.write as eff:
+        print("writing", eff.path, eff.content)
+        eff.resume(7)
+    return 0
