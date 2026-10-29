@@ -23,6 +23,8 @@ from effectpython.errors import InvalidSyntax
 
 KEYWORDS = {
     'def': 'DEF', 'return': 'RETURN', 'if': 'IF', 'else': 'ELSE',
+    'class': 'CLASS', 'pass': 'PASS', 'try': 'TRY', 'except': 'EXCEPT',
+    'as': 'AS', 'with': 'WITH', 'from': 'FROM', 'import': 'IMPORT',
 }
 
 # Order matters: a longer operator precedes any prefix of it
@@ -31,6 +33,8 @@ RULES = [
     ('INT', r'\d+'),
     ('STRING', r'"[^"\n]*"|\'[^\'\n]*\''),
     ('NAME', r'[A-Za-z_][A-Za-z0-9_]*'),
+    ('ELLIPSIS', r'\.\.\.'),
+    ('DOT', r'\.'),
     ('ARROW', r'->'),
     ('DOUBLESLASH', r'//'),
     ('LE', r'<='),
@@ -59,7 +63,6 @@ TOKENS = (['INDENT', 'DEDENT'] + [name for name, pattern in RULES]
 OPENERS = ['LPAREN', 'LBRACKET']
 CLOSERS = ['RPAREN', 'RBRACKET']
 
-
 def _build_lexer():
     lg = LexerGenerator()
     lg.ignore(r'[ \t\r]+')
@@ -68,9 +71,7 @@ def _build_lexer():
         lg.add(name, pattern)
     return lg.build()
 
-
 lexer = _build_lexer()
-
 
 class TokenList(object):
     """An iterator over an already-lexed token list for rply's parser."""
@@ -86,12 +87,10 @@ class TokenList(object):
         self.i += 1
         return tok
 
-
 def _line_col(source, idx):
     lineno = source.count('\n', 0, idx) + 1
     colno = idx - source.rfind('\n', 0, idx)
     return lineno, colno
-
 
 def raw_tokens(source):
     """The generated lexer's tokens, with NEWLINE tokens still carrying
@@ -111,13 +110,11 @@ def raw_tokens(source):
         tokens.append(tok)
     return tokens
 
-
 def _rename_keyword(tok):
     text = tok.getstr()
     if tok.gettokentype() == 'NAME' and text in KEYWORDS:
         return Token(KEYWORDS[text], text, tok.getsourcepos())
     return tok
-
 
 def _change_indent(indent, stack, pos, result):
     if indent > stack[-1]:
@@ -131,7 +128,6 @@ def _change_indent(indent, stack, pos, result):
         raise InvalidSyntax(
             pos.lineno, pos.colno,
             "unindent does not match any outer indentation level")
-
 
 def tokenize(source):
     """The token list the parser reads: raw_tokens() with line structure."""

@@ -24,12 +24,39 @@ class Node(BaseBox):
 # --- Module and definitions --------------------------------------------------
 
 class Module(Node):
-    """A whole .epy file: its function definitions, in order."""
-    _attrs_ = ['functions']
+    """A whole .epy file: its effect declarations and its function
+       definitions, each in source order. The import line
+       (from effectpython import ...) leaves no node."""
+    _attrs_ = ['functions', 'effects']
 
-    def __init__(self, functions, lineno=0):
+    def __init__(self, functions, effects=None, lineno=0):
         Node.__init__(self, lineno)
+        if effects is None:
+            effects = []
         self.functions = functions  # list of FunctionDef
+        self.effects = effects      # list of EffectDef
+
+
+class EffectDef(Node):
+    """class Name(Effect): followed by operation stubs (plan 1.1)"""
+    _attrs_ = ['name', 'operations']
+
+    def __init__(self, name, operations, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name              # str
+        self.operations = operations  # list of OperationDef
+
+
+class OperationDef(Node):
+    """def op(p1: T1, p2: T2) -> ReturnType: ...   inside an Effect class"""
+    _attrs_ = ['name', 'params', 'param_types', 'return_type']
+
+    def __init__(self, name, params, param_types, return_type, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name
+        self.params = params            # list of str
+        self.param_types = param_types  # list of str, parallel to params
+        self.return_type = return_type  # str
 
 
 class FunctionDef(Node):
@@ -94,6 +121,42 @@ class ExprStmt(Stmt):
         self.expr = expr  # Expr
 
 
+class Pass(Stmt):
+    """pass"""
+    _attrs_ = []
+
+
+class Handle(Stmt):
+    """try:
+           with handle(Effect1, Effect2):
+               body
+       except Effect1.op as eff:
+           clause body
+       ...
+       The whole try/except is one handler installation (plan 1.4);
+       the checker requires a clause for every operation of every
+       handled effect."""
+    _attrs_ = ['effects', 'body', 'clauses']
+
+    def __init__(self, effects, body, clauses, lineno=0):
+        Node.__init__(self, lineno)
+        self.effects = effects  # list of str (effect class names)
+        self.body = body        # list of Stmt
+        self.clauses = clauses  # list of Clause
+
+
+class Clause(Node):
+    """except Effect.op as binding: body   (one handler clause)"""
+    _attrs_ = ['effect', 'op', 'binding', 'body']
+
+    def __init__(self, effect, op, binding, body, lineno=0):
+        Node.__init__(self, lineno)
+        self.effect = effect    # str
+        self.op = op            # str
+        self.binding = binding  # str: the name bound to the W_EffBinding
+        self.body = body        # list of Stmt
+
+
 # --- Expressions -------------------------------------------------------------
 
 class Expr(Node):
@@ -156,3 +219,50 @@ class Call(Expr):
         Node.__init__(self, lineno)
         self.func = func  # str
         self.args = args  # list of Expr
+
+
+class OpCall(Expr):
+    """Effect.op(arg1, arg2): builds the effect payload (plan 1.3). The
+       parser folds perform(Effect.op(...)) into a Perform, so an OpCall
+       survives only where it stands on its own."""
+    _attrs_ = ['effect', 'op', 'args']
+
+    def __init__(self, effect, op, args, lineno=0):
+        Node.__init__(self, lineno)
+        self.effect = effect  # str
+        self.op = op          # str
+        self.args = args      # list of Expr
+
+
+class Perform(Expr):
+    """perform(Effect.op(arg1, arg2)): suspends to the nearest handler
+       for Effect and evaluates to the value the handler resumes with."""
+    _attrs_ = ['effect', 'op', 'args']
+
+    def __init__(self, effect, op, args, lineno=0):
+        Node.__init__(self, lineno)
+        self.effect = effect  # str
+        self.op = op          # str
+        self.args = args      # list of Expr
+
+
+class AttrRead(Expr):
+    """target.attr: a parameter of the performed operation read from the
+       clause's eff binding, such as eff.path."""
+    _attrs_ = ['target', 'attr']
+
+    def __init__(self, target, attr, lineno=0):
+        Node.__init__(self, lineno)
+        self.target = target  # str: a variable name
+        self.attr = attr      # str
+
+
+class Resume(Expr):
+    """target.resume(value): returns value to the suspended perform and
+       evaluates to the body's result once it completes (plan 3.4)."""
+    _attrs_ = ['target', 'value']
+
+    def __init__(self, target, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.target = target  # str: a variable name
+        self.value = value    # Expr
