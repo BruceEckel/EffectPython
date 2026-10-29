@@ -2,3 +2,6 @@
 __pycache__/
 .pytest_cache/
 /effectpython-c
+
+# Machine-specific symlink to the Windows copy of the Thinking in Python skill
+/.claude/skills/thinking-in-python/
