@@ -68,27 +68,49 @@ def main() -> int / []:
 The `try`/`with handle`/`except` form in 1.4 writes the clauses inline,
 so a handler that two functions need is written twice,
 and a test cannot swap a program's handler for a fake one without editing the program.
-A *handler class* packages the clauses for one effect under a name,
-and a `with handle(...)` statement applies it to a body.
-Its methods are the handler functions that 1.4 refers to: one per operation.
+A *handler class* fulfills one effect under a name, and a `with handle(...)` statement installs an instance of it over a body.
+Its methods are the handler functions 1.4 refers to, one per operation.
+
+The shape follows *Thinking in Python*.
+Chapter 44's `ask_tell.py` declares `Ask` and `Tell` as Protocols and fulfills them with `Scripted` and `Capture`,
+classes whose methods carry the operation's own signature and return the answer,
+and `Capture` records what it was told in a dataclass field.
+Appendix A sketches the attachment as `with handling(Ask, Scripted())`.
+Koka's `with fun ask(prompt)` and Stateless's `handle(scripted)` resume with the handler's return value, once;
+chapter 47 calls such a handler *tail-resumptive*.
+A handler class here is the same thing: its methods return the value the body resumes with.
+The inline clause of 1.4 keeps the explicit `eff.resume(...)`, and with it the power to abandon the body,
+as Koka keeps `ctl` beside `fun`.
 
 ```python
 from effectpython import Effect, Handler, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+    def write(path: str, content: str) -> int: ...
 
 class Log(Effect):
     def note(text: str) -> int: ...
 
 class FakeFileIO(Handler[FileIO]):
-    def read(eff: FileIO.read) -> None:
-        eff.resume("contents of " + eff.path)
-    def write(eff: FileIO.write) -> None / [Log]:
-        perform(Log.note("writing " + eff.path))
-        eff.resume(7)
+    def read(self, path: str) -> str:
+        return "contents of " + path
+    def write(self, path: str, content: str) -> int / [Log]:
+        perform(Log.note("writing " + path))
+        return 7
+
+def read_config(path: str) -> str / [FileIO]:
+    return perform(FileIO.read(path))
+
+def load_app(name: str) -> int / [FileIO]:
+    config = read_config(name + ".json")
+    print(config)
+    return perform(FileIO.write(name, config))
 
 def main() -> int / []:
     try:
         with handle(Log):
-            with handle(FakeFileIO):
+            with handle(FakeFileIO()):
                 print(load_app("settings"))
     except Log.note as eff:
         print("log:", eff.text)
@@ -96,47 +118,55 @@ def main() -> int / []:
     return 0
 ```
 
+It prints `contents of settings.json`, `log: writing settings`, and `7`.
+
 **Declaration.**
 `class <Name>(Handler[<Effect>]):` declares a handler class for one effect.
 It is valid Python 3 syntax (a subscript in the base list), and `Handler` comes from the ignored import line, as `Effect` does.
-The body holds one method per operation of the effect, named for the operation, with the operation's binding as its single parameter,
-annotated with `<Effect>.<op>` so an editor can resolve `eff.path`, a return type of `None`, and an optional effect row.
-A method body follows the rules of a clause (1.4): it may read the operation's arguments through the binding,
-call `eff.resume(value)` at most once, finish without resuming to abandon the body, and perform effects, which its own row must declare.
-Unlike an inline clause, which shares the enclosing function's locals, a method is a function and gets its own locals on each invocation.
-Handler classes have no `self`, no instances, and no state, since the dialect has none; a handler that needs state is future work (see the open questions).
+The body holds one method per operation of the effect, with the operation's name and signature plus a leading `self`,
+and an optional effect row for the effects the method performs.
+The method receives the operation's arguments as its parameters, so `path` arrives as `path`, not `eff.path`,
+and the value it returns is the value the body's `perform(...)` evaluates to.
+A method resumes the body once, when it returns; it cannot abandon the body or resume it twice,
+so the one-shot error of 3.4 cannot arise from a handler class.
+A program that needs to abandon the body writes an inline clause.
+`self` is present for Python's sake and for the state that a later version adds (see the open questions); this version gives it nothing to hold.
 
 **Use.**
-`with handle(<Name>, ...):` outside a `try` names one or more handler classes and installs one handler frame for all of their effects over the body.
-It is the same statement as the inline form, so the parser cannot tell the two apart by syntax: the checker resolves the names.
-Names that resolve to effects require the `try`/`except` form with inline clauses; names that resolve to handler classes forbid it.
-Mixing the two in one `handle(...)`, and naming two handler classes for the same effect, are errors in this version.
-The inline form stays as it is.
+`with handle(<Name>(), ...):` installs one handler frame over the body for every effect the named classes fulfill.
+A constructor call names a handler class; a bare name names an effect, which needs inline clauses in the `try`/`except` form of 1.4.
+The two may mix in one `handle(...)`:
+`try: with handle(FakeFileIO(), DBQuery): ... except DBQuery.execute as eff: ...` fulfills `FileIO` through the class and `DBQuery` inline,
+and a `handle(...)` whose arguments are all constructor calls needs no `try`.
+Two arguments for the same effect are an error, as is a constructor call with arguments in this version.
 
 **Checker.**
-Pass 1 also collects handler classes and checks each one: the effect exists, every operation has a method and no method names anything else,
-the parameter annotation is `<Effect>.<op>` for the method's own operation, and the return type is `None`.
-Pass 2 checks each method body as it checks a function body with the binding in scope,
+Pass 1 also collects handler classes and checks each one against its effect:
+every operation has a method and no method names anything else,
+the parameters after `self` match the operation's names and types, and the return type matches the operation's.
+Pass 2 checks each method body as it checks a function body,
 so an effect the method performs must appear in the method's row.
-For `with handle(<handler classes>)`, the body's effects minus the handled effects, plus the union of the methods' rows, flow to the enclosing function.
+For a `handle(...)`, the body's effects minus every fulfilled or handled effect, plus the union of the methods' rows, flow to the enclosing function.
+The checker also rejects a bare effect name with no clause for one of its operations, as today, and a clause for an effect a handler class fulfills.
 
 **Runtime.**
 A handler class adds no mechanism to 3.3 and 3.4.
-The frame for `with handle(FakeFileIO)` holds the class's methods where the inline frame holds `ast.Clause` nodes;
-`clause_for` finds the method for the performed operation, and `dispatch` binds the parameter in a fresh `Environment` instead of the function's,
-then runs the method body with the same tail-resume rule.
-One record type for both kinds of clause (effect, operation, binding name, body, and whether it shares the function's environment) keeps `dispatch` a single loop.
+The frame holds, per operation, either an `ast.Clause` or a handler method, and `clause_for` finds whichever the performed operation has.
+For a method, `dispatch` calls it as a function with the payload's arguments, which gives it fresh locals,
+and passes the returned value to `switch_into`, the same path a tail resume takes, so sequential performs use constant stack.
+Effects a method performs resolve to outer handlers through the frame hiding of step 2, as a clause's do.
 
 **Grammar additions (2.1).**
-A class whose base is `Handler[<Name>]` becomes a `HandlerDef` node with `HandlerMethod` children; a base of `Effect` still gives an `EffectDef`, and any other base is a syntax error.
-A parameter type may be `<Name>.<Name>`.
-A method signature is `def <op>(<name>: <Effect>.<op>) -> None [/ [<Effects>]]: <suite>`.
-A bare `with handle(<names>): <suite>` statement, outside `try`, becomes a `HandleWith` node.
+A class whose base is `Handler[<Name>]` becomes a `HandlerDef` node holding `FunctionDef` methods; a base of `Effect` still gives an `EffectDef`, and any other base is a syntax error.
+A `handle(...)` argument may be `<Name>()` as well as `<Name>`, and a bare `with handle(<args>): <suite>` statement, outside `try`, becomes a `Handle` node with no clauses.
 
 **Open questions**, to settle before implementing:
-*   State. A handler that counts its invocations or accumulates output has nowhere to put the count. Options: a handler class with fields and an `__init__`, instantiated at the `with handle(FakeFileIO(0))` site, or parameters threaded through the methods. Both need instances and attributes in the dialect, which is a larger addition than handler classes themselves.
-*   Mixing. Allowing `try: with handle(FakeFileIO, DBQuery): ... except DBQuery.execute as eff:` would let one frame combine a reusable handler with an inline clause. The checker rule is clear (each named effect needs inline clauses, each handler class forbids them), so this is a matter of whether the combination is wanted.
-*   Spelling of the base. `Handler[FileIO]` reads as a generic and type-checks in an editor once `Handler` is declared generic in the stub. `FileIO.Handler` would also be valid syntax and avoid the subscript production.
+*   State. The book's `Capture` and `Recorder` record what they were told in instance fields, and a test reads the fields back.
+    That needs `__init__` with parameters, `self.<field>` assignment and reads, and constructor arguments at the `handle(...)` site, so a test can reach the instance after the block.
+    The syntax above leaves room for all of it, and none of it is in this version.
+*   The base. `Handler[FileIO]` reads as a generic and marks the class as a fulfillment, not a declaration.
+    The alternative, `class FakeFileIO(FileIO):`, is how Python implements an abstract interface, but it makes the handler an `Effect` subclass, and `perform(FakeFileIO.read(...))` would then need a rule to reject it.
+*   Handler methods that need the binding. A method cannot abandon the body. If a case turns up that needs both reuse and abandonment, the options are a `Handler` method that returns nothing and calls `eff`-style methods on `self`, or a second base, `Control[FileIO]`, whose methods take the binding as the inline clause does.
 
 ---
 
@@ -436,10 +466,12 @@ EffectPython/
     *   *Acceptance test:* Translate with `rpython --continuation targeteffectpython.py` into a standalone native executable (`effectpython-c`), execute sample `.epy` programs natively, and run the Milestone 3 programs against the binary.
     *   *Done 2026-10-30.* The target was in place from Milestone 2, and `tests/test_runtime.py` performs this acceptance test on every run: it translates the target (or uses the binary `EFFECTPYTHON_BINARY` names) and runs all of `tests/programs/` through the binary.
 5.  **Milestone 5: Handler Classes (1.5)**
-    *   Implement the grammar additions, the `HandlerDef`, `HandlerMethod`, and `HandleWith` nodes, the Pass 1 and Pass 2 checks, and the shared clause record in the runtime.
+    *   Implement the grammar additions, the `HandlerDef` node and the clause-less `Handle`, the Pass 1 and Pass 2 checks, and the per-operation clause-or-method record in the runtime.
     *   *Acceptance test:*
-        *   The program in 1.5 prints the log line, the config, and `7`, through the translated binary.
-        *   Reject a handler class missing a method for one of the effect's operations, one with a method whose name is not an operation, and one whose method performs an effect missing from its row.
-        *   Reject `with handle(FakeFileIO)` inside a `try` with clauses, and `with handle(FileIO)` without one.
-        *   Two handler classes for one effect, chosen at two call sites, give the two outputs.
+        *   The program in 1.5 prints `contents of settings.json`, `log: writing settings`, and `7` through the translated binary.
+        *   Reject a handler class missing a method for one operation, one with a method that is not an operation, one whose method signature differs from the operation's, and one whose method performs an effect missing from its row.
+        *   Reject `with handle(FileIO):` with no `try`, a clause for an effect a handler class fulfills, and two arguments for one effect.
+        *   One `handle(FakeFileIO(), DBQuery)` with an inline clause for `DBQuery.execute`.
+        *   Two handler classes for one effect, chosen at two call sites, give two outputs.
+        *   Ten thousand performs fulfilled by a handler method pass, as `many_performs.epy` does for a tail resume.
     *   Not started. The open questions in 1.5 come first.
