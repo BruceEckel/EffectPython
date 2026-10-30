@@ -30,6 +30,7 @@ NOT_YET = {
     'double_resume.epy': RUNTIME,
     'abort.epy': RUNTIME,
     'body_error.epy': RUNTIME,
+    'resume_then_error.epy': RUNTIME,
 }
 
 @pytest.fixture(scope='session')

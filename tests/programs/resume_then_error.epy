@@ -1,0 +1,23 @@
+# Milestone 3: the body raises an exception after a resume, and the
+# clause has a statement after its eff.resume() call. The exception
+# surfaces inside resume() (plan 3.4, step 4), so the clause's second
+# print never runs and the binary reports the error.
+
+from effectpython import Effect, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def risky(n: int) -> int / [Log]:
+    perform(Log.note("dividing"))
+    return 100 // n
+
+def main() -> int / []:
+    try:
+        with handle(Log):
+            print(risky(0))
+    except Log.note as eff:
+        print("before resume")
+        eff.resume(0)
+        print("after resume")
+    return 0
