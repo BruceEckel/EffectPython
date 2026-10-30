@@ -1,0 +1,13 @@
+# Rejected before it runs: read_config performs FileIO.read without
+# FileIO in its effect row (checker pass 2, UnhandledEffectError).
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+def read_config(path: str) -> str:
+    return perform(FileIO.read(path))
+
+def main() -> int / []:
+    return 0

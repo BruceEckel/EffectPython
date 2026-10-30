@@ -1,0 +1,16 @@
+# Rejected before it runs: handle(FileIO) has no clause for FileIO.write
+# (checker, InvalidProgram).
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+    def write(path: str, content: str) -> int: ...
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            pass
+    except FileIO.read as eff:
+        eff.resume("x")
+    return 0

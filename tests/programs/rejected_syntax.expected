@@ -1,0 +1,2 @@
+exit 1
+error: line 7, column 9: '(' was never closed

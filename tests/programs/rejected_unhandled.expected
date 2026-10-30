@@ -1,0 +1,2 @@
+exit 1
+error: line 9: function 'read_config' performs FileIO (line 10) without declaring it in its effect row
