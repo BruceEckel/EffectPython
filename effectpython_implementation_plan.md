@@ -43,7 +43,7 @@ def read_config(path: str) -> str / [FileIO]:
 `perform(EffectClass.operation(*args))` is a built-in runtime primitive. The parser folds `perform(FileIO.read(path))` into a single node; at runtime it evaluates the arguments, builds an effect payload (a `W_EffectPayload`, see 3.1) that records the effect, the operation, and the argument values, and suspends the current delimited continuation up to the nearest enclosing handler for `FileIO`.
 
 ### 1.4 Handling Effects (Valid Python 3 Syntax)
-To remain valid Python 3 syntax while supporting multi-clause effect handling and resumption, EffectPython uses a `try` / `except` handler block with `handle()` (or handler functions):
+To remain valid Python 3 syntax while supporting multi-clause effect handling and resumption, EffectPython uses a `try` / `except` handler block with `handle()` (or a handler class, 1.5):
 
 ```python
 def main() -> int / []:
@@ -63,6 +63,80 @@ def main() -> int / []:
 ```
 
 > **Note on Execution Semantics:** Even though the surface syntax uses `try` / `except` with `with handle(...)` for Python 3 parser compatibility, the EffectPython AST evaluator compiles this construct into an **algebraic effect handler frame** (not a stack-unwinding exception). Calling `eff.resume(val)` returns control directly to the suspended `perform()` call site and runs the body until it finishes or a later clause abandons it; the clause for the body's next `perform` runs nested inside the `eff.resume(val)` call, unless that call is the clause's last statement, written as an expression statement on the clause's own binding, in which case the handler loops instead of nesting (3.4, steps 3 and 4). When the `with handle(...)` body completes normally, execution proceeds past the `try`/`except` block. A clause that finishes without calling `eff.resume(...)` also proceeds past the block, and the suspended body is abandoned (3.4, step 5). An exception raised inside the body is not caught by the `except Effect.op` clauses, which handle effects: it surfaces where the handler side regains control: inside the innermost `eff.resume(...)` call still waiting for the body, if there is one, and otherwise at the `with handle(...)` statement. From there it propagates out of the `try`/`except` block (3.4, steps 3 and 4).
+
+### 1.5 Handler Classes (designed 2026-10-30, not yet implemented)
+The `try`/`with handle`/`except` form in 1.4 writes the clauses inline,
+so a handler that two functions need is written twice,
+and a test cannot swap a program's handler for a fake one without editing the program.
+A *handler class* packages the clauses for one effect under a name,
+and a `with handle(...)` statement applies it to a body.
+Its methods are the handler functions that 1.4 refers to: one per operation.
+
+```python
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class FakeFileIO(Handler[FileIO]):
+    def read(eff: FileIO.read) -> None:
+        eff.resume("contents of " + eff.path)
+    def write(eff: FileIO.write) -> None / [Log]:
+        perform(Log.note("writing " + eff.path))
+        eff.resume(7)
+
+def main() -> int / []:
+    try:
+        with handle(Log):
+            with handle(FakeFileIO):
+                print(load_app("settings"))
+    except Log.note as eff:
+        print("log:", eff.text)
+        eff.resume(0)
+    return 0
+```
+
+**Declaration.**
+`class <Name>(Handler[<Effect>]):` declares a handler class for one effect.
+It is valid Python 3 syntax (a subscript in the base list), and `Handler` comes from the ignored import line, as `Effect` does.
+The body holds one method per operation of the effect, named for the operation, with the operation's binding as its single parameter,
+annotated with `<Effect>.<op>` so an editor can resolve `eff.path`, a return type of `None`, and an optional effect row.
+A method body follows the rules of a clause (1.4): it may read the operation's arguments through the binding,
+call `eff.resume(value)` at most once, finish without resuming to abandon the body, and perform effects, which its own row must declare.
+Unlike an inline clause, which shares the enclosing function's locals, a method is a function and gets its own locals on each invocation.
+Handler classes have no `self`, no instances, and no state, since the dialect has none; a handler that needs state is future work (see the open questions).
+
+**Use.**
+`with handle(<Name>, ...):` outside a `try` names one or more handler classes and installs one handler frame for all of their effects over the body.
+It is the same statement as the inline form, so the parser cannot tell the two apart by syntax: the checker resolves the names.
+Names that resolve to effects require the `try`/`except` form with inline clauses; names that resolve to handler classes forbid it.
+Mixing the two in one `handle(...)`, and naming two handler classes for the same effect, are errors in this version.
+The inline form stays as it is.
+
+**Checker.**
+Pass 1 also collects handler classes and checks each one: the effect exists, every operation has a method and no method names anything else,
+the parameter annotation is `<Effect>.<op>` for the method's own operation, and the return type is `None`.
+Pass 2 checks each method body as it checks a function body with the binding in scope,
+so an effect the method performs must appear in the method's row.
+For `with handle(<handler classes>)`, the body's effects minus the handled effects, plus the union of the methods' rows, flow to the enclosing function.
+
+**Runtime.**
+A handler class adds no mechanism to 3.3 and 3.4.
+The frame for `with handle(FakeFileIO)` holds the class's methods where the inline frame holds `ast.Clause` nodes;
+`clause_for` finds the method for the performed operation, and `dispatch` binds the parameter in a fresh `Environment` instead of the function's,
+then runs the method body with the same tail-resume rule.
+One record type for both kinds of clause (effect, operation, binding name, body, and whether it shares the function's environment) keeps `dispatch` a single loop.
+
+**Grammar additions (2.1).**
+A class whose base is `Handler[<Name>]` becomes a `HandlerDef` node with `HandlerMethod` children; a base of `Effect` still gives an `EffectDef`, and any other base is a syntax error.
+A parameter type may be `<Name>.<Name>`.
+A method signature is `def <op>(<name>: <Effect>.<op>) -> None [/ [<Effects>]]: <suite>`.
+A bare `with handle(<names>): <suite>` statement, outside `try`, becomes a `HandleWith` node.
+
+**Open questions**, to settle before implementing:
+*   State. A handler that counts its invocations or accumulates output has nowhere to put the count. Options: a handler class with fields and an `__init__`, instantiated at the `with handle(FakeFileIO(0))` site, or parameters threaded through the methods. Both need instances and attributes in the dialect, which is a larger addition than handler classes themselves.
+*   Mixing. Allowing `try: with handle(FakeFileIO, DBQuery): ... except DBQuery.execute as eff:` would let one frame combine a reusable handler with an inline clause. The checker rule is clear (each named effect needs inline clauses, each handler class forbids them), so this is a matter of whether the combination is wanted.
+*   Spelling of the base. `Handler[FileIO]` reads as a generic and type-checks in an editor once `Handler` is declared generic in the stub. `FileIO.Handler` would also be valid syntax and avoid the subscript production.
 
 ---
 
@@ -361,3 +435,11 @@ EffectPython/
     *   Include the `rvmprof` stub from `experiments/stacklet_mailbox.py`, guarded by an `argv` check, so that `rvmprof.c` compiles (3.2). Translate with `--batch` so a failure prints instead of opening a debugger.
     *   *Acceptance test:* Translate with `rpython --continuation targeteffectpython.py` into a standalone native executable (`effectpython-c`), execute sample `.epy` programs natively, and run the Milestone 3 programs against the binary.
     *   *Done 2026-10-30.* The target was in place from Milestone 2, and `tests/test_runtime.py` performs this acceptance test on every run: it translates the target (or uses the binary `EFFECTPYTHON_BINARY` names) and runs all of `tests/programs/` through the binary.
+5.  **Milestone 5: Handler Classes (1.5)**
+    *   Implement the grammar additions, the `HandlerDef`, `HandlerMethod`, and `HandleWith` nodes, the Pass 1 and Pass 2 checks, and the shared clause record in the runtime.
+    *   *Acceptance test:*
+        *   The program in 1.5 prints the log line, the config, and `7`, through the translated binary.
+        *   Reject a handler class missing a method for one of the effect's operations, one with a method whose name is not an operation, and one whose method performs an effect missing from its row.
+        *   Reject `with handle(FakeFileIO)` inside a `try` with clauses, and `with handle(FileIO)` without one.
+        *   Two handler classes for one effect, chosen at two call sites, give the two outputs.
+    *   Not started. The open questions in 1.5 come first.
