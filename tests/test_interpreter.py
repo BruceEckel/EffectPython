@@ -64,6 +64,19 @@ def test_if_else_and_string_concat():
     assert exit_code == 0
     assert lines == ["nope"]
 
+def test_while_loop():
+    # def main(): i = 0; while i < 5: i = i + 2; return i      -> 6
+    main = one_function("main", [], [
+        ast.Assign("i", ast.IntLiteral(0)),
+        ast.While(ast.Compare("<", ast.Name("i"), ast.IntLiteral(5)),
+                  [ast.Assign("i", ast.BinOp("+", ast.Name("i"),
+                                             ast.IntLiteral(2)))]),
+        ast.Return(ast.Name("i")),
+    ])
+    exit_code, lines = run_module(ast.Module([main]))
+    assert exit_code == 6
+    assert lines == []
+
 def test_print_several_values_and_bare_return():
     main = one_function("main", [], [
         ast.ExprStmt(ast.Call("print", [

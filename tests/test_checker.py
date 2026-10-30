@@ -28,6 +28,16 @@ def test_accepts_a_program_whose_main_handles_everything():
 def test_accepts_fibonacci():
     check(parse(read_program('fib.epy')))
 
+def test_effects_performed_in_a_loop_count_for_the_function():
+    with pytest.raises(UnhandledEffectError) as info:
+        check_source('def f() -> int:\n'
+                     '    while 1 < 2:\n'
+                     '        perform(FileIO.read("a"))\n'
+                     '    return 0\n'
+                     'def main() -> int / []:\n'
+                     '    return 0\n')
+    assert 'FileIO (line 10)' in info.value.msg
+
 def test_rejects_perform_without_the_effect_in_the_row():
     with pytest.raises(UnhandledEffectError) as info:
         check_source('def read_config(path: str) -> str:\n'

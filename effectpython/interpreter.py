@@ -194,6 +194,9 @@ class Interpreter(object):
                 self.exec_block(stmt.body, env)
             else:
                 self.exec_block(stmt.orelse, env)
+        elif isinstance(stmt, ast.While):
+            while self.eval_expr(stmt.test, env).is_true():
+                self.exec_block(stmt.body, env)
         elif isinstance(stmt, ast.Assign):
             env.define(stmt.name, self.eval_expr(stmt.value, env))
         elif isinstance(stmt, ast.ExprStmt):

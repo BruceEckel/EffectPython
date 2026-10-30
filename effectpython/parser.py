@@ -237,6 +237,7 @@ def stmts_more(p):
 
 @pg.production('stmt : simple_stmt NEWLINE')
 @pg.production('stmt : if_stmt')
+@pg.production('stmt : while_stmt')
 @pg.production('stmt : handle_stmt')
 def stmt(p):
     return p[0]
@@ -269,6 +270,10 @@ def if_stmt(p):
 @pg.production('if_stmt : IF expr COLON suite ELSE COLON suite')
 def if_else_stmt(p):
     return ast.If(_expr(p[1]), _stmts(p[3]), _stmts(p[6]), _line(p[0]))
+
+@pg.production('while_stmt : WHILE expr COLON suite')
+def while_stmt(p):
+    return ast.While(_expr(p[1]), _stmts(p[3]), _line(p[0]))
 
 @pg.production('handle_stmt : TRY COLON NEWLINE INDENT'
                ' WITH NAME LPAREN name_list RPAREN COLON suite'

@@ -150,6 +150,16 @@ def test_if_else_and_assignment():
          [('Assign', 'c', ('Name', 'b'))]),
         ('Return', ('Name', 'c'))]
 
+def test_while():
+    module = parse('def main() -> int:\n'
+                   '    while i < 3:\n'
+                   '        i = i + 1\n'
+                   '    return i\n')
+    assert shape(module.functions[0].body) == [
+        ('While', ('Compare', '<', ('Name', 'i'), ('IntLiteral', 3)),
+         [('Assign', 'i', ('BinOp', '+', ('Name', 'i'), ('IntLiteral', 1)))]),
+        ('Return', ('Name', 'i'))]
+
 @pytest.mark.parametrize('source, msg', [
     ('def f() -> int:\n    return 1 +\n',
      'line 2, column 15: unexpected end of line'),

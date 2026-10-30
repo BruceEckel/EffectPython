@@ -93,6 +93,15 @@ class If(Stmt):
         self.body = body      # list of Stmt
         self.orelse = orelse  # list of Stmt
 
+class While(Stmt):
+    """while test: body"""
+    _attrs_ = ['test', 'body']
+
+    def __init__(self, test, body, lineno=0):
+        Node.__init__(self, lineno)
+        self.test = test  # Expr
+        self.body = body  # list of Stmt
+
 class Assign(Stmt):
     """name = value"""
     _attrs_ = ['name', 'value']

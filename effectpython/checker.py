@@ -132,6 +132,9 @@ class Checker(object):
             self.type_of(stmt.test, scope, effects)
             self.check_block(stmt.body, scope, effects)
             self.check_block(stmt.orelse, scope, effects)
+        elif isinstance(stmt, ast.While):
+            self.type_of(stmt.test, scope, effects)
+            self.check_block(stmt.body, scope, effects)
         elif isinstance(stmt, ast.Assign):
             scope.types[stmt.name] = self.type_of(stmt.value, scope, effects)
         elif isinstance(stmt, ast.ExprStmt):
