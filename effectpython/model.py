@@ -87,6 +87,21 @@ class W_EffectPayload(W_Root):
             parts.append(w.repr())
         return "%s.%s(%s)" % (self.effect_name, self.op_name, ", ".join(parts))
 
+class W_EffBinding(W_Root):
+    """Bound to eff in `except Effect.op as eff:` (plan 3.1): the payload
+    the body performed, the HandlerFrame that caught it, and the stacklet
+    handle of the suspended body. resume() consumes the handle and leaves
+    the null handle behind, so a second resume() finds it empty."""
+    _attrs_ = ['payload', 'frame', 'h_body']
+
+    def __init__(self, payload, frame, h_body):
+        self.payload = payload
+        self.frame = frame
+        self.h_body = h_body
+
+    def repr(self):
+        return "<binding for %s>" % self.payload.repr()
+
 # Prebuilt singletons. RPython allows prebuilt instances as module globals.
 w_None = W_None()
 w_True = W_Bool(True)

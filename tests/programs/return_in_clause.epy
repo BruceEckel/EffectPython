@@ -1,0 +1,17 @@
+# Milestone 3: a return statement inside a clause while the body is
+# suspended. The body is abandoned and main() returns from the clause.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value(label: str) -> int: ...
+
+def main() -> int / []:
+    try:
+        with handle(Ask):
+            print(perform(Ask.value("n")))
+    except Ask.value as eff:
+        print("leaving from the clause")
+        return 3
+    print("not reached")
+    return 0

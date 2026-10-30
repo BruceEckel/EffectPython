@@ -1,0 +1,21 @@
+# Milestone 3: a return statement inside the handled body. The body
+# stacklet records the return, and it surfaces inside the eff.resume()
+# call that resumed the body, so the clause stops there and main()
+# returns the value.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value(label: str) -> int: ...
+
+def main() -> int / []:
+    try:
+        with handle(Ask):
+            n = perform(Ask.value("n"))
+            print("got", n)
+            return n + 1
+    except Ask.value as eff:
+        eff.resume(41)
+        print("after resume")
+    print("not reached")
+    return 0
