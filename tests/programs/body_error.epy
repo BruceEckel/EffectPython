@@ -1,0 +1,21 @@
+# Milestone 3: an exception raised inside the handled body after a
+# resume. The body stacklet records it, and the handler side re-raises
+# it once the clause returns, so the binary reports it and exits 1.
+
+from effectpython import Effect, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def risky(n: int) -> int / [Log]:
+    perform(Log.note("dividing"))
+    return 100 // n
+
+def main() -> int / []:
+    try:
+        with handle(Log):
+            print(risky(0))
+    except Log.note as eff:
+        print("log:", eff.text)
+        eff.resume(0)
+    return 0

@@ -1,0 +1,20 @@
+# Milestone 3: several sequential performs inside one handle block. The
+# clause runs once per perform, and each resume returns to the perform
+# that suspended the body.
+
+from effectpython import Effect, perform, handle
+
+class Counter(Effect):
+    def tick(label: str) -> int: ...
+
+def main() -> int / []:
+    try:
+        with handle(Counter):
+            a = perform(Counter.tick("a"))
+            b = perform(Counter.tick("b"))
+            c = perform(Counter.tick("c"))
+            print(a + b + c)
+    except Counter.tick as eff:
+        print("tick", eff.label)
+        eff.resume(10)
+    return 0

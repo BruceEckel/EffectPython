@@ -1,0 +1,33 @@
+# Milestone 3: a handle(DBQuery) block nested inside handle(FileIO).
+# The FileIO.read performed inside the inner block skips the DBQuery
+# frame and reaches the outer handler; the DBQuery.execute performed
+# afterwards stops at the inner one.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class DBQuery(Effect):
+    def execute(sql: str) -> str: ...
+
+def query(sql: str) -> str / [DBQuery]:
+    return perform(DBQuery.execute(sql))
+
+def load(path: str) -> str / [FileIO, DBQuery]:
+    names = perform(FileIO.read(path))
+    return query("select " + names)
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            try:
+                with handle(DBQuery):
+                    print(load("users.txt"))
+            except DBQuery.execute as eff:
+                print("db:", eff.sql)
+                eff.resume("rows for " + eff.sql)
+    except FileIO.read as eff:
+        print("file:", eff.path)
+        eff.resume("names from " + eff.path)
+    return 0

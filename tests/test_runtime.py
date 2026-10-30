@@ -8,7 +8,9 @@ is "exit <code>", and the rest is the program's stdout.
 
 Run with:  pypy2 -m pytest tests/test_runtime.py
 Translation takes about a minute, so the other test modules stay
-separate for quick runs.
+separate for quick runs. Setting EFFECTPYTHON_BINARY to the path of a
+binary translated earlier skips the translation and runs the
+programs through that binary instead.
 """
 import glob
 import os
@@ -20,12 +22,21 @@ from support import PROGRAMS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPYTHON = os.path.expanduser(
     '~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython')
+RUNTIME = 'perform and handle need the Milestone 3 runtime'
 NOT_YET = {
-    'read_config.epy': 'perform and handle need the Milestone 3 runtime',
+    'read_config.epy': RUNTIME,
+    'sequential.epy': RUNTIME,
+    'nested.epy': RUNTIME,
+    'double_resume.epy': RUNTIME,
+    'abort.epy': RUNTIME,
+    'body_error.epy': RUNTIME,
 }
 
 @pytest.fixture(scope='session')
 def binary(tmp_path_factory):
+    prebuilt = os.environ.get('EFFECTPYTHON_BINARY')
+    if prebuilt:
+        return prebuilt
     # The driver copies the binary into the working directory under the
     # --output name, so the scratch directory must be the cwd
     scratch = str(tmp_path_factory.mktemp('translate'))

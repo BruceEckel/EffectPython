@@ -49,6 +49,9 @@ The RPython source tree is `~/pypy/pypy2.7-v8.0.1-src`. No CPython 2.7 is instal
 # Unit tests (no RPython imports, so no PYTHONPATH)
 pypy2 -m pytest
 
+# Program tests only, through a binary translated earlier instead of a fresh one
+EFFECTPYTHON_BINARY=./effectpython-c pypy2 -m pytest tests/test_runtime.py
+
 # Run a target or experiment untranslated
 PYTHONPATH=~/pypy/pypy2.7-v8.0.1-src pypy2 targeteffectpython.py tests/programs/fib.epy
 

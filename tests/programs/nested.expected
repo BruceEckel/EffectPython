@@ -1,0 +1,4 @@
+exit 0
+file: users.txt
+db: select names from users.txt
+rows for select names from users.txt

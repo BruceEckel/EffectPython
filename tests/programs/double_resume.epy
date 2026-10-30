@@ -1,0 +1,17 @@
+# Milestone 3: a clause that calls eff.resume() twice. The first resume
+# runs the body to completion; the second finds the one-shot handle
+# consumed and raises OneShotContinuationError.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value() -> int: ...
+
+def main() -> int / []:
+    try:
+        with handle(Ask):
+            print(perform(Ask.value()))
+    except Ask.value as eff:
+        eff.resume(1)
+        eff.resume(2)
+    return 0

@@ -1,0 +1,3 @@
+exit 1
+log: dividing
+error: integer division by zero

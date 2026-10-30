@@ -1,0 +1,18 @@
+# Milestone 3: a clause that finishes without resuming. The suspended
+# body is abandoned and execution continues past the try/except block.
+
+from effectpython import Effect, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+def main() -> int / []:
+    try:
+        with handle(Abort):
+            print("before")
+            perform(Abort.stop("done early"))
+            print("never printed")
+    except Abort.stop as eff:
+        print("aborted:", eff.reason)
+    print("after")
+    return 0

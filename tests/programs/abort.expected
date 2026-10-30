@@ -1,0 +1,4 @@
+exit 0
+before
+aborted: done early
+after
