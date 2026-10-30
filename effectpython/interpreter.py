@@ -19,9 +19,12 @@ handler side inside the eff.resume() call that resumed it, or at the
 handle statement if the body never performed, so the rest of the
 clause does not run. A clause runs in the function's own environment
 with its binding defined for the clause's duration and removed
-afterwards, as Python does for `except ... as e`, so the clause for a
-second perform, which runs nested inside the first clause's resume(),
-cannot overwrite the outer clause's binding.
+afterwards, as Python does for `except ... as e`, so a clause that
+runs nested inside another clause's resume() cannot overwrite the
+outer clause's binding. A clause whose last statement is a resume()
+on its own binding does not nest: dispatch() switches into the body
+from its loop, so any number of sequential performs handled that way
+use constant stack.
 
 rstacklet runs only translated, so the import below is guarded: the
 unit tests import this module without RPython on the path and never
@@ -228,31 +231,46 @@ class Interpreter(object):
                 self.handler_stack.pop()
 
     def dispatch(self, frame, h):
-        """Step 3: an empty handle means the body finished, so surface
-        what it left in the mailbox; otherwise run the clause for the
-        pending payload with its binding in scope."""
-        if self.sthread.is_empty_handle(h):
-            error = frame.pending_error
-            if error is not None:
-                raise error
-            signal = frame.pending_return
-            if signal is not None:
-                raise signal
-            return
-        payload = frame.pending_payload
-        clause = frame.clause_for(payload)
-        env = frame.env
-        name = clause.binding
-        had_name = name in env.vars
-        w_old = env.vars.get(name, None)
-        env.define(name, W_EffBinding(payload, frame, h))
-        try:
-            self.exec_block(clause.body, env)
-        finally:
-            if had_name:
-                env.vars[name] = w_old
-            else:
-                del env.vars[name]
+        """Step 3: run the clause for each payload the body performs,
+        with its binding in scope, until the handle that comes back is
+        empty; then surface what the body left in the mailbox. A clause
+        that ends with eff.resume(...) on its own binding switches into
+        the body from this loop, so sequential performs handled that
+        way do not nest on the C stack. A resume() anywhere else runs
+        nested through resume()."""
+        while not self.sthread.is_empty_handle(h):
+            payload = frame.pending_payload
+            clause = frame.clause_for(payload)
+            tail = tail_resume(clause)
+            w_eff = W_EffBinding(payload, frame, h)
+            env = frame.env
+            name = clause.binding
+            had_name = name in env.vars
+            w_old = env.vars.get(name, None)
+            env.define(name, w_eff)
+            w_value = w_None
+            try:
+                count = len(clause.body)
+                if tail is not None:
+                    count -= 1
+                for i in range(count):
+                    self.exec_stmt(clause.body[i], env)
+                if tail is not None:
+                    w_value = self.eval_expr(tail.value, env)
+            finally:
+                if had_name:
+                    env.vars[name] = w_old
+                else:
+                    del env.vars[name]
+            if tail is None:
+                return
+            h = self.switch_into(w_eff, w_value)
+        error = frame.pending_error
+        if error is not None:
+            raise error
+        signal = frame.pending_return
+        if signal is not None:
+            raise signal
 
     def perform(self, effect_name, op_name, args_w):
         """Step 2: hide the handling frame and everything above it,
@@ -276,9 +294,10 @@ class Interpreter(object):
         frame.resume_value = None
         return w_value
 
-    def resume(self, w_eff, w_value):
+    def switch_into(self, w_eff, w_value):
         """Step 4: consume the one-shot handle and switch into the body.
-        When control comes back, dispatch what the body did next."""
+        Returns the handle that comes back when the body performs again
+        or finishes."""
         if self.sthread.is_empty_handle(w_eff.h_body):
             raise OneShotContinuationError(
                 "Cannot resume a suspended body more than once")
@@ -287,8 +306,13 @@ class Interpreter(object):
         w_eff.h_body = self.sthread.get_null_handle()
         frame.resume_value = w_value
         frame.status = STATUS_RUNNING
-        h = self.sthread.switch(h)
-        self.dispatch(frame, h)
+        return self.sthread.switch(h)
+
+    def resume(self, w_eff, w_value):
+        """eff.resume(...) anywhere but a clause's tail: switch into the
+        body and dispatch what it does next, nested in this call."""
+        h = self.switch_into(w_eff, w_value)
+        self.dispatch(w_eff.frame, h)
         return w_None
 
     def read_attr(self, w_eff, attr):
@@ -412,6 +436,18 @@ class Interpreter(object):
         raise EffectPythonRuntimeError(
             "unsupported operand types for %s: %s and %s" %
             (op, type_name(w_left), type_name(w_right)))
+
+def tail_resume(clause):
+    """The Resume node when the clause's last statement is
+    eff.resume(...) on the clause's own binding, else None."""
+    if len(clause.body) == 0:
+        return None
+    last = clause.body[len(clause.body) - 1]
+    if isinstance(last, ast.ExprStmt):
+        expr = last.expr
+        if isinstance(expr, ast.Resume) and expr.target == clause.binding:
+            return expr
+    return None
 
 def type_name(w):
     if isinstance(w, W_Int):

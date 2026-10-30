@@ -1,9 +1,8 @@
-# Milestone 3 stress: a thousand performs inside one handle block.
-# Each clause runs nested inside the previous clause's eff.resume()
-# (plan 3.4, step 4), so this nests a thousand clause evaluations on
-# the handler side's C stack. Ten thousand aborts the binary with
-# "Fatal RPython error: StackOverflow"; the limit is between 1600 and
-# 1800 (plan 4.2, Milestone 3).
+# Milestone 3 stress: ten thousand performs inside one handle block.
+# The clause ends with eff.resume(...), so dispatch switches into the
+# body from its loop instead of nesting a clause evaluation per perform
+# (plan 3.4, step 4). Before that, the nesting overflowed RPython's
+# stack guard between 1600 and 1800 performs.
 
 from effectpython import Effect, perform, handle
 
@@ -15,7 +14,7 @@ def main() -> int / []:
         with handle(Counter):
             i = 0
             total = 0
-            while i < 1000:
+            while i < 10000:
                 total = total + perform(Counter.tick(i))
                 i = i + 1
             print(total)
