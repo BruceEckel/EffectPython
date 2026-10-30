@@ -6,7 +6,18 @@ ReturnSignal, an RPython exception. Each call gets a fresh Environment, so
 locals are lexically scoped to the call that created them.
 
 Dispatch is by isinstance over the node classes in ast_nodes. The checker
-will walk the same classes the same way.
+walks the same classes the same way.
+
+Some EffectPythonRuntimeError branches below are unreachable from the
+translated binary, because checker.py rejects the program first: a call
+to a function that does not exist (check_call), a call with the wrong
+number of arguments (check_args), and a module without main()
+(check_entry_point). They stay because the unit tests build modules by
+hand and run them without the checker. The cases the checker does not
+see remain runtime-only: a variable that was never assigned (the checker
+types an unbound name as UNKNOWN), an operator applied to operands of
+the wrong types (the checker infers types only as far as argument checks
+need), and integer division or modulo by zero.
 """
 import os
 
