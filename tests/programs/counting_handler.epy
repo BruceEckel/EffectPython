@@ -1,0 +1,29 @@
+# Milestone 5: a stateful handler class. The field counts the writes
+# across two calls, the instance is bound to a name before handle(),
+# and main reads the count after the block.
+
+from effectpython import Effect, Handler, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+    def write(path: str, content: str) -> int: ...
+
+class CountingFileIO(Handler[FileIO]):
+    writes: int = 0
+    def read(self, path: str) -> str:
+        return "contents of " + path
+    def write(self, path: str, content: str) -> int:
+        self.writes = self.writes + 1
+        return self.writes
+
+def save(name: str) -> int / [FileIO]:
+    config = perform(FileIO.read(name + ".json"))
+    return perform(FileIO.write(name, config))
+
+def main() -> int / []:
+    fake = CountingFileIO()
+    with handle(fake):
+        print(save("settings"))
+        print(save("users"))
+    print(fake.writes)
+    return 0
