@@ -1,0 +1,25 @@
+# Milestone 5: two handler classes for one effect, chosen at two call
+# sites. The same function gives two outputs.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Greeting(Effect):
+    def greet(name: str) -> str: ...
+
+class Formal(Handler[Greeting]):
+    def greet(self, name: str) -> str:
+        return "Good day, " + name
+
+class Casual(Handler[Greeting]):
+    def greet(self, name: str) -> str:
+        return "Hi " + name
+
+def welcome(name: str) -> str / [Greeting]:
+    return perform(Greeting.greet(name))
+
+def main() -> int / []:
+    with handle(Formal()):
+        print(welcome("Ada"))
+    with handle(Casual()):
+        print(welcome("Ada"))
+    return 0

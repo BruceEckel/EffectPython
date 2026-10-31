@@ -1,0 +1,28 @@
+# Milestone 5: one handle() with a handler class for FileIO and an
+# inline clause for DBQuery. The two kinds of argument share a frame.
+
+from effectpython import Effect, Handler, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+    def write(path: str, content: str) -> int: ...
+
+class DBQuery(Effect):
+    def execute(sql: str) -> str: ...
+
+class FakeFileIO(Handler[FileIO]):
+    def read(self, path: str) -> str:
+        return "contents of " + path
+    def write(self, path: str, content: str) -> int:
+        return 7
+
+def main() -> int / []:
+    try:
+        with handle(FakeFileIO(), DBQuery):
+            print(perform(FileIO.read("a")))
+            print(perform(DBQuery.execute("select 1")))
+            print(perform(FileIO.write("a", "b")))
+    except DBQuery.execute as eff:
+        print("query:", eff.sql)
+        eff.resume("one row")
+    return 0

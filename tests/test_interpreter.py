@@ -9,6 +9,7 @@ from effectpython import ast_nodes as ast
 from effectpython.errors import EffectPythonRuntimeError
 from effectpython.interpreter import Interpreter, Output
 from effectpython.model import W_Int, W_Str, W_None, w_None
+from effectpython.parser import parse
 from effectpython.samples import build_fib_module
 
 class ListOutput(Output):
@@ -117,3 +118,43 @@ def test_division_by_zero():
 def test_missing_main():
     with pytest.raises(EffectPythonRuntimeError):
         run_module(ast.Module([]))
+
+# --- Handler instances (Milestone 5), without a handle statement -------------
+
+HANDLER = (
+    'class FileIO(Effect):\n'
+    '    def read(path: str) -> str: ...\n'
+    'class Fake(Handler[FileIO]):\n'
+    '    tag: str\n'
+    '    count: int = 0\n'
+    '    def read(self, path: str) -> str:\n'
+    '        return path\n')
+
+def test_constructor_fills_fields_from_arguments_and_defaults():
+    exit_code, lines = run_module(parse(
+        HANDLER + 'def main() -> int:\n'
+        '    print(Fake("t"), Fake("u", 9))\n    return 0\n'))
+    assert lines == ["Fake(tag='t', count=0) Fake(tag='u', count=9)"]
+
+def test_field_assignment_and_read():
+    exit_code, lines = run_module(parse(
+        HANDLER + 'def main() -> int:\n'
+        '    fake = Fake("t")\n'
+        '    fake.count = fake.count + 1\n'
+        '    return fake.count\n'))
+    assert exit_code == 1
+
+@pytest.mark.parametrize('body, msg', [
+    ('    f = Fake()\n    return 0\n',
+     "Fake() needs a value for field 'tag'"),
+    ('    f = Fake("t", 1, 2)\n    return 0\n',
+     'Fake() takes 2 arguments (3 given)'),
+    ('    f = Fake("t")\n    return f.nope\n',
+     "handler class 'Fake' has no field 'nope'"),
+    ('    x = 1\n    x.count = 2\n    return 0\n',
+     "'x' is not a handler instance"),
+])
+def test_instance_runtime_errors(body, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_module(parse(HANDLER + 'def main() -> int:\n' + body))
+    assert info.value.msg == msg

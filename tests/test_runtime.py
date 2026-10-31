@@ -11,9 +11,6 @@ Translation takes about a minute, so the other test modules stay
 separate for quick runs. Setting EFFECTPYTHON_BINARY to the path of a
 binary translated earlier skips the translation and runs the
 programs through that binary instead.
-
-A program written ahead of its milestone is a strict xfail in NOT_YET
-until the runtime runs it.
 """
 import glob
 import os
@@ -25,9 +22,6 @@ from support import PROGRAMS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPYTHON = os.path.expanduser(
     '~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython')
-NOT_YET = {
-    'counting_handler.epy': 'Milestone 5: handler classes',
-}
 
 @pytest.fixture(scope='session')
 def binary(tmp_path_factory):
@@ -55,12 +49,7 @@ def read_expected(path):
 
 def program_cases():
     for path in sorted(glob.glob(os.path.join(PROGRAMS, '*.epy'))):
-        name = os.path.basename(path)
-        marks = []
-        if name in NOT_YET:
-            marks.append(pytest.mark.xfail(reason=NOT_YET[name],
-                                           strict=True))
-        yield pytest.param(path, id=name, marks=marks)
+        yield pytest.param(path, id=os.path.basename(path))
 
 @pytest.mark.parametrize('program', program_cases())
 def test_program(binary, program):

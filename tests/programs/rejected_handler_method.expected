@@ -1,0 +1,2 @@
+exit 1
+error: line 10: handler class 'Fake' has no method for FileIO.write

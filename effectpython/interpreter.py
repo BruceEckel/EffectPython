@@ -26,6 +26,15 @@ on its own binding does not nest: dispatch() switches into the body
 from its loop, so any number of sequential performs handled that way
 use constant stack.
 
+A handler class (plan 1.5) adds no mechanism to that. A handle
+statement evaluates its constructor calls and looks up its instance
+names before installing the frame, and the frame maps each fulfilled
+effect to its W_HandlerInstance. When the body performs an operation
+of a fulfilled effect, dispatch() calls the method as a function with
+the instance as self and the payload's arguments, and switches into
+the body with the returned value along the tail-resume path, so a
+method cannot abandon the body or resume it twice.
+
 rstacklet runs only translated, so the import below is guarded: the
 unit tests import this module without RPython on the path and never
 execute a handle statement. Every runtime error that depends on it
@@ -55,7 +64,7 @@ from effectpython.errors import (EffectError, EffectPythonRuntimeError,
                                  OneShotContinuationError)
 from effectpython.model import (W_Root, W_Int, W_Str, W_Bool,
                                 W_EffectPayload, W_EffBinding,
-                                w_None, wrap_bool)
+                                W_HandlerInstance, w_None, wrap_bool)
 
 class Environment(object):
     """One lexical scope: a name -> W_Root table with an optional parent."""
@@ -91,13 +100,56 @@ STATUS_RUNNING = 0
 STATUS_SUSPENDED = 1
 STATUS_COMPLETED = 2
 
+class HandlerClass(object):
+    """A handler class as the interpreter records it: the fields with
+    their defaults, the method for each operation, and the effect its
+    instances fulfill (plan 1.5)."""
+
+    def __init__(self, node):
+        self.name = node.name
+        self.effect = node.effect
+        self.field_names = []
+        self.defaults_w = []  # W_Root or None, parallel to field_names
+        for field in node.fields:
+            self.field_names.append(field.name)
+            self.defaults_w.append(literal_value(field.default))
+        self.methods = {}
+        for method in node.methods:
+            self.methods[method.name] = method
+
+    def construct(self, args_w):
+        fields_w = []
+        for i in range(len(self.field_names)):
+            if i < len(args_w):
+                fields_w.append(args_w[i])
+            elif self.defaults_w[i] is not None:
+                fields_w.append(self.defaults_w[i])
+            else:
+                raise EffectPythonRuntimeError(
+                    "%s() needs a value for field '%s'" %
+                    (self.name, self.field_names[i]))
+        if len(args_w) > len(self.field_names):
+            raise EffectPythonRuntimeError(
+                "%s() takes %d arguments (%d given)" %
+                (self.name, len(self.field_names), len(args_w)))
+        return W_HandlerInstance(self.name, self.field_names, fields_w)
+
+def literal_value(expr):
+    if isinstance(expr, ast.IntLiteral):
+        return W_Int(expr.value)
+    elif isinstance(expr, ast.StrLiteral):
+        return W_Str(expr.value)
+    return None
+
 class HandlerFrame(object):
     """One active handle statement: what it handles, where its clauses
-    run, and the mailbox the body and handler sides share (plan 3.3)."""
+    run, the handler instances that fulfill its effects, and the
+    mailbox the body and handler sides share (plan 3.3)."""
 
-    def __init__(self, stmt, env, sthread):
+    def __init__(self, stmt, env, sthread, instances_w):
         self.stmt = stmt  # ast.Handle: the effects and clauses
         self.env = env
+        self.instances_w = instances_w  # effect name -> W_HandlerInstance
         self.h_handler = sthread.get_null_handle()
         self.status = STATUS_RUNNING
         self.pending_payload = None  # W_EffectPayload set by perform()
@@ -107,7 +159,8 @@ class HandlerFrame(object):
         self.saved_frames = []       # hidden while a clause runs
 
     def handles(self, effect_name):
-        return effect_name in self.stmt.effects
+        return (effect_name in self.stmt.effects
+                or effect_name in self.instances_w)
 
     def clause_for(self, payload):
         for clause in self.stmt.clauses:
@@ -150,6 +203,9 @@ class Interpreter(object):
         for effect in module.effects:
             for op in effect.operations:
                 self.operations[effect.name + "." + op.name] = op
+        self.handlers = {}
+        for handler in module.handlers:
+            self.handlers[handler.name] = HandlerClass(handler)
         if output is None:
             output = Output()
         self.output = output
@@ -202,6 +258,10 @@ class Interpreter(object):
                 self.exec_block(stmt.body, env)
         elif isinstance(stmt, ast.Assign):
             env.define(stmt.name, self.eval_expr(stmt.value, env))
+        elif isinstance(stmt, ast.AttrAssign):
+            w_target = self.instance(env, stmt.target)
+            i = self.field_index(w_target, stmt.attr)
+            w_target.fields_w[i] = self.eval_expr(stmt.value, env)
         elif isinstance(stmt, ast.ExprStmt):
             self.eval_expr(stmt.expr, env)
         elif isinstance(stmt, ast.Handle):
@@ -217,9 +277,14 @@ class Interpreter(object):
         """Step 1: run the body in a new stacklet and dispatch whatever
         comes back. The frame is popped once the body has completed;
         a clause that abandons the body leaves it hidden by perform()."""
+        instances_w = {}
+        for call in stmt.constructions:
+            self.install(instances_w, self.eval_expr(call, env))
+        for name in stmt.instances:
+            self.install(instances_w, self.instance(env, name))
         if self.sthread is None:
             self.sthread = rstacklet.StackletThread()
-        frame = HandlerFrame(stmt, env, self.sthread)
+        frame = HandlerFrame(stmt, env, self.sthread, instances_w)
         self.handler_stack.append(frame)
         global_state.interp = self
         global_state.frame = frame
@@ -230,16 +295,32 @@ class Interpreter(object):
             if frame.status == STATUS_COMPLETED:
                 self.handler_stack.pop()
 
+    def install(self, instances_w, w_instance):
+        if not isinstance(w_instance, W_HandlerInstance):
+            raise EffectPythonRuntimeError(
+                "handle() argument is not a handler instance")
+        handler = self.handlers[w_instance.class_name]
+        if handler.effect in instances_w:
+            raise EffectPythonRuntimeError(
+                "handle() has two handlers for %s" % handler.effect)
+        instances_w[handler.effect] = w_instance
+
     def dispatch(self, frame, h):
-        """Step 3: run the clause for each payload the body performs,
-        with its binding in scope, until the handle that comes back is
-        empty; then surface what the body left in the mailbox. A clause
-        that ends with eff.resume(...) on its own binding switches into
-        the body from this loop, so sequential performs handled that
-        way do not nest on the C stack. A resume() anywhere else runs
-        nested through resume()."""
+        """Step 3: run the clause or method for each payload the body
+        performs until the handle that comes back is empty; then
+        surface what the body left in the mailbox. A method, or a
+        clause that ends with eff.resume(...) on its own binding,
+        switches into the body from this loop, so sequential performs
+        handled that way do not nest on the C stack. A resume()
+        anywhere else runs nested through resume()."""
         while not self.sthread.is_empty_handle(h):
             payload = frame.pending_payload
+            if payload.effect_name in frame.instances_w:
+                w_eff = W_EffBinding(payload, frame, h)
+                w_value = self.call_method(
+                    frame.instances_w[payload.effect_name], payload)
+                h = self.switch_into(w_eff, w_value)
+                continue
             clause = frame.clause_for(payload)
             tail = tail_resume(clause)
             w_eff = W_EffBinding(payload, frame, h)
@@ -315,6 +396,13 @@ class Interpreter(object):
         self.dispatch(w_eff.frame, h)
         return w_None
 
+    def call_method(self, w_instance, payload):
+        """A handler method runs as a function with the instance as
+        self ahead of the payload's arguments (plan 1.5)."""
+        handler = self.handlers[w_instance.class_name]
+        method = handler.methods[payload.op_name]
+        return self.call_function(method, [w_instance] + payload.args_w)
+
     def read_attr(self, w_eff, attr):
         """eff.path: the performed operation's argument in the position
         of the parameter named attr (plan 3.1)."""
@@ -333,6 +421,21 @@ class Interpreter(object):
             return w_target
         raise EffectPythonRuntimeError(
             "'%s' is not bound by an except clause" % target)
+
+    def instance(self, env, target):
+        w_target = env.lookup(target)
+        if isinstance(w_target, W_HandlerInstance):
+            return w_target
+        raise EffectPythonRuntimeError(
+            "'%s' is not a handler instance" % target)
+
+    def field_index(self, w_instance, attr):
+        i = w_instance.index_of(attr)
+        if i < 0:
+            raise EffectPythonRuntimeError(
+                "handler class '%s' has no field '%s'" %
+                (w_instance.class_name, attr))
+        return i
 
     # --- expressions -------------------------------------------------------
 
@@ -367,6 +470,10 @@ class Interpreter(object):
                 args_w.append(self.eval_expr(arg, env))
             return W_EffectPayload(expr.effect, expr.op, args_w)
         elif isinstance(expr, ast.AttrRead):
+            w_target = env.lookup(expr.target)
+            if isinstance(w_target, W_HandlerInstance):
+                i = self.field_index(w_target, expr.attr)
+                return w_target.fields_w[i]
             return self.read_attr(self.binding(env, expr.target), expr.attr)
         elif isinstance(expr, ast.Resume):
             w_value = self.eval_expr(expr.value, env)
@@ -383,6 +490,8 @@ class Interpreter(object):
             return w_None
         if name in self.functions:
             return self.call_function(self.functions[name], args_w)
+        if name in self.handlers:
+            return self.handlers[name].construct(args_w)
         raise EffectPythonRuntimeError("name '%s' is not defined" % name)
 
     # --- operators ---------------------------------------------------------

@@ -1,0 +1,17 @@
+# Milestone 5 error path: a handler class missing a method for one of
+# its effect's operations. The checker rejects it before anything runs.
+
+from effectpython import Effect, Handler, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+    def write(path: str, content: str) -> int: ...
+
+class Fake(Handler[FileIO]):
+    def read(self, path: str) -> str:
+        return path
+
+def main() -> int / []:
+    with handle(Fake()):
+        print(perform(FileIO.read("a")))
+    return 0

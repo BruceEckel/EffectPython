@@ -102,6 +102,31 @@ class W_EffBinding(W_Root):
     def repr(self):
         return "<binding for %s>" % self.payload.repr()
 
+class W_HandlerInstance(W_Root):
+    """An instance of a handler class (plan 1.5): the class's name, its
+    field names in declaration order, and one value per field. A
+    handle(...) statement holds it in the frame for the whole body, so
+    a field keeps its value from one perform to the next."""
+    _attrs_ = ['class_name', 'field_names', 'fields_w']
+
+    def __init__(self, class_name, field_names, fields_w):
+        self.class_name = class_name
+        self.field_names = field_names  # list of str, shared with the class
+        self.fields_w = fields_w        # list of W_Root, parallel to it
+
+    def index_of(self, attr):
+        for i in range(len(self.field_names)):
+            if self.field_names[i] == attr:
+                return i
+        return -1
+
+    def str(self):
+        parts = []
+        for i in range(len(self.field_names)):
+            parts.append("%s=%s" % (self.field_names[i],
+                                    self.fields_w[i].repr()))
+        return "%s(%s)" % (self.class_name, ", ".join(parts))
+
 # Prebuilt singletons. RPython allows prebuilt instances as module globals.
 w_None = W_None()
 w_True = W_Bool(True)
