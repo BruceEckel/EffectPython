@@ -45,9 +45,16 @@ translated binary, because checker.py rejects the program first: a call
 to a function that does not exist (check_call), a call with the wrong
 number of arguments (check_args), a module without main()
 (check_entry_point), a perform() with no handler in scope, a clause
-binding read where none is bound, and an eff.<attr> naming no
-parameter. They stay because the unit tests build modules by hand and
-run them without the checker. The cases the checker does not
+binding read where none is bound, an eff.<attr> naming no parameter,
+and the handler instance errors: a constructor call with too few or
+too many arguments (check_construction, in HandlerClass.construct),
+a field read or assigned on a name that holds no instance
+(require_instance, in Interpreter.instance), a field the class does
+not declare (require_field, in field_index), and a handle() argument
+that is not an instance or that fulfills an effect another argument
+fulfills (check_handle, in install). They stay because the unit tests
+build modules by hand and run them without the checker. The cases the
+checker does not
 see remain runtime-only: a variable that was never assigned (the checker
 types an unbound name as UNKNOWN), an operator applied to operands of
 the wrong types (the checker infers types only as far as argument checks

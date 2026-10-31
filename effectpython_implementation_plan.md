@@ -348,13 +348,15 @@ and its `sthread`, which the first `handle` statement creates rather than startu
 a `StackletThread` cannot be built untranslated, and the unit tests construct interpreters without one.
 A module-level `global_state` carries the interpreter and the frame into the body callback,
 whose only argument is a raw address (3.2, rule 4).
-Each `HandlerFrame` keeps the `ast.Handle` node it runs, so its effects and clauses come from the node:
+Each `HandlerFrame` keeps the `ast.Handle` node it runs, so its effects and clauses come from the node,
+and from Milestone 5 the handler instances that fulfill its other effects (1.5):
 
 ```python
 class HandlerFrame(object):
-    def __init__(self, stmt, env, sthread):
+    def __init__(self, stmt, env, sthread, instances_w):
         self.stmt = stmt              # ast.Handle: effects (list[str]) and clauses (list[ast.Clause])
         self.env = env                # Environment of the function containing the handle statement
+        self.instances_w = instances_w  # dict[str, W_HandlerInstance]: fulfilled effect -> its handler instance
         self.h_handler = sthread.get_null_handle()  # handle of the handler side, held by the body; replaced on every switch
         # Mailbox fields for communicating across a switch:
         self.status = STATUS_RUNNING  # RUNNING | SUSPENDED | COMPLETED
@@ -365,9 +367,12 @@ class HandlerFrame(object):
         self.saved_frames = []        # list[HandlerFrame]: this frame and the inner frames, hidden while a clause runs
 ```
 
-`handles(effect_name)` tests the node's effect list,
+`handles(effect_name)` tests the node's effect list and the `instances_w` keys,
 and `clause_for(payload)` searches its clauses in order;
 the checker guarantees a match, so the `EffectPythonRuntimeError` for a miss is unreachable from the binary.
+The interpreter also keeps a `handlers` table, handler class name to `HandlerClass`,
+which records a class's field names with their literal defaults, one method per operation, and the effect it fulfills;
+`HandlerClass.construct(args_w)` builds a `W_HandlerInstance`.
 The body is a suite, so it produces no value and the frame stores none: `eff.resume()` evaluates to `None`.
 The handle of the suspended body lives in the `W_EffBinding`, not in the frame, so each suspension has its own one-shot token.
 
@@ -400,8 +405,11 @@ sequenceDiagram
 ```
 
 1.  **Entering `with handle(...)` (`Interpreter.exec_handle`):**
+    *   Build `instances_w` first: evaluate each constructor call in `stmt.constructions` and look up each name in `stmt.instances`,
+        and map each instance under the effect its class fulfills (two instances for one effect is an error the checker already rejects).
+        Constructor arguments that perform effects resolve to the frames in place at that point, since this frame is not yet installed.
     *   Create `sthread` if this is the first `handle` statement.
-        Instantiate `frame = HandlerFrame(stmt, env, sthread)`, push it onto `handler_stack`, and set `global_state.interp` and `global_state.frame`.
+        Instantiate `frame = HandlerFrame(stmt, env, sthread, instances_w)`, push it onto `handler_stack`, and set `global_state.interp` and `global_state.frame`.
     *   Call `h = sthread.new(run_body_callback, llmemory.NULL)`.
         `run_body_callback(h, arg)` reads the interpreter and the frame from `global_state`, stores `frame.h_handler = h`,
         and runs the `with` body through `exec_block` inside a `try` that stores an `EffectError` in `frame.pending_error`
@@ -427,9 +435,15 @@ sequenceDiagram
         The assignment stores the fresh handle of whichever side resumes the body.
     *   When the switch returns, `handler_stack.extend(frame.saved_frames)`, reset `saved_frames` to `[]`,
         and return `frame.resume_value`, clearing the field.
-3.  **Dispatching the Handler Clause (`Interpreter.dispatch(frame, h)`), a loop:**
+3.  **Dispatching the Handler Clause or Method (`Interpreter.dispatch(frame, h)`), a loop:**
     *   While `h` is not empty, the body is suspended and `frame.pending_payload` holds the performed operation.
-        Find the clause with `frame.clause_for(payload)` and create `eff = W_EffBinding(payload, frame, h)`.
+    *   If the payload's effect is a key of `frame.instances_w`, a handler method answers it (1.5):
+        create `eff = W_EffBinding(payload, frame, h)`, call the instance's method for the operation through `call_function`
+        with the instance as `self` ahead of `payload.args_w`, which gives the method fresh locals,
+        then `h = switch_into(eff, value)` (step 4) with the returned value and return to the top of the loop.
+        A method therefore resumes the body once, along the same path as a tail resume, and cannot abandon it;
+        effects the method performs resolve to outer handlers through the hiding of step 2, as a clause's do.
+    *   Otherwise find the clause with `frame.clause_for(payload)` and create `eff = W_EffBinding(payload, frame, h)`.
     *   Bind the clause's name in `frame.env`, the environment of the function containing the `handle` statement,
         the same scope Python gives `except ... as e`, remembering any earlier value of that name.
         Run the clause's statements, and afterwards, in a `finally`, restore the earlier value or delete the name.
