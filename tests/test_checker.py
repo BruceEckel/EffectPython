@@ -1,4 +1,5 @@
-"""Milestone 2 acceptance: the static effect checker (plan 2.2, 4.2).
+"""Milestone 2 acceptance: the static effect checker (plan 2.2, 4.2),
+and from Milestone 5 the handler class rules (plan 1.5).
 
 Run with:  pypy2 -m pytest
 """
@@ -177,15 +178,218 @@ MAIN = 'def main() -> int / []:\n    return 0\n'
      InvalidProgram,
      'line 13: e.resume() for FileIO.read must pass str, not int'),
     ('def f() -> int:\n    return x.resume(1)\n' + MAIN,
-     InvalidProgram, "line 9: 'x' is not bound by an except clause"),
+     InvalidProgram,
+     "line 9: 'x' is not an except binding or a handler instance"),
     ('def f() -> int:\n    return x.path\n' + MAIN,
-     InvalidProgram, "line 9: 'x' is not bound by an except clause"),
+     InvalidProgram,
+     "line 9: 'x' is not an except binding or a handler instance"),
     ('def f() -> int:\n    return 0\ndef f() -> int:\n    return 1\n'
      + MAIN, InvalidProgram, "line 10: function 'f' is defined twice"),
     ('class FileIO(Effect):\n    def read(path: str) -> str: ...\n' + MAIN,
      InvalidProgram, "line 8: effect 'FileIO' is declared twice"),
 ])
 def test_rejected_programs(body, error, msg):
+    with pytest.raises(error) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+# --- Handler classes (Milestone 5) -------------------------------------------
+
+HANDLERS = EFFECTS + '''\
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class FakeFileIO(Handler[FileIO]):
+    def read(self, path: str) -> str:
+        return "contents of " + path
+    def write(self, path: str, content: str) -> int / [Log]:
+        perform(Log.note("writing " + path))
+        return 7
+
+class CountingFileIO(Handler[FileIO]):
+    writes: int = 0
+    def read(self, path: str) -> str:
+        return path
+    def write(self, path: str, content: str) -> int:
+        self.writes = self.writes + 1
+        return self.writes
+
+'''
+
+def check_handlers(body):
+    check(parse(HANDLERS + body))
+
+def test_accepts_the_counting_handler_program():
+    check(parse(read_program('counting_handler.epy')))
+
+def test_accepts_the_plan_example_with_a_method_row_handled_outside():
+    check_handlers('def load_app(name: str) -> int / [FileIO]:\n'
+                   '    config = perform(FileIO.read(name + ".json"))\n'
+                   '    return perform(FileIO.write(name, config))\n'
+                   'def main() -> int / []:\n'
+                   '    try:\n'
+                   '        with handle(Log):\n'
+                   '            with handle(FakeFileIO()):\n'
+                   '                print(load_app("settings"))\n'
+                   '    except Log.note as eff:\n'
+                   '        print("log:", eff.text)\n'
+                   '        eff.resume(0)\n'
+                   '    return 0\n')
+
+def test_accepts_a_construction_beside_an_inline_clause():
+    check_handlers('def main() -> int / []:\n'
+                   '    try:\n'
+                   '        with handle(CountingFileIO(), DBQuery):\n'
+                   '            perform(DBQuery.execute("q"))\n'
+                   '            perform(FileIO.read("a"))\n'
+                   '    except DBQuery.execute as eff:\n'
+                   '        eff.resume(eff.sql)\n'
+                   '    return 0\n')
+
+def test_a_handler_discharges_its_effect_from_the_body():
+    check_handlers('def f() -> str:\n'
+                   '    with handle(CountingFileIO(5)):\n'
+                   '        return perform(FileIO.read("a"))\n'
+                   '    return ""\n' + MAIN)
+
+def test_a_method_row_flows_to_the_enclosing_function():
+    with pytest.raises(UnhandledEffectError) as info:
+        check_handlers('def f() -> int:\n'
+                       '    with handle(FakeFileIO()):\n'
+                       '        return perform(FileIO.write("a", "b"))\n'
+                       '    return 0\n' + MAIN)
+    assert info.value.msg == (
+        "line 26: function 'f' performs Log (line 27) without declaring "
+        "it in its effect row")
+
+def test_a_method_declares_what_it_performs():
+    with pytest.raises(UnhandledEffectError) as info:
+        check_source('class Fake(Handler[FileIO]):\n'
+                     '    def read(self, path: str) -> str:\n'
+                     '        return perform(DBQuery.execute(path))\n'
+                     '    def write(self, path: str, content: str) -> int:\n'
+                     '        return 0\n' + MAIN)
+    assert info.value.msg == (
+        "line 9: method 'read' performs DBQuery (line 10) without "
+        "declaring it in its effect row")
+
+def test_instance_fields_are_typed_after_the_block():
+    check_handlers('def main() -> int / []:\n'
+                   '    fake = CountingFileIO()\n'
+                   '    with handle(fake):\n'
+                   '        perform(FileIO.write("a", "b"))\n'
+                   '    return fake.writes\n')
+
+FAKE = ('class Fake(Handler[FileIO]):\n'
+        '    def read(self, path: str) -> str:\n'
+        '        return path\n'
+        '    def write(self, path: str, content: str) -> int:\n'
+        '        return 0\n')
+
+@pytest.mark.parametrize('body, error, msg', [
+    ('class Fake(Handler[FileIO]):\n'
+     '    def read(self, path: str) -> str:\n        return path\n' + MAIN,
+     InvalidProgram,
+     "line 8: handler class 'Fake' has no method for FileIO.write"),
+    (FAKE + '    def nope(self) -> int:\n        return 0\n' + MAIN,
+     InvalidProgram,
+     "line 13: method 'nope' of handler class 'Fake' is not an operation "
+     "of FileIO"),
+    ('class Fake(Handler[FileIO]):\n'
+     '    def read(self, name: str) -> str:\n        return name\n'
+     '    def write(self, path: str, content: str) -> int:\n'
+     '        return 0\n' + MAIN, InvalidProgram,
+     "line 9: method 'read' of handler class 'Fake' must take "
+     "(self, path: str), as FileIO.read does"),
+    ('class Fake(Handler[FileIO]):\n'
+     '    def read(self, path: int) -> str:\n        return ""\n'
+     '    def write(self, path: str, content: str) -> int:\n'
+     '        return 0\n' + MAIN, InvalidProgram,
+     "line 9: method 'read' of handler class 'Fake' must take "
+     "(self, path: str), as FileIO.read does"),
+    ('class Fake(Handler[FileIO]):\n'
+     '    def read(self, path: str) -> int:\n        return 0\n'
+     '    def write(self, path: str, content: str) -> int:\n'
+     '        return 0\n' + MAIN, InvalidProgram,
+     "line 9: method 'read' of handler class 'Fake' must return str, "
+     "as FileIO.read does"),
+    ('class Fake(Handler[FileIO]):\n    items: list\n' + FAKE[29:] + MAIN,
+     InvalidProgram,
+     "line 9: field 'items' of handler class 'Fake' must be int or str, "
+     "not list"),
+    ('class Fake(Handler[FileIO]):\n    writes: int = "x"\n' + FAKE[29:]
+     + MAIN, InvalidProgram,
+     "line 9: default of field 'writes' must be int, not str"),
+    ('class Fake(Handler[FileIO]):\n    a: int = 0\n    b: int\n'
+     + FAKE[29:] + MAIN, InvalidProgram,
+     "line 10: field 'b' without a default follows a field with one"),
+    ('class Fake(Handler[FileIO]):\n    a: int\n    a: str\n'
+     + FAKE[29:] + MAIN, InvalidProgram,
+     "line 10: field 'a' is declared twice in handler class 'Fake'"),
+    (FAKE + '    def read(self, path: str) -> str:\n        return path\n'
+     + MAIN, InvalidProgram,
+     "line 13: method 'read' is declared twice in handler class 'Fake'"),
+    (FAKE + FAKE + MAIN, InvalidProgram,
+     "line 13: handler class 'Fake' is declared twice"),
+    ('class FileIO(Handler[DBQuery]):\n'
+     '    def execute(self, sql: str) -> str:\n        return sql\n'
+     + MAIN, InvalidProgram,
+     "line 8: handler class 'FileIO' is declared twice"),
+    (FAKE + 'def Fake() -> int:\n    return 0\n' + MAIN,
+     InvalidProgram, "line 13: function 'Fake' is defined twice"),
+    ('class Fake(Handler[Nope]):\n    def read(self) -> str:\n'
+     '        return ""\n' + MAIN,
+     InvalidProgram, "line 8: unknown effect 'Nope'"),
+    (FAKE + 'def f() -> int:\n    x = Fake(1)\n    return 0\n' + MAIN,
+     InvalidProgram, 'line 14: Fake() takes 0 arguments (1 given)'),
+    ('class Fake(Handler[FileIO]):\n    a: int\n    b: str = ""\n'
+     + FAKE[29:] + 'def f() -> int:\n    x = Fake(1, "b", 3)\n'
+     '    return 0\n' + MAIN,
+     InvalidProgram, 'line 16: Fake() takes 1 to 2 arguments (3 given)'),
+    ('class Fake(Handler[FileIO]):\n    a: int\n'
+     + FAKE[29:] + 'def f() -> int:\n    x = Fake("s")\n'
+     '    return 0\n' + MAIN,
+     InvalidProgram, 'line 15: argument 1 of Fake() must be int, not str'),
+    ('class Fake(Handler[FileIO]):\n    a: int\n'
+     + FAKE[29:] + 'def f() -> int:\n    x = Fake(1)\n'
+     '    return x.nope\n' + MAIN,
+     InvalidProgram, "line 16: handler class 'Fake' has no field 'nope'"),
+    ('class Fake(Handler[FileIO]):\n    a: int\n'
+     '    def read(self, path: str) -> str:\n'
+     '        self.a = path\n        return path\n'
+     '    def write(self, path: str, content: str) -> int:\n'
+     '        return 0\n' + MAIN, InvalidProgram,
+     "line 11: field 'a' of handler class 'Fake' is int; cannot assign "
+     "str"),
+    ('def f() -> int:\n    x.a = 1\n    return 0\n' + MAIN,
+     InvalidProgram, "line 9: 'x' is not a handler instance"),
+    ('def main() -> int / []:\n    with handle(FileIO):\n'
+     '        pass\n    return 0\n', InvalidProgram,
+     'line 9: with handle(FileIO) outside try needs except clauses for '
+     'FileIO'),
+    (FAKE + 'def main() -> int / []:\n    try:\n'
+     '        with handle(Fake()):\n            pass\n'
+     '    except FileIO.read as e:\n        pass\n    return 0\n',
+     InvalidProgram,
+     'line 17: clause for FileIO.read, but Fake fulfills FileIO'),
+    (FAKE + 'def main() -> int / []:\n'
+     '    with handle(Fake(), Fake()):\n        pass\n    return 0\n',
+     InvalidProgram, 'line 14: handle() has two handlers for FileIO'),
+    (FAKE + 'def main() -> int / []:\n    try:\n'
+     '        with handle(Fake(), FileIO):\n            pass\n'
+     '    except FileIO.read as e:\n        pass\n'
+     '    except FileIO.write as e:\n        pass\n    return 0\n',
+     InvalidProgram,
+     'line 14: handle() names FileIO and a handler class for it'),
+    ('def main() -> int / []:\n    with handle(nope):\n'
+     '        pass\n    return 0\n', InvalidProgram,
+     "line 9: 'nope' is not an effect or a handler instance"),
+    ('def f() -> int:\n    return 0\n'
+     'def main() -> int / []:\n    with handle(f()):\n'
+     '        pass\n    return 0\n', InvalidProgram,
+     "line 11: 'f' is not a handler class"),
+])
+def test_rejected_handler_programs(body, error, msg):
     with pytest.raises(error) as info:
         check_source(body)
     assert info.value.msg == msg

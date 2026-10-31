@@ -1,5 +1,5 @@
 """Milestone 2, first slice: the lexer and the parser read the
-Milestone 1 subset.
+Milestone 1 subset; from Milestone 5, handler classes too.
 
 Run with:  pypy2 -m pytest
 """
@@ -229,7 +229,8 @@ def test_handle_block_with_two_clauses():
             ('ExprStmt', ('Resume', 'eff',
                           ('BinOp', '+', ('Name', 'path'),
                            ('StrLiteral', '!'))))]),
-          ('Clause', 'FileIO', 'write', 'eff', [('Pass',)])]),
+          ('Clause', 'FileIO', 'write', 'eff', [('Pass',)])],
+         [], []),
         ('Return', ('IntLiteral', 0))]
 
 def test_handle_several_effects_and_nested_handle():
@@ -269,7 +270,7 @@ def test_line_numbers_of_effect_nodes():
 
 @pytest.mark.parametrize('source, msg', [
     ('class FileIO(Thing):\n    def read() -> str: ...\n',
-     'line 1, column 14: a class must derive from Effect'),
+     'line 1, column 14: a class must derive from Effect or Handler[...]'),
     ('def main() -> int:\n    try:\n        with open(f):\n'
      '            pass\n    except IO.read as e:\n        pass\n',
      'line 3, column 14: a with statement must use handle(...)'),
@@ -286,6 +287,105 @@ def test_line_numbers_of_effect_nodes():
      "line 5, column 5: unexpected 'return'"),
 ])
 def test_effect_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
+    assert info.value.msg == msg
+
+# --- Handler classes (Milestone 5) -------------------------------------------
+
+HANDLER_EXAMPLE = '''\
+from effectpython import Effect, Handler, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+    def write(path: str, content: str) -> int: ...
+
+class CountingFileIO(Handler[FileIO]):
+    writes: int = 0
+    prefix: str
+    def read(self, path: str) -> str:
+        return self.prefix + path
+    def write(self, path: str, content: str) -> int / [Log]:
+        self.writes = self.writes + 1
+        return self.writes
+
+def main() -> int / []:
+    fake = CountingFileIO(0, "contents of ")
+    with handle(fake, FakeLog(3)):
+        print(perform(FileIO.read("a")))
+    print(fake.writes)
+    return 0
+'''
+
+def test_handler_class_shape():
+    module = parse(HANDLER_EXAMPLE)
+    assert shape(module.handlers) == [
+        ('HandlerDef', 'CountingFileIO', 'FileIO',
+         [('FieldDef', 'writes', 'int', ('IntLiteral', 0)),
+          ('FieldDef', 'prefix', 'str', None)],
+         [('FunctionDef', 'read', ['self', 'path'],
+           ['CountingFileIO', 'str'], 'str', [],
+           [('Return', ('BinOp', '+', ('AttrRead', 'self', 'prefix'),
+                        ('Name', 'path')))]),
+          ('FunctionDef', 'write', ['self', 'path', 'content'],
+           ['CountingFileIO', 'str', 'str'], 'int', ['Log'],
+           [('AttrAssign', 'self', 'writes',
+             ('BinOp', '+', ('AttrRead', 'self', 'writes'),
+              ('IntLiteral', 1))),
+            ('Return', ('AttrRead', 'self', 'writes'))])])]
+
+def test_with_handle_outside_try_has_no_clauses():
+    main = parse(HANDLER_EXAMPLE).functions[0]
+    assert shape(main.body) == [
+        ('Assign', 'fake', ('Call', 'CountingFileIO',
+                            [('IntLiteral', 0),
+                             ('StrLiteral', 'contents of ')])),
+        ('Handle', ['fake'],
+         [('ExprStmt', ('Call', 'print',
+                        [('Perform', 'FileIO', 'read',
+                          [('StrLiteral', 'a')])]))],
+         [], [('Call', 'FakeLog', [('IntLiteral', 3)])], []),
+        ('ExprStmt', ('Call', 'print', [('AttrRead', 'fake', 'writes')])),
+        ('Return', ('IntLiteral', 0))]
+
+def test_try_handle_mixes_a_construction_with_an_effect_name():
+    source = ('def main() -> int:\n'
+              '    try:\n'
+              '        with handle(FakeFileIO(), DBQuery):\n'
+              '            pass\n'
+              '    except DBQuery.execute as eff:\n'
+              '        eff.resume("")\n')
+    handle = parse(source).functions[0].body[0]
+    assert (handle.effects, shape(handle.constructions)) == (
+        ['DBQuery'], [('Call', 'FakeFileIO', [])])
+    assert [c.op for c in handle.clauses] == ['execute']
+
+def test_line_numbers_of_handler_nodes():
+    handler = parse(HANDLER_EXAMPLE).handlers[0]
+    assert (handler.lineno, handler.fields[1].lineno,
+            handler.methods[1].lineno) == (7, 9, 12)
+
+@pytest.mark.parametrize('source, msg', [
+    ('class Fake(Other[FileIO]):\n    def read(self) -> str:\n'
+     '        pass\n',
+     'line 1, column 12: a class must derive from Effect or Handler[...]'),
+    ('class Fake(Handler[FileIO]):\n    def read(path: str) -> str:\n'
+     '        pass\n',
+     "line 2, column 13: a handler method's first parameter must be self"),
+    ('class Fake(Handler[FileIO]):\n    def read() -> str:\n'
+     '        pass\n',
+     "line 2, column 13: a handler method's first parameter must be self"),
+    ('class Fake(Handler[FileIO]):\n    def read(me, path: str) -> str:\n'
+     '        pass\n',
+     "line 2, column 14: a handler method's first parameter must be self"),
+    ('class Fake(Handler[FileIO]):\n    writes: int = 1 + 2\n',
+     'line 2, column 17: a field default must be an int or str literal'),
+    ('def main() -> int:\n    with open(f):\n        pass\n',
+     'line 2, column 10: a with statement must use handle(...)'),
+    ('class Fake(Handler[FileIO]):\n    def read(self) -> str: ...\n',
+     "line 2, column 28: unexpected '...'"),
+])
+def test_handler_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
     assert info.value.msg == msg

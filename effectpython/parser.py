@@ -1,18 +1,21 @@
 """The parser: an rply LALR grammar producing ast_nodes (plan 2.1).
 
 The grammar is the plan's subset of Python 3: the import line, Effect
-classes with operation stubs, function definitions with typed
-parameters, a return type, and an optional effect row; return,
-assignment, expression, pass, if/else, and try/with handle/except
-statements; literals, names, arithmetic, comparisons, calls,
-attribute reads, and attribute calls.
+classes with operation stubs, Handler[Effect] classes with field
+declarations and methods, function definitions with typed parameters,
+a return type, and an optional effect row; return, assignment,
+attribute assignment, expression, pass, if/else, while, and handle
+statements, with or without try/except; literals, names, arithmetic,
+comparisons, calls, attribute reads, and attribute calls.
 
 perform and handle are names in Python, not keywords, so the grammar
 reads them as calls and the productions check them: perform(X) must
 wrap an Effect.op(...) call and becomes a Perform node, with handle(...)
-must name handle, and a class must derive from Effect. An attribute
-call name.resume(x) becomes a Resume node; any other Effect.op(...)
-call is an OpCall.
+must name handle, and a class must derive from Effect or Handler[...].
+An attribute call name.resume(x) becomes a Resume node; any other
+Effect.op(...) call is an OpCall. A handle(...) argument is a bare
+name or a constructor call Name(...); the checker decides whether a
+bare name is an effect or a handler instance (plan 1.5).
 
 RPython requires every production to return one type, so every value on
 the parse stack is a BaseBox: a Token, a Node (ast_nodes makes Node a
@@ -28,11 +31,12 @@ from effectpython.errors import InvalidSyntax
 from effectpython.lexer import TOKENS, TokenList, tokenize
 
 class _ModuleParts(BaseBox):
-    _attrs_ = ['functions', 'effects']
+    _attrs_ = ['functions', 'effects', 'handlers']
 
     def __init__(self):
         self.functions = []  # list of FunctionDef
         self.effects = []    # list of EffectDef
+        self.handlers = []   # list of HandlerDef
 
 class _Skipped(BaseBox):
     """The value of a module item that produces no node."""
@@ -43,6 +47,20 @@ class _OpList(BaseBox):
 
     def __init__(self, items):
         self.items = items  # list of OperationDef
+
+class _HandlerItems(BaseBox):
+    _attrs_ = ['fields', 'methods']
+
+    def __init__(self):
+        self.fields = []   # list of FieldDef
+        self.methods = []  # list of FunctionDef
+
+class _HandleArgs(BaseBox):
+    _attrs_ = ['names', 'constructions']
+
+    def __init__(self):
+        self.names = []          # list of str
+        self.constructions = []  # list of Call
 
 class _ClauseList(BaseBox):
     _attrs_ = ['items']
@@ -99,7 +117,7 @@ pg = ParserGenerator(TOKENS)
 def module(p):
     parts = p[0]
     assert isinstance(parts, _ModuleParts)
-    return ast.Module(parts.functions, parts.effects, 1)
+    return ast.Module(parts.functions, parts.effects, parts.handlers, 1)
 
 @pg.production('items :')
 def items_empty(p):
@@ -114,12 +132,15 @@ def items_more(p):
         parts.functions.append(item)
     elif isinstance(item, ast.EffectDef):
         parts.effects.append(item)
+    elif isinstance(item, ast.HandlerDef):
+        parts.handlers.append(item)
     else:
         assert isinstance(item, _Skipped)
     return parts
 
 @pg.production('item : funcdef')
 @pg.production('item : effectdef')
+@pg.production('item : handlerdef')
 def item(p):
     return p[0]
 
@@ -135,8 +156,92 @@ def effectdef(p):
     assert isinstance(base, Token)
     assert isinstance(ops, _OpList)
     if base.getstr() != 'Effect':
-        raise _error(base, "a class must derive from Effect")
+        raise _error(base, BASE_ERROR)
     return ast.EffectDef(_text(p[1]), ops.items, _line(p[0]))
+
+BASE_ERROR = "a class must derive from Effect or Handler[...]"
+
+@pg.production('handlerdef : CLASS NAME LPAREN NAME LBRACKET NAME RBRACKET'
+               ' RPAREN COLON NEWLINE INDENT handler_items DEDENT')
+def handlerdef(p):
+    base = p[3]
+    items = p[11]
+    assert isinstance(base, Token)
+    assert isinstance(items, _HandlerItems)
+    if base.getstr() != 'Handler':
+        raise _error(base, BASE_ERROR)
+    name = _text(p[1])
+    for method in items.methods:
+        method.param_types[0] = name
+    return ast.HandlerDef(name, _text(p[5]), items.fields, items.methods,
+                          _line(p[0]))
+
+@pg.production('handler_items : handler_item')
+def handler_items_one(p):
+    return _add_handler_item(_HandlerItems(), p[0])
+
+@pg.production('handler_items : handler_items handler_item')
+def handler_items_more(p):
+    items = p[0]
+    assert isinstance(items, _HandlerItems)
+    return _add_handler_item(items, p[1])
+
+def _add_handler_item(items, item):
+    if isinstance(item, ast.FieldDef):
+        items.fields.append(item)
+    else:
+        assert isinstance(item, ast.FunctionDef)
+        items.methods.append(item)
+    return items
+
+@pg.production('handler_item : NAME COLON NAME NEWLINE')
+def field_without_default(p):
+    return ast.FieldDef(_text(p[0]), _text(p[2]), None, _line(p[0]))
+
+@pg.production('handler_item : NAME COLON NAME EQUALS expr NEWLINE')
+def field_with_default(p):
+    default = _expr(p[4])
+    if not (isinstance(default, ast.IntLiteral)
+            or isinstance(default, ast.StrLiteral)):
+        raise _error(p[3], "a field default must be an int or str literal")
+    return ast.FieldDef(_text(p[0]), _text(p[2]), default, _line(p[0]))
+
+@pg.production('handler_item : DEF NAME LPAREN method_params RPAREN ARROW'
+               ' NAME effect_row COLON suite')
+def methoddef(p):
+    params = p[3]
+    row = p[7]
+    assert isinstance(params, _ParamList)
+    assert isinstance(row, _NameList)
+    # A bare self is the one parameter the grammar leaves untyped
+    if len(params.types) == 0 or params.types[0] != '':
+        raise _error(p[2], SELF_ERROR)
+    return ast.FunctionDef(_text(p[1]), params.names, params.types,
+                           _text(p[6]), row.items, _stmts(p[9]),
+                           _line(p[0]))
+
+@pg.production('method_params : params')
+def method_params_without_self(p):
+    return p[0]
+
+@pg.production('method_params : NAME')
+def method_params_self(p):
+    return _ParamList([_self(p[0])], [''])
+
+@pg.production('method_params : NAME COMMA param_list')
+def method_params_self_and_more(p):
+    params = p[2]
+    assert isinstance(params, _ParamList)
+    params.names.insert(0, _self(p[0]))
+    params.types.insert(0, '')
+    return params
+
+SELF_ERROR = "a handler method's first parameter must be self"
+
+def _self(box):
+    if _text(box) != 'self':
+        raise _error(box, SELF_ERROR)
+    return 'self'
 
 @pg.production('opdefs : opdef')
 def opdefs_one(p):
@@ -239,6 +344,7 @@ def stmts_more(p):
 @pg.production('stmt : if_stmt')
 @pg.production('stmt : while_stmt')
 @pg.production('stmt : handle_stmt')
+@pg.production('stmt : with_stmt')
 def stmt(p):
     return p[0]
 
@@ -258,6 +364,11 @@ def return_value(p):
 def assign(p):
     return ast.Assign(_text(p[0]), _expr(p[2]), _line(p[0]))
 
+@pg.production('simple_stmt : NAME DOT NAME EQUALS expr')
+def attr_assign(p):
+    return ast.AttrAssign(_text(p[0]), _text(p[2]), _expr(p[4]),
+                          _line(p[0]))
+
 @pg.production('simple_stmt : expr')
 def expr_stmt(p):
     expr = _expr(p[0])
@@ -276,19 +387,52 @@ def while_stmt(p):
     return ast.While(_expr(p[1]), _stmts(p[3]), _line(p[0]))
 
 @pg.production('handle_stmt : TRY COLON NEWLINE INDENT'
-               ' WITH NAME LPAREN name_list RPAREN COLON suite'
+               ' WITH NAME LPAREN handle_args RPAREN COLON suite'
                ' DEDENT clauses')
 def handle_stmt(p):
-    handle = p[5]
-    effects = p[7]
     clauses = p[12]
-    assert isinstance(handle, Token)
-    assert isinstance(effects, _NameList)
     assert isinstance(clauses, _ClauseList)
+    return _handle(p[5], p[7], p[10], clauses.items, _line(p[0]))
+
+@pg.production('with_stmt : WITH NAME LPAREN handle_args RPAREN COLON suite')
+def with_stmt(p):
+    return _handle(p[1], p[3], p[6], [], _line(p[0]))
+
+def _handle(handle, args, body, clauses, lineno):
+    assert isinstance(handle, Token)
+    assert isinstance(args, _HandleArgs)
     if handle.getstr() != 'handle':
         raise _error(handle, "a with statement must use handle(...)")
-    return ast.Handle(effects.items, _stmts(p[10]), clauses.items,
-                      _line(p[0]))
+    return ast.Handle(args.names, _stmts(body), clauses,
+                      args.constructions, lineno)
+
+@pg.production('handle_args : handle_arg')
+def handle_args_one(p):
+    return _add_handle_arg(_HandleArgs(), p[0])
+
+@pg.production('handle_args : handle_args COMMA handle_arg')
+def handle_args_more(p):
+    args = p[0]
+    assert isinstance(args, _HandleArgs)
+    return _add_handle_arg(args, p[2])
+
+def _add_handle_arg(args, arg):
+    if isinstance(arg, Token):
+        args.names.append(arg.getstr())
+    else:
+        assert isinstance(arg, ast.Call)
+        args.constructions.append(arg)
+    return args
+
+@pg.production('handle_arg : NAME')
+def handle_arg_name(p):
+    return p[0]
+
+@pg.production('handle_arg : NAME LPAREN args RPAREN')
+def handle_arg_construction(p):
+    args = p[2]
+    assert isinstance(args, _ExprList)
+    return ast.Call(_text(p[0]), args.items, _line(p[0]))
 
 @pg.production('clauses : clause')
 def clauses_one(p):

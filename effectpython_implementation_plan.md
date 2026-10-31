@@ -64,7 +64,7 @@ def main() -> int / []:
 
 > **Note on Execution Semantics:** Even though the surface syntax uses `try` / `except` with `with handle(...)` for Python 3 parser compatibility, the EffectPython AST evaluator compiles this construct into an **algebraic effect handler frame** (not a stack-unwinding exception). Calling `eff.resume(val)` returns control directly to the suspended `perform()` call site and runs the body until it finishes or a later clause abandons it; the clause for the body's next `perform` runs nested inside the `eff.resume(val)` call, unless that call is the clause's last statement, written as an expression statement on the clause's own binding, in which case the handler loops instead of nesting (3.4, steps 3 and 4). When the `with handle(...)` body completes normally, execution proceeds past the `try`/`except` block. A clause that finishes without calling `eff.resume(...)` also proceeds past the block, and the suspended body is abandoned (3.4, step 5). An exception raised inside the body is not caught by the `except Effect.op` clauses, which handle effects: it surfaces where the handler side regains control: inside the innermost `eff.resume(...)` call still waiting for the body, if there is one, and otherwise at the `with handle(...)` statement. From there it propagates out of the `try`/`except` block (3.4, steps 3 and 4).
 
-### 1.5 Handler Classes (designed 2026-10-30, open questions settled 2026-10-31, not yet implemented)
+### 1.5 Handler Classes (designed 2026-10-30, open questions settled 2026-10-31, frontend implemented 2026-10-31, runtime pending)
 The `try`/`with handle`/`except` form in 1.4 writes the clauses inline,
 so a handler that two functions need is written twice,
 and a test cannot swap a program's handler for a fake one without editing the program.
@@ -237,15 +237,15 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 *   **Statements:**
     *   `from effectpython import <names>` (accepted and ignored)
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`)
-    *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <literal>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; planned for Milestone 5, not implemented)
+    *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <literal>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; parsed and checked from 2026-10-31, runtime pending)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, `pass`, assignment `<name> = <expr>`, expression statements
-    *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (planned for Milestone 5)
+    *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (parsed and checked from 2026-10-31)
     *   `if <expr>: <suite> else: <suite>`
     *   `while <expr>: <suite>` (added 2026-10-30 for `tests/programs/many_performs.epy`)
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
-    *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (planned for Milestone 5)
-*   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, and `<name>.resume(<expr>)`. Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (planned, not implemented).
+    *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (parsed and checked from 2026-10-31)
+*   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, and `<name>.resume(<expr>)`. Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (parsed and checked from 2026-10-31).
 
 Two constraints on the lexer, found when translating `experiments/rply_addition.py` (2026-10-28), which confirmed that `rply` 0.7.8 translates with this toolchain:
 
@@ -536,4 +536,5 @@ EffectPython/
         *   One `handle(FakeFileIO(), DBQuery)` with an inline clause for `DBQuery.execute`.
         *   Two handler classes for one effect, chosen at two call sites, give two outputs.
         *   Ten thousand performs fulfilled by a handler method pass, as `many_performs.epy` does for a tail resume.
-    *   Not started. The open questions in 1.5 were settled 2026-10-31: see its paragraphs on the base, state, and abandonment.
+    *   The open questions in 1.5 were settled 2026-10-31: see its paragraphs on the base, state, and abandonment.
+    *   *Frontend done 2026-10-31.* `parser.py` reads the Milestone 5 forms of 2.1 into `HandlerDef` (with `FieldDef` nodes and `FunctionDef` methods whose first parameter is `self`, typed as the handler class), `AttrAssign`, and a `Handle` whose arguments are bare names, constructor calls (`constructions`), or, once the checker has sorted the bare names, handler instances (`instances`); a `with handle(...)` outside `try` is a `Handle` with no clauses. `checker.py` collects handler classes in Pass 1 and checks methods, fields, and defaults against the effect (`HandlerInfo`), and in Pass 2 types `self.<field>`, instance reads, field assignment, and constructor calls, sorts `handle()` arguments into handled and fulfilled effects, rejects every case in the list above, and adds the handlers' method rows to the enclosing function. `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection, and `counting_handler.epy` parses and passes the checker. The translated binary still rejects it at runtime (`name 'CountingFileIO' is not defined`), since the evaluator has no handler instances yet; the program stays a strict `xfail`.

@@ -22,17 +22,20 @@ class Node(BaseBox):
 # --- Module and definitions --------------------------------------------------
 
 class Module(Node):
-    """A whole .epy file: its effect declarations and its function
-       definitions, each in source order. The import line
-       (from effectpython import ...) leaves no node."""
-    _attrs_ = ['functions', 'effects']
+    """A whole .epy file: its effect declarations, its handler classes,
+       and its function definitions, each in source order. The import
+       line (from effectpython import ...) leaves no node."""
+    _attrs_ = ['functions', 'effects', 'handlers']
 
-    def __init__(self, functions, effects=None, lineno=0):
+    def __init__(self, functions, effects=None, handlers=None, lineno=0):
         Node.__init__(self, lineno)
         if effects is None:
             effects = []
+        if handlers is None:
+            handlers = []
         self.functions = functions  # list of FunctionDef
         self.effects = effects      # list of EffectDef
+        self.handlers = handlers    # list of HandlerDef
 
 class EffectDef(Node):
     """class Name(Effect): followed by operation stubs (plan 1.1)"""
@@ -53,6 +56,29 @@ class OperationDef(Node):
         self.params = params            # list of str
         self.param_types = param_types  # list of str, parallel to params
         self.return_type = return_type  # str
+
+class HandlerDef(Node):
+    """class Name(Handler[Effect]): followed by field declarations and
+       one method per operation (plan 1.5). A method is a FunctionDef
+       whose first parameter is self, typed as the handler class."""
+    _attrs_ = ['name', 'effect', 'fields', 'methods']
+
+    def __init__(self, name, effect, fields, methods, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name        # str
+        self.effect = effect    # str: the fulfilled effect's name
+        self.fields = fields    # list of FieldDef
+        self.methods = methods  # list of FunctionDef
+
+class FieldDef(Node):
+    """name: Type [= literal]   inside a handler class"""
+    _attrs_ = ['name', 'type', 'default']
+
+    def __init__(self, name, type, default, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name        # str
+        self.type = type        # str
+        self.default = default  # IntLiteral, StrLiteral, or None
 
 class FunctionDef(Node):
     """def name(p1: T1, p2: T2) -> ReturnType / [Effect1, Effect2]:
@@ -111,6 +137,17 @@ class Assign(Stmt):
         self.name = name    # str
         self.value = value  # Expr
 
+class AttrAssign(Stmt):
+    """target.attr = value: assigns a field of a handler instance,
+       such as self.writes = self.writes + 1 (plan 1.5)."""
+    _attrs_ = ['target', 'attr', 'value']
+
+    def __init__(self, target, attr, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.target = target  # str: a variable name
+        self.attr = attr      # str
+        self.value = value    # Expr
+
 class ExprStmt(Stmt):
     """An expression evaluated for its side effect, such as print(x)."""
     _attrs_ = ['expr']
@@ -125,21 +162,32 @@ class Pass(Stmt):
 
 class Handle(Stmt):
     """try:
-           with handle(Effect1, Effect2):
+           with handle(Effect1, FakeEffect2(), fake3):
                body
        except Effect1.op as eff:
            clause body
        ...
        The whole try/except is one handler installation (plan 1.4);
        the checker requires a clause for every operation of every
-       handled effect."""
-    _attrs_ = ['effects', 'body', 'clauses']
+       handled effect. A handle(...) argument is a bare name, a handler
+       class constructor call, or a name bound to a handler instance
+       (plan 1.5). The parser cannot tell an effect name from an
+       instance name, so it puts every bare name in effects, and the
+       checker moves the instance names to instances. A with handle(...)
+       outside try has no clauses."""
+    _attrs_ = ['effects', 'body', 'clauses', 'constructions',
+               'instances']
 
-    def __init__(self, effects, body, clauses, lineno=0):
+    def __init__(self, effects, body, clauses, constructions=None,
+                 lineno=0):
         Node.__init__(self, lineno)
-        self.effects = effects  # list of str (effect class names)
-        self.body = body        # list of Stmt
-        self.clauses = clauses  # list of Clause
+        if constructions is None:
+            constructions = []
+        self.effects = effects              # list of str
+        self.body = body                    # list of Stmt
+        self.clauses = clauses              # list of Clause
+        self.constructions = constructions  # list of Call
+        self.instances = []                 # list of str, by the checker
 
 class Clause(Node):
     """except Effect.op as binding: body   (one handler clause)"""
@@ -200,8 +248,8 @@ class Compare(Expr):
         self.right = right  # Expr
 
 class Call(Expr):
-    """func(arg1, arg2): a call to a module-level function by name, or to
-       the built-in print."""
+    """func(arg1, arg2): a call to a module-level function by name, to
+       the built-in print, or to a handler class's constructor."""
     _attrs_ = ['func', 'args']
 
     def __init__(self, func, args, lineno=0):
@@ -234,7 +282,8 @@ class Perform(Expr):
 
 class AttrRead(Expr):
     """target.attr: a parameter of the performed operation read from the
-       clause's eff binding, such as eff.path."""
+       clause's eff binding, such as eff.path, or a field of a handler
+       instance, such as self.writes or fake.writes."""
     _attrs_ = ['target', 'attr']
 
     def __init__(self, target, attr, lineno=0):
