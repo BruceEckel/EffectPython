@@ -218,12 +218,124 @@ A method cannot abandon the body, and this version adds no form that can.
 Reuse and abandonment rarely coincide.
 An abandoning clause's result becomes the block's value, so its type belongs to the enclosing function rather than to the handler,
 which is why Koka makes `fun` the common case and `ctl` the exception, and why Stateless (chapter 47) manages with handlers that always resume.
-When the dialect gains `raise`, a method that raises an exception abandons the body as an exception does:
+When the dialect gains `raise` (1.6, planned for Milestone 6), a method that raises an exception abandons the body as an exception does:
 the method runs on the handler side, so the exception propagates from the `with handle(...)` statement, which covers the failure case.
 If a case turns up that needs both reuse and a non-raising abandonment, the form is a second base, `Control[FileIO]`,
 whose methods take the binding as an inline clause does, return nothing, and call `eff.resume(...)` typed against the operation's return.
 A mode flag on `Handler` would make the checker branch on every method,
 and `self.resume(...)` is out because the binding lives for one dispatch and `self` for the whole body.
+
+### 1.6 Exceptions (designed 2026-11-01)
+
+The dialect has no way to fail on purpose.
+A body fails through a runtime error such as the division in `tests/programs/body_error.epy`,
+and nothing in a program can catch that failure.
+This section adds `raise` and ordinary `try`/`except`, in Python 3 syntax, and settles how they meet the handler machinery of 3.4.
+The abandonment paragraph of 1.5 deferred its failure case to this addition.
+
+**Declaration.**
+An exception class is a third class form, `class <Name>(Exception): ...`, with no body beyond `...` or `pass`.
+Its constructor takes an optional `str` message: `NotFound()` or `NotFound("settings.json")`.
+Python 3 reads the message back through `str(e)`, and the dialect has no `str()` call,
+so `print(e)` prints the message, as `print(str(e))` would in Python 3.
+Exception classes carry no fields and form no hierarchy below `Exception`;
+a handler class (1.5) keeps state, and an exception reports a failure.
+
+**Raising and catching.**
+
+```python
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class NotFound(Exception): ...
+
+def read_config(path: str) -> str / [FileIO]:
+    config = perform(FileIO.read(path))
+    if config == "":
+        raise NotFound(path)
+    return config
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(FileIO):
+                print(read_config("settings.json"))
+        except FileIO.read as eff:
+            eff.resume("")
+    except NotFound as e:
+        print("missing:", e)
+    return 0
+```
+
+`raise <expr>` takes a constructor call of an exception class.
+`try: <suite> except <Name> as <e>: <suite>` catches an exception raised in the suite whose class is `<Name>`,
+or any raised exception when `<Name>` is `Exception`;
+the `as <e>` part is optional, and the name is bound for the clause and unbound afterwards, as Python 3 does.
+Clauses are tried in order, and an exception no clause matches propagates.
+There is no `else`, `finally`, or bare `except:`, and no re-raise through a bare `raise`.
+A runtime error of the interpreter (an undefined name, division by zero) stays uncatchable:
+it reports a program the checker could not reject, not a failure the program planned for.
+
+**Exceptions are not effects.**
+A row lists what a function performs, and a `perform` resumes;
+a `raise` does not resume, so it has no place in a row, and the checker does not track which exceptions a function may raise.
+This is Python's choice as well, and it keeps the checker to the one thing it exists for.
+
+**One `try` form, two meanings.**
+The grammar of 2.1 parses every `try` the same way: a suite, then one or more `except` clauses.
+The parser decides in the action which statement it has.
+If every clause names `<Effect>.<op> as <name>` and the suite is a single `with handle(...)` statement, it is a `Handle` (1.4).
+If no clause has a dot, it is a `Try`.
+A mix is a syntax error ("a try statement cannot mix effect clauses and exception clauses"),
+and effect clauses around anything other than a single `with handle(...)` statement are a second one
+("effect clauses need a with handle(...) statement"), which the action reports,
+where today the LALR tables reject that input with a generic "unexpected" message.
+Separate productions for the two statements would conflict in the LALR tables,
+since both begin `TRY COLON NEWLINE INDENT` and `with handle(...)` is also an ordinary statement.
+
+**Checker.**
+Pass 1 collects exception classes beside effects and handler classes, with the same duplicate check.
+In Pass 2, a `raise` whose expression is not a constructor call of an exception class is rejected
+("raise needs an exception, not int"), as is a constructor call with an argument that is not a `str`
+or with more than one argument.
+An `except <Name>` whose name is not an exception class or `Exception` is rejected ("'FileIO' is not an exception class").
+The `as` name has the exception class as its type in the clause's suite.
+The effects of a `Try` are the union of its suite's and its clauses' effects.
+
+**Runtime.**
+A raised exception is a `W_Exception` (3.1) holding its class name and message, carried by a `RaisedException`,
+a new `EffectError` subclass whose `msg` is `Name: message` or `Name` alone, so an uncaught one prints `error: NotFound: settings.json` and exits 1.
+A `Try` statement runs its suite under an RPython `try` that catches `RaisedException` alone,
+finds the first clause whose class matches, binds the name in the function's environment the way a clause's `eff` is bound and restored (3.4, step 3),
+and runs the clause's suite.
+`ReturnSignal` and `EffectPythonRuntimeError` pass through a `Try` untouched.
+
+**Meeting the handlers.**
+The four cases, each an acceptance program of Milestone 6:
+
+1.  *A `raise` inside a handled body* follows the path a runtime error takes today.
+    `run_body_callback` stores the `RaisedException` in `frame.pending_error`,
+    the dispatch loop re-raises it when the body's stacklet finishes (3.4, step 3),
+    and it surfaces at the `try`/`with handle` statement, or inside the enclosing `resume()` when a clause had statements after its resume.
+    A `try`/`except NotFound` around the handle statement catches it, and the frame is popped because the body completed.
+    The example above is this case.
+2.  *A `raise` inside a handler method or an inline clause* runs on the handler side, inside `dispatch`,
+    so it propagates out of `exec_handle` and leaves the body suspended and hidden, like a clause that finishes without resuming (3.4, step 5).
+    The body is abandoned, its stacklet is freed when the binding becomes unreachable, and the exception is caught outside the handle statement.
+    If a clause raises after a non-tail `eff.resume(...)` has run the body to completion, there is nothing to abandon:
+    the frame is popped as in case 1 and the exception propagates from the handle statement.
+    This is the abandonment 1.5 deferred: a reusable handler fails by raising.
+3.  *A `try`/`except` inside the body around a `perform`* needs nothing special.
+    The RPython `try` sits on the body's stack slice, which the stacklet preserves across the suspension,
+    so an exception raised after the `perform` returns is caught in the body.
+4.  *A handler-side `raise` is not delivered into the body.*
+    A body's `try`/`except` around the `perform` cannot catch what the clause raises,
+    because the clause runs on the handler side and the body is abandoned, not resumed.
+    Injecting an exception at the `perform` site would be a second resumption form, `eff.throw(exc)`,
+    which would switch into the body with the exception set instead of a value and let `perform` raise it;
+    deferred until a program needs it.
 
 ---
 
@@ -233,7 +345,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `/`, `==`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets.
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `/`, `==`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (planned 2026-11-01).
 *   **Statements:**
     *   `from effectpython import <names>` (accepted and ignored)
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`)
@@ -244,6 +356,9 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `if <expr>: <suite> else: <suite>`
     *   `while <expr>: <suite>` (added 2026-10-30 for `tests/programs/many_performs.epy`)
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
+    *   `class <Name>(Exception): ...`, giving an `ExceptionDef` node (1.6; Milestone 6, planned 2026-11-01)
+    *   `raise <expr>`, a `Raise` node (1.6; Milestone 6, planned 2026-11-01)
+    *   `try: <suite> except <Name> [as <name>]: <suite>`, a `Try` node; one production covers this and the `handle` form above, and the action tells them apart by the clauses (1.6; Milestone 6, planned 2026-11-01)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
 *   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, and `<name>.resume(<expr>)`. Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31).
 
@@ -306,6 +421,12 @@ class W_HandlerInstance(W_Root):
         self.class_name = class_name
         self.field_names = field_names  # list[str], in declaration order
         self.fields_w = fields_w        # list[W_Root], parallel to it
+
+class W_Exception(W_Root):
+    """A raised exception (1.6; Milestone 6, planned): print() shows the message"""
+    def __init__(self, class_name, message):
+        self.class_name = class_name
+        self.message = message  # rpython str, "" when the constructor had no argument
 
 class W_EffBinding(W_Root):
     """Bound to `eff` in `except Effect.op as eff:`"""
@@ -413,6 +534,7 @@ sequenceDiagram
     *   Call `h = sthread.new(run_body_callback, llmemory.NULL)`.
         `run_body_callback(h, arg)` reads the interpreter and the frame from `global_state`, stores `frame.h_handler = h`,
         and runs the `with` body through `exec_block` inside a `try` that stores an `EffectError` in `frame.pending_error`
+        (from Milestone 6 this includes a `RaisedException`, so a `raise` in the body follows the same path, 1.6)
         and a `ReturnSignal` (a `return` statement in the body) in `frame.pending_return`;
         any other RPython exception is an interpreter bug and aborts the binary.
         It then sets `frame.status = STATUS_COMPLETED` and returns `frame.h_handler`, which finishes the stacklet.
@@ -471,7 +593,7 @@ sequenceDiagram
         and the body's exception surfaces at the end of the loop, at the `handle` statement or inside the enclosing `resume()`.
         Only an expression statement counts as a tail; `x = eff.resume(v)` or `return eff.resume(v)` nests.
         (Implemented 2026-10-30, after `tests/programs/many_performs.epy` showed the nested form overflowing between 1600 and 1800 performs; see the Milestone 3 notes.)
-    *   The `.epy` dialect has no way to catch the body's exception, so it propagates through every clause nested on the handler side,
+    *   The `.epy` dialect has no way to catch the body's exception (until Milestone 6 adds `try`/`except`, 1.6), so it propagates through every clause nested on the handler side,
         out of the `try`/`except` block, and up to `entry_point`, which reports it and exits 1.
 5.  **Non-Resuming Handlers (Abort / Early Exit):**
     *   If a handler clause finishes without calling `eff.resume(...)`, `dispatch` returns,
@@ -479,6 +601,8 @@ sequenceDiagram
     *   `StackletThread` has no `destroy` method.
         The `shadowstack` backend frees an abandoned stacklet from its GC destructor when the handle object becomes unreachable,
         so dropping the `W_EffBinding`, with the handle inside it, is the whole cleanup; nothing sets `eff.h_body` to null on this path.
+    *   A clause or handler method that raises an exception (1.6, Milestone 6) abandons the body the same way:
+        the exception propagates out of `dispatch` and `exec_handle`, the hidden frame is dropped, and the exception continues from the `handle` statement.
 
 ---
 
@@ -560,3 +684,19 @@ EffectPython/
     *   The open questions in 1.5 were settled 2026-10-31: see its paragraphs on the base, state, and abandonment.
     *   *Frontend done 2026-10-31.* `parser.py` reads the Milestone 5 forms of 2.1 into `HandlerDef` (with `FieldDef` nodes and `FunctionDef` methods whose first parameter is `self`, typed as the handler class), `AttrAssign`, and a `Handle` whose arguments are bare names, constructor calls (`constructions`), or, once the checker has sorted the bare names, handler instances (`instances`); a `with handle(...)` outside `try` is a `Handle` with no clauses. `checker.py` collects handler classes in Pass 1 and checks methods, fields, and defaults against the effect (`HandlerInfo`), and in Pass 2 types `self.<field>`, instance reads, field assignment, and constructor calls, sorts `handle()` arguments into handled and fulfilled effects, rejects every case in the list above, and adds the handlers' method rows to the enclosing function. `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection, and `counting_handler.epy` parses and passes the checker. Until the runtime followed the same day, the translated binary rejected it at runtime and the program was a strict `xfail`.
     *   *Done 2026-10-31.* `model.py` holds `W_HandlerInstance`; `interpreter.py` records each handler class as a `HandlerClass` (fields with their literal defaults, one method per operation, the fulfilled effect), constructs instances from `call()`, reads and assigns fields through `AttrRead` and `AttrAssign`, and gives `HandlerFrame` an `instances_w` map from fulfilled effect to instance, built from the statement's constructor calls and instance names before the frame is installed. `dispatch` checks that map first: for a fulfilled effect it calls the method through `call_function` with the instance as `self` ahead of the payload's arguments and passes the result to `switch_into`, the tail-resume path, then continues its loop. The six programs `counting_handler.epy`, `handler_class.epy` (the 1.5 example), `handler_with_clause.epy`, `two_handlers.epy`, `many_method_performs.epy` (ten thousand method-fulfilled performs with a counting field, also under `PYPY_GC_NURSERY=2k`), and `rejected_handler_method.epy` pass through the translated binary with the fourteen earlier ones; `tests/test_interpreter.py` covers construction, defaults, and field access untranslated.
+6.  **Milestone 6: Exceptions (1.6)**
+    *   Add the `raise` keyword, the `ExceptionDef`, `Raise`, and `Try` nodes, the single `try` production whose action separates a `Handle` from a `Try`,
+        the Pass 1 and Pass 2 checks of 1.6, `W_Exception` and `RaisedException`, and the `Raise` and `Try` branches of `exec_stmt`.
+    *   Order of work, as in Milestone 5: parser with tests, checker with tests, then the runtime, with the acceptance programs strict `xfail` until the runtime passes.
+    *   Design-only as of 2026-11-01; no code has changed.
+    *   *Acceptance test:*
+        *   `raise_caught.epy`: a function with no effects raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped.
+        *   `raise_uncaught.epy`: an uncaught `NotFound("settings.json")` prints `error: NotFound: settings.json` and exits 1; a message-less `raise NotFound()` prints `error: NotFound`.
+        *   `raise_in_body.epy`: the program in 1.6; the body raises after a resume, the `try` around the handle statement catches it, and a `print` after the outer `try` runs, showing the frame was popped.
+        *   `raise_in_nested_clause.epy`: as `resume_then_error.epy`, but the body raises an exception the function catches outside the handle statement; the clause's statement after `eff.resume()` does not run.
+        *   `raise_in_method.epy`: a `Handler[FileIO]` whose `read` raises `NotFound(path)`; the body's next statement does not run, the exception is caught outside the `with`, and a program with a `try` inside the body around the `perform` shows that the body's clause does not catch it.
+        *   `raise_in_clause.epy`: the same with an inline clause that raises instead of resuming.
+        *   `try_around_perform.epy`: a `try`/`except` inside the body spans a `perform`, and an exception raised after the resume is caught inside the body, which then performs again.
+        *   `except_exception.epy`: `except Exception as e` catches a `NotFound`, and `print(e)` prints its message.
+        *   Reject `raise 1` and `raise FileIO.read("a")`, a constructor call with an `int` argument or two arguments, `except FileIO as e`, `except Nope as e`, a `try` that mixes `except FileIO.read as eff` with `except NotFound as e`, a duplicate exception class, and a class deriving from a base other than `Effect`, `Handler[...]`, or `Exception`.
+        *   The checker still accepts a function that raises without any row entry, since exceptions are not effects (1.6).
