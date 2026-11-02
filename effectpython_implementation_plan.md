@@ -225,7 +225,7 @@ whose methods take the binding as an inline clause does, return nothing, and cal
 A mode flag on `Handler` would make the checker branch on every method,
 and `self.resume(...)` is out because the binding lives for one dispatch and `self` for the whole body.
 
-### 1.6 Exceptions (designed 2026-11-01)
+### 1.6 Exceptions (designed 2026-11-01, tracked in the row 2026-11-02)
 
 The dialect has no way to fail on purpose.
 A body fails through a runtime error such as the division in `tests/programs/body_error.epy`,
@@ -251,7 +251,7 @@ class FileIO(Effect):
 
 class NotFound(Exception): ...
 
-def read_config(path: str) -> str / [FileIO]:
+def read_config(path: str) -> str / [FileIO, NotFound]:
     config = perform(FileIO.read(path))
     if config == "":
         raise NotFound(path)
@@ -278,10 +278,17 @@ There is no `else`, `finally`, or bare `except:`, and no re-raise through a bare
 A runtime error of the interpreter (an undefined name, division by zero) stays uncatchable:
 it reports a program the checker could not reject, not a failure the program planned for.
 
-**Exceptions are not effects.**
-A row lists what a function performs, and a `perform` resumes;
-a `raise` does not resume, so it has no place in a row, and the checker does not track which exceptions a function may raise.
-This is Python's choice as well, and it keeps the checker to the one thing it exists for.
+**Exceptions in the row (settled 2026-11-02).**
+An exception class belongs in the effect row beside the effects a function performs:
+`read_config` above declares `/ [FileIO, NotFound]`, and `main()` keeps `/ []` because it catches the failure.
+A failure makes a function as unpredictable as a `perform` does,
+and the effect systems this dialect follows track it:
+Koka's `exn` effect, Unison's `Exception` ability, and the error channel of ZIO and Effect-TS.
+The first draft of this section left exceptions out of the row because a `raise` does not resume,
+but that distinguishes how the two are handled, not whether a caller needs to know about them.
+The row therefore holds two kinds of name, and the checker tells them apart by the class table Pass 1 builds.
+Runtime errors of the interpreter (an undefined name, division by zero) stay outside the row:
+every integer division could divide by zero, so tracking it would mark most functions and prove nothing a program could act on.
 
 **One `try` form, two meanings.**
 The grammar of 2.1 parses every `try` the same way: a suite, then one or more `except` clauses.
@@ -296,17 +303,30 @@ Separate productions for the two statements would conflict in the LALR tables,
 since both begin `TRY COLON NEWLINE INDENT` and `with handle(...)` is also an ordinary statement.
 
 **Checker.**
-Pass 1 collects exception classes beside effects and handler classes, with the same duplicate check.
+Pass 1 collects exception classes beside effects and handler classes, with the same duplicate check,
+and its row validation accepts an exception class where today it accepts an effect alone.
 In Pass 2, a `raise` whose expression is not a constructor call of an exception class is rejected
 ("raise needs an exception, not int"), as is a constructor call with an argument that is not a `str`
 or with more than one argument.
 An `except <Name>` whose name is not an exception class or `Exception` is rejected ("'FileIO' is not an exception class").
 The `as` name has the exception class as its type in the clause's suite.
-The effects of a `Try` are the union of its suite's and its clauses' effects.
+A `raise` adds its exception class to the inferred effects, as a `perform` adds its effect,
+and a call unions the callee's whole row, exceptions included.
+A `Try` removes each clause's class from its suite's effects, every exception class when a clause names `Exception`,
+and adds the clauses' own effects: the formula a `Handle` uses (2.2), with the caught classes in place of the handled effects.
+A handler method's row carries its exceptions, and `check_handle` adds method rows to the enclosing function (1.5),
+so a function that installs a handler that can fail declares that failure or catches it.
+The signature check of 2.2 then rejects a function that raises, or calls a function that raises, without declaring the class
+("function 'read_config' raises NotFound (line 11) without declaring it in its effect row");
+a function missing both kinds reads "performs FileIO (line 9), raises NotFound (line 11)".
+and `main()`'s empty row makes an exception nobody catches a static error.
+`Exception` may not appear in a row, since a row names the classes that can reach the caller.
 
 **Runtime.**
 A raised exception is a `W_Exception` (3.1) holding its class name and message, carried by a `RaisedException`,
-a new `EffectError` subclass whose `msg` is `Name: message` or `Name` alone, so an uncaught one prints `error: NotFound: settings.json` and exits 1.
+a new `EffectError` subclass whose `msg` is `Name: message` or `Name` alone.
+An uncaught exception would print `error: NotFound: settings.json` and exit 1,
+but the checker's row rules make that path unreachable from a checked program, like the branches the interpreter's docstring lists.
 A `Try` statement runs its suite under an RPython `try` that catches `RaisedException` alone,
 finds the first clause whose class matches, binds the name in the function's environment the way a clause's `eff` is bound and restored (3.4, step 3),
 and runs the clause's suite.
@@ -323,7 +343,8 @@ The four cases, each an acceptance program of Milestone 6:
     The example above is this case.
 2.  *A `raise` inside a handler method or an inline clause* runs on the handler side, inside `dispatch`,
     so it propagates out of `exec_handle` and leaves the body suspended and hidden, like a clause that finishes without resuming (3.4, step 5).
-    The body is abandoned, its stacklet is freed when the binding becomes unreachable, and the exception is caught outside the handle statement.
+    The body is abandoned, its stacklet is freed when the binding becomes unreachable, and the exception is caught outside the handle statement,
+    in the function whose row the method's `NotFound` reached through `check_handle`.
     If a clause raises after a non-tail `eff.resume(...)` has run the body to completion, there is nothing to abandon:
     the frame is popped as in case 1 and the exception propagates from the handle statement.
     This is the abandonment 1.5 deferred: a reusable handler fails by raising.
@@ -383,6 +404,7 @@ The static analyzer runs in three passes over the AST before execution:
             2. Types `eff.<param>` inside each clause from `E.op`'s parameter names and types, and verifies that `eff.resume(val)` is called with a `val` matching `E.op`'s return type.
             3. Computes the net effect of the `HandleNode` as:
                $$\text{Effects}(\text{HandleNode}) = (\text{Effects}(\text{body}) \setminus \text{handled\_effects}) \cup \bigcup_{c \in \text{clauses}} \text{Effects}(c)$$
+        *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, planned 2026-11-02).
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
 3.  **Pass 3 — Entrypoint Verification:**
     *   Verifies that `main()` exists and its `declared_effect_row` is empty (`[]`).
@@ -688,15 +710,16 @@ EffectPython/
     *   Add the `raise` keyword, the `ExceptionDef`, `Raise`, and `Try` nodes, the single `try` production whose action separates a `Handle` from a `Try`,
         the Pass 1 and Pass 2 checks of 1.6, `W_Exception` and `RaisedException`, and the `Raise` and `Try` branches of `exec_stmt`.
     *   Order of work, as in Milestone 5: parser with tests, checker with tests, then the runtime, with the acceptance programs strict `xfail` until the runtime passes.
-    *   Design-only as of 2026-11-01; no code has changed.
+    *   Design-only as of 2026-11-02, when exceptions moved into the effect row (1.6); no code has changed.
     *   *Acceptance test:*
-        *   `raise_caught.epy`: a function with no effects raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped.
-        *   `raise_uncaught.epy`: an uncaught `NotFound("settings.json")` prints `error: NotFound: settings.json` and exits 1; a message-less `raise NotFound()` prints `error: NotFound`.
+        *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
+        *   `rejected_uncaught.epy`: a `main()` that calls a function declaring `/ [NotFound]` without catching it is rejected by the signature check and exits 1, so no checked program reaches the runtime's `error: NotFound: settings.json` path; a unit test covers that message through `RaisedException` directly.
         *   `raise_in_body.epy`: the program in 1.6; the body raises after a resume, the `try` around the handle statement catches it, and a `print` after the outer `try` runs, showing the frame was popped.
         *   `raise_in_nested_clause.epy`: as `resume_then_error.epy`, but the body raises an exception the function catches outside the handle statement; the clause's statement after `eff.resume()` does not run.
-        *   `raise_in_method.epy`: a `Handler[FileIO]` whose `read` raises `NotFound(path)`; the body's next statement does not run, the exception is caught outside the `with`, and a program with a `try` inside the body around the `perform` shows that the body's clause does not catch it.
+        *   `raise_in_method.epy`: a `Handler[FileIO]` whose `read` declares `/ [NotFound]` and raises `NotFound(path)`, so the function installing it must catch `NotFound`; the body's next statement does not run, the exception is caught outside the `with`, and a program with a `try` inside the body around the `perform` shows that the body's clause does not catch it.
         *   `raise_in_clause.epy`: the same with an inline clause that raises instead of resuming.
         *   `try_around_perform.epy`: a `try`/`except` inside the body spans a `perform`, and an exception raised after the resume is caught inside the body, which then performs again.
         *   `except_exception.epy`: `except Exception as e` catches a `NotFound`, and `print(e)` prints its message.
-        *   Reject `raise 1` and `raise FileIO.read("a")`, a constructor call with an `int` argument or two arguments, `except FileIO as e`, `except Nope as e`, a `try` that mixes `except FileIO.read as eff` with `except NotFound as e`, a duplicate exception class, and a class deriving from a base other than `Effect`, `Handler[...]`, or `Exception`.
-        *   The checker still accepts a function that raises without any row entry, since exceptions are not effects (1.6).
+        *   Reject `raise 1` and `raise FileIO.read("a")`, a constructor call with an `int` argument or two arguments, `except FileIO as e`, `except Nope as e`, a `try` that mixes `except FileIO.read as eff` with `except NotFound as e`, a duplicate exception class, a class deriving from a base other than `Effect`, `Handler[...]`, or `Exception`, and `Exception` in a row.
+        *   Reject a function that raises `NotFound` without declaring it, a function that calls such a function and neither declares nor catches `NotFound`, and a `with handle(Failing())` whose handler method declares `NotFound` in a function that does neither.
+        *   Accept a function whose `try`/`except NotFound` catches what its callee declares, with no `NotFound` in its own row, and `except Exception` as catching every class the suite can raise.
