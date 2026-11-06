@@ -83,7 +83,8 @@ The program above is `tests/programs/counting_handler.epy`, and it prints `1`, `
 A handler class derives from `Handler[E]` and defines one method per operation of `E`,
 with the operation's parameters after `self` and the operation's return type.
 The suspended `perform` receives the method's return value,
-so a method always resumes the body, where an inline clause may abandon it.
+so a method that returns resumes the body.
+A method abandons the body by raising an exception, as the next section describes.
 A method that performs effects of its own declares them in a `/ [...]` row,
 and those effects resolve to the handlers outside the `with` block.
 
@@ -103,6 +104,54 @@ a field of a type other than `int` or `str`,
 a constructor call with the wrong arguments,
 a `self.<name>` that names no field,
 and a clause for an effect that a handler class in the same `handle()` fulfills.
+
+## Exceptions
+
+A function fails on purpose with `raise`, and the failure is part of its signature:
+
+```python
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class NotFound(Exception): ...
+
+def read_config(path: str) -> str / [FileIO, NotFound]:
+    config = perform(FileIO.read(path))
+    if config == "":
+        raise NotFound(path)
+    return config
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(FileIO):
+                print(read_config("settings.json"))
+        except FileIO.read as eff:
+            eff.resume("")
+    except NotFound as e:
+        print("missing:", e)
+    print("after")
+    return 0
+```
+
+The program above is `tests/programs/raise_in_body.epy`, and it prints `missing: settings.json` and then `after`.
+An exception class derives from `Exception` and takes an optional `str` message, which `print(e)` prints.
+The class belongs in the `/ [...]` row beside the effects:
+`read_config` declares `NotFound` because it raises one,
+and `main()` keeps its empty row because it catches the failure.
+A `try` whose clauses name a class is a Python `try`/`except`,
+and `except Exception` catches every class.
+The checker rejects a function that raises a class missing from its row, or calls a function that does,
+so an exception nobody catches is a static error at `main()`.
+
+Where the exception is raised decides what it does to a handled body.
+Raised in the body, it surfaces at the `handle` statement, and a `try` around that statement catches it, as `main()` does here.
+Raised in a clause or a handler method, it abandons the suspended body;
+a handler class reports a failure this way, and the method's row carries the class to the function that installs the handler.
+A `try` inside the body catches an exception the body raises, including one raised after a `perform` resumes.
+It does not catch an exception a handler raises, since the handler runs outside the body.
 
 ## Running it
 

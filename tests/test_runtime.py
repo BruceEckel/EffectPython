@@ -25,16 +25,7 @@ from support import PROGRAMS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPYTHON = os.path.expanduser(
     '~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython')
-EXCEPTIONS = 'Milestone 6: raise and try/except at runtime'
-NOT_YET = {
-    'except_exception.epy': EXCEPTIONS,
-    'raise_caught.epy': EXCEPTIONS,
-    'raise_in_body.epy': EXCEPTIONS,
-    'raise_in_clause.epy': EXCEPTIONS,
-    'raise_in_method.epy': EXCEPTIONS,
-    'raise_in_nested_clause.epy': EXCEPTIONS,
-    'try_around_perform.epy': EXCEPTIONS,
-}
+NOT_YET = {}
 
 @pytest.fixture(scope='session')
 def binary(tmp_path_factory):

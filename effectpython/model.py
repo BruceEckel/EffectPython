@@ -127,6 +127,25 @@ class W_HandlerInstance(W_Root):
                                     self.fields_w[i].repr()))
         return "%s(%s)" % (self.class_name, ", ".join(parts))
 
+class W_Exception(W_Root):
+    """An instance of an exception class (plan 1.6): the class's name
+    and the message, which is empty when the constructor had no
+    argument. print() shows the message, as print(str(e)) does in
+    Python 3."""
+    _attrs_ = ['class_name', 'message']
+
+    def __init__(self, class_name, message):
+        self.class_name = class_name
+        self.message = message  # RPython str
+
+    def str(self):
+        return self.message
+
+    def repr(self):
+        if self.message == "":
+            return self.class_name + "()"
+        return "%s('%s')" % (self.class_name, self.message)
+
 # Prebuilt singletons. RPython allows prebuilt instances as module globals.
 w_None = W_None()
 w_True = W_Bool(True)

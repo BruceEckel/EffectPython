@@ -42,6 +42,19 @@ class OneShotContinuationError(EffectError):
     """Runtime: a handler clause called eff.resume() twice (plan 3.4, step 4).
     Raised by the interpreter in Milestone 3."""
 
+class RaisedException(EffectError):
+    """Runtime: a raise statement in the program (plan 1.6). It carries
+    the W_Exception to the try statement whose clause catches it. The
+    msg, which an uncaught exception would print, is the class name
+    with the message after a colon when there is one."""
+
+    def __init__(self, w_exception):
+        self.w_exception = w_exception
+        msg = w_exception.class_name
+        if w_exception.message != "":
+            msg = "%s: %s" % (msg, w_exception.message)
+        EffectError.__init__(self, msg)
+
 class InvalidSyntax(EffectError):
     """Compile-time: the lexer or parser rejected the source. lineno and
     colno are 1-based; lineno is 0 when the error is at end of input and

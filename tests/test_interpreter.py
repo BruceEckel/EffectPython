@@ -6,7 +6,7 @@ These tests import no RPython modules, so they need no PYTHONPATH.
 import pytest
 
 from effectpython import ast_nodes as ast
-from effectpython.errors import EffectPythonRuntimeError
+from effectpython.errors import EffectPythonRuntimeError, RaisedException
 from effectpython.interpreter import Interpreter, Output
 from effectpython.model import W_Int, W_Str, W_None, w_None
 from effectpython.parser import parse
@@ -157,4 +157,153 @@ def test_field_assignment_and_read():
 def test_instance_runtime_errors(body, msg):
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_module(parse(HANDLER + 'def main() -> int:\n' + body))
+    assert info.value.msg == msg
+
+# --- Exceptions (Milestone 6), without a handle statement --------------------
+
+EXCEPTIONS = (
+    'class NotFound(Exception): ...\n'
+    'class Denied(Exception): ...\n')
+
+def run_main_body(body, functions=''):
+    return run_module(parse(
+        EXCEPTIONS + functions + 'def main() -> int:\n' + body))
+
+@pytest.mark.parametrize('functions, body', [
+    ('',
+     '    try:\n'
+     '        raise NotFound("a")\n'
+     '        print("skipped")\n'
+     '    except NotFound as e:\n'
+     '        print("caught")\n'
+     '    print("after")\n    return 0\n'),
+    ('def find() -> int:\n'
+     '    raise NotFound("a")\n',
+     '    try:\n'
+     '        find()\n'
+     '        print("skipped")\n'
+     '    except NotFound as e:\n'
+     '        print("caught")\n'
+     '    print("after")\n    return 0\n'),
+])
+def test_raised_exception_is_caught_and_execution_continues(
+        functions, body):
+    exit_code, lines = run_main_body(body, functions)
+    assert lines == ["caught", "after"]
+
+@pytest.mark.parametrize('clauses, printed', [
+    ('    except Denied as e:\n'
+     '        print("denied")\n'
+     '    except NotFound as e:\n'
+     '        print("not found")\n',
+     ["not found"]),
+    ('    except Exception as e:\n'
+     '        print(e)\n',
+     ["settings.json"]),
+    ('    except NotFound:\n'
+     '        print("no binding")\n',
+     ["no binding"]),
+])
+def test_first_matching_clause_runs(clauses, printed):
+    exit_code, lines = run_main_body(
+        '    try:\n'
+        '        raise NotFound("settings.json")\n'
+        + clauses + '    return 0\n')
+    assert lines == printed
+
+@pytest.mark.parametrize('raise_stmt, msg', [
+    ('raise NotFound("settings.json")', 'NotFound: settings.json'),
+    ('raise NotFound()', 'NotFound'),
+])
+def test_unmatched_exception_propagates_out_of_main(raise_stmt, msg):
+    with pytest.raises(RaisedException) as info:
+        run_main_body(
+            '    try:\n'
+            '        ' + raise_stmt + '\n'
+            '    except Denied as e:\n'
+            '        print("denied")\n'
+            '    return 0\n')
+    assert info.value.msg == msg
+
+def test_exception_without_message_prints_empty_message():
+    exit_code, lines = run_main_body(
+        '    try:\n'
+        '        raise NotFound()\n'
+        '    except NotFound as e:\n'
+        '        print("empty:", e, "end")\n'
+        '    return 0\n')
+    assert lines == ["empty:  end"]
+
+def test_as_name_is_restored_after_the_clause():
+    exit_code, lines = run_main_body(
+        '    e = 7\n'
+        '    try:\n'
+        '        raise NotFound("a")\n'
+        '    except NotFound as e:\n'
+        '        print(e)\n'
+        '    return e\n')
+    assert (exit_code, lines) == (7, ["a"])
+
+def test_as_name_is_unbound_after_the_clause():
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(
+            '    try:\n'
+            '        raise NotFound("a")\n'
+            '    except NotFound as e:\n'
+            '        print(e)\n'
+            '    print(e)\n'
+            '    return 0\n')
+    assert info.value.msg == "name 'e' is not defined"
+
+@pytest.mark.parametrize('body, expected_exit, printed', [
+    ('    try:\n'
+     '        return 3\n'
+     '    except NotFound as e:\n'
+     '        print("clause")\n'
+     '    return 0\n',
+     3, []),
+    ('    try:\n'
+     '        raise NotFound("a")\n'
+     '    except NotFound as e:\n'
+     '        return 4\n'
+     '    print("after")\n'
+     '    return 0\n',
+     4, []),
+])
+def test_return_returns_from_the_function(body, expected_exit, printed):
+    exit_code, lines = run_main_body(body)
+    assert (exit_code, lines) == (expected_exit, printed)
+
+def test_runtime_error_passes_through_except_exception():
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(
+            '    try:\n'
+            '        x = 1 // 0\n'
+            '    except Exception as e:\n'
+            '        print("caught")\n'
+            '    return 0\n')
+    assert info.value.msg == "integer division by zero"
+
+def test_reraised_exception_reaches_an_outer_try():
+    exit_code, lines = run_main_body(
+        '    try:\n'
+        '        try:\n'
+        '            raise NotFound("a")\n'
+        '        except NotFound as e:\n'
+        '            print("inner")\n'
+        '            raise e\n'
+        '    except NotFound as e:\n'
+        '        print("outer", e)\n'
+        '    return 0\n')
+    assert lines == ["inner", "outer a"]
+
+@pytest.mark.parametrize('body, msg', [
+    ('    raise 1\n', 'raise needs an exception, not int'),
+    ('    raise NotFound(1)\n', 'NotFound() takes an optional str message'),
+    ('    raise NotFound("a", "b")\n',
+     'NotFound() takes an optional str message'),
+])
+def test_exception_runtime_errors(body, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(body)
     assert info.value.msg == msg

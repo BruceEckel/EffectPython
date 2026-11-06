@@ -218,14 +218,14 @@ A method cannot abandon the body, and this version adds no form that can.
 Reuse and abandonment rarely coincide.
 An abandoning clause's result becomes the block's value, so its type belongs to the enclosing function rather than to the handler,
 which is why Koka makes `fun` the common case and `ctl` the exception, and why Stateless (chapter 47) manages with handlers that always resume.
-When the dialect gains `raise` (1.6, planned for Milestone 6), a method that raises an exception abandons the body as an exception does:
+With `raise` (1.6, Milestone 6), a method that raises an exception abandons the body as an exception does:
 the method runs on the handler side, so the exception propagates from the `with handle(...)` statement, which covers the failure case.
 If a case turns up that needs both reuse and a non-raising abandonment, the form is a second base, `Control[FileIO]`,
 whose methods take the binding as an inline clause does, return nothing, and call `eff.resume(...)` typed against the operation's return.
 A mode flag on `Handler` would make the checker branch on every method,
 and `self.resume(...)` is out because the binding lives for one dispatch and `self` for the whole body.
 
-### 1.6 Exceptions (designed 2026-11-01, tracked in the row 2026-11-02, frontend implemented 2026-11-06)
+### 1.6 Exceptions (designed 2026-11-01, tracked in the row 2026-11-02, implemented 2026-11-06)
 
 The dialect has no way to fail on purpose.
 A body fails through a runtime error such as the division in `tests/programs/body_error.epy`,
@@ -445,7 +445,7 @@ class W_HandlerInstance(W_Root):
         self.fields_w = fields_w        # list[W_Root], parallel to it
 
 class W_Exception(W_Root):
-    """A raised exception (1.6; Milestone 6, planned): print() shows the message"""
+    """An instance of an exception class (1.6; Milestone 6): print() shows the message"""
     def __init__(self, class_name, message):
         self.class_name = class_name
         self.message = message  # rpython str, "" when the constructor had no argument
@@ -615,8 +615,9 @@ sequenceDiagram
         and the body's exception surfaces at the end of the loop, at the `handle` statement or inside the enclosing `resume()`.
         Only an expression statement counts as a tail; `x = eff.resume(v)` or `return eff.resume(v)` nests.
         (Implemented 2026-10-30, after `tests/programs/many_performs.epy` showed the nested form overflowing between 1600 and 1800 performs; see the Milestone 3 notes.)
-    *   The `.epy` dialect has no way to catch the body's exception (until Milestone 6 adds `try`/`except`, 1.6), so it propagates through every clause nested on the handler side,
+    *   A program cannot catch a runtime error of the body, so it propagates through every clause nested on the handler side,
         out of the `try`/`except` block, and up to `entry_point`, which reports it and exits 1.
+        A `RaisedException` takes the same route until a `Try` statement around it has a clause for its class (1.6).
 5.  **Non-Resuming Handlers (Abort / Early Exit):**
     *   If a handler clause finishes without calling `eff.resume(...)`, `dispatch` returns,
         the suspended body stays hidden and is abandoned, and execution proceeds past the `try`/`except` block.
@@ -649,7 +650,7 @@ EffectPython/
 │   ├── model.py            # W_Root, W_None, W_Bool, W_Int, W_Str, W_EffectPayload, W_EffBinding
 │   ├── interpreter.py      # AST evaluator, HandlerFrame, rstacklet integration
 │   ├── samples.py          # Hand-built Fibonacci AST, used by test_interpreter.py and test_parser.py
-│   └── errors.py           # EffectError and its subclasses: InvalidSyntax, InvalidProgram, UnhandledEffectError, EffectPythonRuntimeError, OneShotContinuationError
+│   └── errors.py           # EffectError and its subclasses: InvalidSyntax, InvalidProgram, UnhandledEffectError, EffectPythonRuntimeError, OneShotContinuationError, RaisedException
 ├── experiments/
 │   ├── rply_addition.py    # rply translates (2.1)
 │   └── stacklet_mailbox.py # The four rstacklet rules in a translated binary (3.2)
@@ -723,8 +724,18 @@ EffectPython/
         and a function named like an exception class.
         An unknown name in a row reads "'Nope' is not an effect or an exception class", where it read "unknown effect 'Nope'".
         `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
-        The seven accepted programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime has `Raise` and `Try`.
-        `rejected_uncaught.epy` passes through the translated binary today, since the checker rejects it before anything runs.
+        The seven accepted programs below parsed and passed the checker, and they were strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime followed the same day.
+        `rejected_uncaught.epy` passed through the translated binary from the start, since the checker rejects it before anything runs.
+    *   *Done 2026-11-06.*
+        `model.py` holds `W_Exception`, whose `str()` is the message, and `errors.py` holds `RaisedException`, which carries it.
+        `interpreter.py` records the exception classes, builds a `W_Exception` from a constructor call in `call()`,
+        raises a `RaisedException` for a `Raise`, and runs a `Try` in `exec_try`:
+        the suite runs under an RPython `try` that catches `RaisedException` alone,
+        `clause_catching` finds the first clause that names the class or `Exception`,
+        and the clause runs with its name bound and then restored, as `dispatch` does for `eff`.
+        The four meetings with the handlers in 1.6 needed no change to `exec_handle`, `dispatch`, or `run_body_callback`.
+        The eight programs below pass through the translated binary with the twenty earlier ones,
+        and `tests/test_interpreter.py` covers `raise` and `try`/`except` untranslated, including the uncaught message `NotFound: settings.json`.
     *   *Acceptance test:*
         *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
         *   `rejected_uncaught.epy`: a `main()` that calls a function declaring `/ [NotFound]` without catching it is rejected by the signature check and exits 1, so no checked program reaches the runtime's `error: NotFound: settings.json` path; a unit test covers that message through `RaisedException` directly.

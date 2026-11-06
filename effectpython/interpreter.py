@@ -33,7 +33,23 @@ effect to its W_HandlerInstance. When the body performs an operation
 of a fulfilled effect, dispatch() calls the method as a function with
 the instance as self and the payload's arguments, and switches into
 the body with the returned value along the tail-resume path, so a
-method cannot abandon the body or resume it twice.
+method cannot resume the body twice, and it abandons the body by
+raising an exception.
+
+Exceptions (plan 1.6) need one mechanism, RaisedException, an
+EffectError that carries the W_Exception. A raise statement raises
+it, and a Try statement catches it around its suite and runs the
+first clause that names the exception's class or Exception. The four
+meetings with the handlers follow from where the RPython exception
+travels. Raised in a handled body, it takes the path of any body
+error: through the frame to the handler side, and out of the handle
+statement or the enclosing resume(). Raised in a clause or a handler
+method, it leaves dispatch() and the handle statement with the body
+still suspended, so the body is abandoned as it is by a clause that
+does not resume. A Try inside the body sits on the body's stack
+slice, which the stacklet keeps across a perform, so it catches what
+the body raises after a resume. It does not catch what a clause or
+method raises, because that exception travels on the handler side.
 
 rstacklet runs only translated, so the import below is guarded: the
 unit tests import this module without RPython on the path and never
@@ -52,7 +68,13 @@ a field read or assigned on a name that holds no instance
 (require_instance, in Interpreter.instance), a field the class does
 not declare (require_field, in field_index), and a handle() argument
 that is not an instance or that fulfills an effect another argument
-fulfills (check_handle, in install). They stay because the unit tests
+fulfills (check_handle, in install); and the exception errors: a
+raise of a value that is not an exception (check_raise), an exception
+constructor call with more than a str message
+(check_exception_call, in construct_exception), and a
+RaisedException that reaches entry_point, since main()'s empty row
+makes the checker reject an exception nobody catches. They stay
+because the unit tests
 build modules by hand and run them without the checker. The cases the
 checker does not
 see remain runtime-only: a variable that was never assigned (the checker
@@ -68,10 +90,11 @@ except ImportError:
     rstacklet = llmemory = None
 from effectpython import ast_nodes as ast
 from effectpython.errors import (EffectError, EffectPythonRuntimeError,
-                                 OneShotContinuationError)
+                                 OneShotContinuationError, RaisedException)
 from effectpython.model import (W_Root, W_Int, W_Str, W_Bool,
                                 W_EffectPayload, W_EffBinding,
-                                W_HandlerInstance, w_None, wrap_bool)
+                                W_Exception, W_HandlerInstance, w_None,
+                                wrap_bool)
 
 class Environment(object):
     """One lexical scope: a name -> W_Root table with an optional parent."""
@@ -213,6 +236,9 @@ class Interpreter(object):
         self.handlers = {}
         for handler in module.handlers:
             self.handlers[handler.name] = HandlerClass(handler)
+        self.exceptions = {}
+        for exc in module.exceptions:
+            self.exceptions[exc.name] = exc
         if output is None:
             output = Output()
         self.output = output
@@ -273,10 +299,48 @@ class Interpreter(object):
             self.eval_expr(stmt.expr, env)
         elif isinstance(stmt, ast.Handle):
             self.exec_handle(stmt, env)
+        elif isinstance(stmt, ast.Raise):
+            w_value = self.eval_expr(stmt.value, env)
+            if not isinstance(w_value, W_Exception):
+                raise EffectPythonRuntimeError(
+                    "raise needs an exception, not %s" % type_name(w_value))
+            raise RaisedException(w_value)
+        elif isinstance(stmt, ast.Try):
+            self.exec_try(stmt, env)
         elif isinstance(stmt, ast.Pass):
             pass
         else:
             raise EffectPythonRuntimeError("unknown statement node")
+
+    def exec_try(self, stmt, env):
+        """Run the suite; a RaisedException goes to the first clause
+        that names its class or Exception, with the clause's name bound
+        to the exception for the clause's duration, as dispatch() binds
+        eff. Without a matching clause it propagates. A ReturnSignal
+        and a runtime error pass through (plan 1.6)."""
+        try:
+            self.exec_block(stmt.body, env)
+            return
+        except RaisedException as e:
+            raised = e
+        w_exception = raised.w_exception
+        clause = clause_catching(stmt, w_exception)
+        if clause is None:
+            raise raised
+        name = clause.binding
+        if name is None:
+            self.exec_block(clause.body, env)
+            return
+        had_name = name in env.vars
+        w_old = env.vars.get(name, None)
+        env.define(name, w_exception)
+        try:
+            self.exec_block(clause.body, env)
+        finally:
+            if had_name:
+                env.vars[name] = w_old
+            else:
+                del env.vars[name]
 
     # --- effects (plan 3.4) --------------------------------------------------
 
@@ -499,7 +563,18 @@ class Interpreter(object):
             return self.call_function(self.functions[name], args_w)
         if name in self.handlers:
             return self.handlers[name].construct(args_w)
+        if name in self.exceptions:
+            return self.construct_exception(name, args_w)
         raise EffectPythonRuntimeError("name '%s' is not defined" % name)
+
+    def construct_exception(self, name, args_w):
+        if len(args_w) == 0:
+            return W_Exception(name, "")
+        w_message = args_w[0]
+        if len(args_w) > 1 or not isinstance(w_message, W_Str):
+            raise EffectPythonRuntimeError(
+                "%s() takes an optional str message" % name)
+        return W_Exception(name, w_message.val)
 
     # --- operators ---------------------------------------------------------
 
@@ -565,6 +640,15 @@ def tail_resume(clause):
             return expr
     return None
 
+def clause_catching(stmt, w_exception):
+    """The first clause of a Try that names the exception's class or
+    Exception, else None."""
+    for clause in stmt.clauses:
+        if (clause.name == w_exception.class_name
+                or clause.name == "Exception"):
+            return clause
+    return None
+
 def type_name(w):
     if isinstance(w, W_Int):
         return "int"
@@ -572,4 +656,6 @@ def type_name(w):
         return "str"
     elif isinstance(w, W_Bool):
         return "bool"
+    elif isinstance(w, W_Exception):
+        return w.class_name
     return "object"
