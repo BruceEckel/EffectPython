@@ -1,11 +1,12 @@
 """The static effect checker (plan 2.2).
 
 check() runs three passes over a parsed module before anything runs.
-Pass 1 collects the effect declarations, the handler classes, and the
-function signatures, so a function body can call a function defined
-later or itself, and checks each handler class against the effect it
-fulfills: one method per operation with the operation's signature
-after self, and fields of type int or str (plan 1.5).
+Pass 1 collects the effect declarations, the exception classes, the
+handler classes, and the function signatures, so a function body can
+call a function defined later or itself, and checks each handler
+class against the effect it fulfills: one method per operation with
+the operation's signature after self, and fields of type int or str
+(plan 1.5).
 Pass 2 walks each function and method body and infers the effects it
 may perform: a perform() contributes its effect, a call contributes
 the callee's declared row, and a handle block removes the effects it
@@ -14,13 +15,22 @@ and its handlers' methods perform. The result must be a subset of the
 declared row, or the function fails with an UnhandledEffectError.
 Pass 3 requires a main() with an empty row.
 
+An exception class sits in the same set as an effect (plan 1.6). A
+raise contributes its class, a try/except removes the classes its
+clauses catch from its suite's set and adds whatever the clauses
+perform or raise, and a handler method's row carries its exceptions
+to the function that installs the handler. A row may therefore name
+exception classes beside effects, and main()'s empty row makes an
+exception nobody catches a static error.
+
 Along the way the checker types expressions far enough to check the
-arguments of perform(), resume(), ordinary calls, and handler
-constructor calls against the declared parameter types. A type is a
-type name; a handler class name is the type of its instances, so a
-name holding one may be passed to handle() and its fields read. The
-empty string stands for a type the checker cannot determine, and an
-unknown type matches anything.
+arguments of perform(), resume(), ordinary calls, and constructor
+calls against the declared parameter types. A type is a type name; a
+handler class name is the type of its instances, so a name holding
+one may be passed to handle() and its fields read, and an exception
+class name is the type of the name an except clause binds. The empty
+string stands for a type the checker cannot determine, and an unknown
+type matches anything.
 
 The checker dispatches by isinstance over the ast_nodes classes, as the
 evaluator does, so adding a node means adding a branch in both.
@@ -30,10 +40,12 @@ from effectpython.errors import InvalidProgram, UnhandledEffectError
 
 UNKNOWN = ""
 FIELD_TYPES = ["int", "str"]
+EXCEPTION = "Exception"
 
 class EffectSet(object):
-    """The effects a piece of code may perform, each with the line where
-    it was first seen, in order of first appearance."""
+    """The effects a piece of code may perform and the exception classes
+    it may raise, each with the line where it was first seen, in order
+    of first appearance."""
 
     def __init__(self):
         self.names = []
@@ -71,15 +83,16 @@ class HandlerInfo(object):
         self.field_names = []  # in declaration order
         self.field_types = {}  # field name -> type name
         self.required = 0      # leading fields without a default
-        self.rows = []         # effect names the methods may perform
+        self.rows = []         # the names in the methods' rows
 
 class Checker(object):
 
     def __init__(self, module):
         self.module = module
-        self.effects = {}    # effect name -> {op name -> OperationDef}
-        self.handlers = {}   # handler class name -> HandlerInfo
-        self.functions = {}  # function name -> FunctionDef
+        self.effects = {}     # effect name -> {op name -> OperationDef}
+        self.exceptions = {}  # exception class name -> ExceptionDef
+        self.handlers = {}    # handler class name -> HandlerInfo
+        self.functions = {}   # function name -> FunctionDef
 
     def check(self):
         self.collect_declarations()
@@ -106,19 +119,28 @@ class Checker(object):
                         "effect '%s'" % (op.name, effect.name))
                 ops[op.name] = op
             self.effects[effect.name] = ops
+        for exc in self.module.exceptions:
+            if (exc.name in self.exceptions or exc.name in self.effects
+                    or exc.name == EXCEPTION):
+                raise InvalidProgram(
+                    exc.lineno,
+                    "exception class '%s' is declared twice" % exc.name)
+            self.exceptions[exc.name] = exc
         for handler in self.module.handlers:
             self.collect_handler(handler)
         for fn in self.module.functions:
-            if fn.name in self.functions or fn.name in self.handlers:
+            if (fn.name in self.functions or fn.name in self.handlers
+                    or fn.name in self.exceptions):
                 raise InvalidProgram(
                     fn.lineno,
                     "function '%s' is defined twice" % fn.name)
             self.functions[fn.name] = fn
             for name in fn.effect_row:
-                self.require_effect(name, fn.lineno)
+                self.require_row_name(name, fn.lineno)
 
     def collect_handler(self, handler):
-        if handler.name in self.handlers or handler.name in self.effects:
+        if (handler.name in self.handlers or handler.name in self.effects
+                or handler.name in self.exceptions):
             raise InvalidProgram(
                 handler.lineno,
                 "handler class '%s' is declared twice" % handler.name)
@@ -140,7 +162,7 @@ class Checker(object):
                     (method.name, handler.name, handler.effect))
             self.check_signature(handler, method, ops[method.name])
             for name in method.effect_row:
-                self.require_effect(name, method.lineno)
+                self.require_row_name(name, method.lineno)
                 if name not in info.rows:
                     info.rows.append(name)
         for op in ops.keys():
@@ -198,6 +220,18 @@ class Checker(object):
             raise InvalidProgram(lineno, "unknown effect '%s'" % name)
         return self.effects[name]
 
+    def require_row_name(self, name, lineno):
+        """A row names the effects and the exception classes that can
+        reach the caller, so the catch-all Exception has no place in it."""
+        if name == EXCEPTION:
+            raise InvalidProgram(
+                lineno, "an effect row names exception classes, not "
+                "Exception")
+        if name not in self.effects and name not in self.exceptions:
+            raise InvalidProgram(
+                lineno,
+                "'%s' is not an effect or an exception class" % name)
+
     def require_op(self, effect, op, lineno):
         ops = self.require_effect(effect, lineno)
         if op not in ops:
@@ -213,15 +247,24 @@ class Checker(object):
             scope.types[fn.params[i]] = fn.param_types[i]
         effects = EffectSet()
         self.check_block(fn.body, scope, effects)
-        undeclared = []
+        performed = []
+        raised = []
         for name in effects.names:
             if name not in fn.effect_row:
-                undeclared.append(
-                    "%s (line %d)" % (name, effects.linenos[name]))
+                entry = "%s (line %d)" % (name, effects.linenos[name])
+                if name in self.exceptions:
+                    raised.append(entry)
+                else:
+                    performed.append(entry)
+        undeclared = []
+        if len(performed) > 0:
+            undeclared.append("performs " + ", ".join(performed))
+        if len(raised) > 0:
+            undeclared.append("raises " + ", ".join(raised))
         if len(undeclared) > 0:
             raise UnhandledEffectError(
-                fn.lineno, "%s '%s' performs %s without declaring it "
-                "in its effect row" % (what, fn.name, ", ".join(undeclared)))
+                fn.lineno, "%s '%s' %s without declaring it in its "
+                "effect row" % (what, fn.name, ", ".join(undeclared)))
 
     def check_block(self, stmts, scope, effects):
         for stmt in stmts:
@@ -255,8 +298,69 @@ class Checker(object):
             pass
         elif isinstance(stmt, ast.Handle):
             self.check_handle(stmt, scope, effects)
+        elif isinstance(stmt, ast.Raise):
+            self.check_raise(stmt, scope, effects)
+        elif isinstance(stmt, ast.Try):
+            self.check_try(stmt, scope, effects)
         else:
             raise InvalidProgram(stmt.lineno, "unknown statement node")
+
+    def check_raise(self, stmt, scope, effects):
+        """The row needs the class a raise contributes, so the value is
+        a constructor call that names it, not a name bound to an
+        exception."""
+        value = stmt.value
+        if isinstance(value, ast.Call):
+            if value.func in self.exceptions:
+                self.check_exception_call(value, scope, effects)
+                effects.add(value.func, stmt.lineno)
+                return
+            if value.func == EXCEPTION:
+                raise InvalidProgram(
+                    stmt.lineno, "raise needs a declared exception class, "
+                    "not Exception")
+        if isinstance(value, ast.OpCall):
+            actual = "%s.%s(...)" % (value.effect, value.op)
+        else:
+            actual = self.type_of(value, scope, effects)
+            if actual in self.exceptions or actual == EXCEPTION:
+                raise InvalidProgram(
+                    stmt.lineno, "raise needs a constructor call of an "
+                    "exception class, not a caught %s" % actual)
+            if actual == UNKNOWN:
+                actual = "a value of unknown type"
+        raise InvalidProgram(
+            stmt.lineno, "raise needs an exception, not %s" % actual)
+
+    def check_try(self, stmt, scope, effects):
+        """The suite's effects, less the classes the clauses catch, plus
+        whatever the clauses perform or raise: the formula of a handle
+        block with exception classes in place of handled effects."""
+        body_effects = EffectSet()
+        self.check_block(stmt.body, scope, body_effects)
+        caught = {}
+        for clause in stmt.clauses:
+            if (clause.name != EXCEPTION
+                    and clause.name not in self.exceptions):
+                raise InvalidProgram(
+                    clause.lineno,
+                    "'%s' is not an exception class" % clause.name)
+            caught[clause.name] = True
+            binding = clause.binding
+            if binding is None:
+                self.check_block(clause.body, scope, effects)
+            else:
+                if binding in scope.bindings:
+                    del scope.bindings[binding]
+                scope.types[binding] = clause.name
+                self.check_block(clause.body, scope, effects)
+                if binding in scope.types:
+                    del scope.types[binding]
+        for name in body_effects.names:
+            if name in self.exceptions and (name in caught
+                                            or EXCEPTION in caught):
+                continue
+            effects.add(name, body_effects.linenos[name])
 
     def check_handle(self, stmt, scope, effects):
         """Sort the arguments into effects, which need clauses, and
@@ -404,6 +508,8 @@ class Checker(object):
             return "None"
         if expr.func in self.handlers:
             return self.check_construction(expr, scope, effects)
+        if expr.func in self.exceptions:
+            return self.check_exception_call(expr, scope, effects)
         if expr.func not in self.functions:
             raise InvalidProgram(
                 expr.lineno, "name '%s' is not defined" % expr.func)
@@ -434,6 +540,18 @@ class Checker(object):
         self.check_args(info.field_names[:given], types, expr.args,
                         expr.func + "()", expr.lineno, scope, effects)
         return info.name
+
+    def check_exception_call(self, expr, scope, effects):
+        """An exception class's constructor takes an optional str
+        message."""
+        given = len(expr.args)
+        if given > 1:
+            raise InvalidProgram(
+                expr.lineno, "%s() takes 0 to 1 arguments (%d given)" %
+                (expr.func, given))
+        self.check_args(["message"][:given], ["str"][:given], expr.args,
+                        expr.func + "()", expr.lineno, scope, effects)
+        return expr.func
 
     def check_args(self, params, param_types, args, what, lineno,
                    scope, effects):

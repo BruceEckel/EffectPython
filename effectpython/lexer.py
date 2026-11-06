@@ -23,7 +23,7 @@ from effectpython.errors import InvalidSyntax
 
 KEYWORDS = {
     'def': 'DEF', 'return': 'RETURN', 'if': 'IF', 'else': 'ELSE',
-    'while': 'WHILE',
+    'while': 'WHILE', 'raise': 'RAISE',
     'class': 'CLASS', 'pass': 'PASS', 'try': 'TRY', 'except': 'EXCEPT',
     'as': 'AS', 'with': 'WITH', 'from': 'FROM', 'import': 'IMPORT',
 }

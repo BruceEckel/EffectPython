@@ -2,20 +2,29 @@
 
 The grammar is the plan's subset of Python 3: the import line, Effect
 classes with operation stubs, Handler[Effect] classes with field
-declarations and methods, function definitions with typed parameters,
-a return type, and an optional effect row; return, assignment,
-attribute assignment, expression, pass, if/else, while, and handle
-statements, with or without try/except; literals, names, arithmetic,
-comparisons, calls, attribute reads, and attribute calls.
+declarations and methods, exception classes, function definitions
+with typed parameters, a return type, and an optional effect row;
+return, raise, assignment, attribute assignment, expression, pass,
+if/else, while, try/except, and handle statements; literals, names,
+arithmetic, comparisons, calls, attribute reads, and attribute calls.
 
 perform and handle are names in Python, not keywords, so the grammar
 reads them as calls and the productions check them: perform(X) must
 wrap an Effect.op(...) call and becomes a Perform node, with handle(...)
-must name handle, and a class must derive from Effect or Handler[...].
+must name handle, and a class must derive from Effect, Handler[...],
+or Exception.
 An attribute call name.resume(x) becomes a Resume node; any other
 Effect.op(...) call is an OpCall. A handle(...) argument is a bare
 name or a constructor call Name(...); the checker decides whether a
 bare name is an effect or a handler instance (plan 1.5).
+
+One production reads every try statement, because separate ones for
+a handler installation and an ordinary try/except would conflict in
+the LALR tables: both begin TRY COLON NEWLINE INDENT, and with
+handle(...) is also a statement (plan 1.6). The action decides by
+the clauses. Clauses that name Effect.op around a single with
+handle(...) statement give a Handle; clauses that name a class give
+a Try; a mix is an error.
 
 RPython requires every production to return one type, so every value on
 the parse stack is a BaseBox: a Token, a Node (ast_nodes makes Node a
@@ -31,12 +40,13 @@ from effectpython.errors import InvalidSyntax
 from effectpython.lexer import TOKENS, TokenList, tokenize
 
 class _ModuleParts(BaseBox):
-    _attrs_ = ['functions', 'effects', 'handlers']
+    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions']
 
     def __init__(self):
-        self.functions = []  # list of FunctionDef
-        self.effects = []    # list of EffectDef
-        self.handlers = []   # list of HandlerDef
+        self.functions = []   # list of FunctionDef
+        self.effects = []     # list of EffectDef
+        self.handlers = []    # list of HandlerDef
+        self.exceptions = []  # list of ExceptionDef
 
 class _Skipped(BaseBox):
     """The value of a module item that produces no node."""
@@ -62,11 +72,22 @@ class _HandleArgs(BaseBox):
         self.names = []          # list of str
         self.constructions = []  # list of Call
 
-class _ClauseList(BaseBox):
-    _attrs_ = ['items']
+class _ClauseBox(BaseBox):
+    """One except clause with its EXCEPT token, which positions the
+    error for a clause of the wrong kind."""
+    _attrs_ = ['token', 'node']
 
-    def __init__(self, items):
-        self.items = items  # list of Clause
+    def __init__(self, token, node):
+        self.token = token  # Token
+        self.node = node    # Clause or ExceptClause
+
+class _ClauseList(BaseBox):
+    """The clauses of one try statement; one of the lists is empty."""
+    _attrs_ = ['effect_clauses', 'except_clauses']
+
+    def __init__(self):
+        self.effect_clauses = []  # list of Clause
+        self.except_clauses = []  # list of ExceptClause
 
 class _StmtList(BaseBox):
     _attrs_ = ['items']
@@ -117,7 +138,8 @@ pg = ParserGenerator(TOKENS)
 def module(p):
     parts = p[0]
     assert isinstance(parts, _ModuleParts)
-    return ast.Module(parts.functions, parts.effects, parts.handlers, 1)
+    return ast.Module(parts.functions, parts.effects, parts.handlers,
+                      parts.exceptions, 1)
 
 @pg.production('items :')
 def items_empty(p):
@@ -134,6 +156,8 @@ def items_more(p):
         parts.effects.append(item)
     elif isinstance(item, ast.HandlerDef):
         parts.handlers.append(item)
+    elif isinstance(item, ast.ExceptionDef):
+        parts.exceptions.append(item)
     else:
         assert isinstance(item, _Skipped)
     return parts
@@ -141,6 +165,7 @@ def items_more(p):
 @pg.production('item : funcdef')
 @pg.production('item : effectdef')
 @pg.production('item : handlerdef')
+@pg.production('item : exceptiondef')
 def item(p):
     return p[0]
 
@@ -155,11 +180,33 @@ def effectdef(p):
     ops = p[8]
     assert isinstance(base, Token)
     assert isinstance(ops, _OpList)
+    if base.getstr() == 'Exception':
+        raise _error(base, EXCEPTION_BODY_ERROR)
     if base.getstr() != 'Effect':
         raise _error(base, BASE_ERROR)
     return ast.EffectDef(_text(p[1]), ops.items, _line(p[0]))
 
-BASE_ERROR = "a class must derive from Effect or Handler[...]"
+BASE_ERROR = "a class must derive from Effect, Handler[...], or Exception"
+EXCEPTION_BODY_ERROR = "an exception class has no body beyond ... or pass"
+EFFECT_BODY_ERROR = "an effect class declares at least one operation"
+
+@pg.production('exceptiondef : CLASS NAME LPAREN NAME RPAREN COLON'
+               ' empty_body')
+def exceptiondef(p):
+    base = p[3]
+    assert isinstance(base, Token)
+    if base.getstr() == 'Effect':
+        raise _error(base, EFFECT_BODY_ERROR)
+    if base.getstr() != 'Exception':
+        raise _error(base, BASE_ERROR)
+    return ast.ExceptionDef(_text(p[1]), _line(p[0]))
+
+@pg.production('empty_body : ELLIPSIS NEWLINE')
+@pg.production('empty_body : PASS NEWLINE')
+@pg.production('empty_body : NEWLINE INDENT ELLIPSIS NEWLINE DEDENT')
+@pg.production('empty_body : NEWLINE INDENT PASS NEWLINE DEDENT')
+def empty_body(p):
+    return _Skipped()
 
 @pg.production('handlerdef : CLASS NAME LPAREN NAME LBRACKET NAME RBRACKET'
                ' RPAREN COLON NEWLINE INDENT handler_items DEDENT')
@@ -343,7 +390,7 @@ def stmts_more(p):
 @pg.production('stmt : simple_stmt NEWLINE')
 @pg.production('stmt : if_stmt')
 @pg.production('stmt : while_stmt')
-@pg.production('stmt : handle_stmt')
+@pg.production('stmt : try_stmt')
 @pg.production('stmt : with_stmt')
 def stmt(p):
     return p[0]
@@ -359,6 +406,10 @@ def return_bare(p):
 @pg.production('simple_stmt : RETURN expr')
 def return_value(p):
     return ast.Return(_expr(p[1]), _line(p[0]))
+
+@pg.production('simple_stmt : RAISE expr')
+def raise_stmt(p):
+    return ast.Raise(_expr(p[1]), _line(p[0]))
 
 @pg.production('simple_stmt : NAME EQUALS expr')
 def assign(p):
@@ -386,13 +437,20 @@ def if_else_stmt(p):
 def while_stmt(p):
     return ast.While(_expr(p[1]), _stmts(p[3]), _line(p[0]))
 
-@pg.production('handle_stmt : TRY COLON NEWLINE INDENT'
-               ' WITH NAME LPAREN handle_args RPAREN COLON suite'
-               ' DEDENT clauses')
-def handle_stmt(p):
-    clauses = p[12]
+@pg.production('try_stmt : TRY COLON suite clauses')
+def try_stmt(p):
+    body = _stmts(p[2])
+    clauses = p[3]
     assert isinstance(clauses, _ClauseList)
-    return _handle(p[5], p[7], p[10], clauses.items, _line(p[0]))
+    if len(clauses.except_clauses) > 0:
+        return ast.Try(body, clauses.except_clauses, _line(p[0]))
+    if len(body) == 1:
+        handle = body[0]
+        if isinstance(handle, ast.Handle) and len(handle.clauses) == 0:
+            return ast.Handle(handle.effects, handle.body,
+                              clauses.effect_clauses,
+                              handle.constructions, _line(p[0]))
+    raise _error(p[0], "effect clauses need a with handle(...) statement")
 
 @pg.production('with_stmt : WITH NAME LPAREN handle_args RPAREN COLON suite')
 def with_stmt(p):
@@ -436,23 +494,45 @@ def handle_arg_construction(p):
 
 @pg.production('clauses : clause')
 def clauses_one(p):
-    clause = p[0]
-    assert isinstance(clause, ast.Clause)
-    return _ClauseList([clause])
+    return _add_clause(_ClauseList(), p[0])
 
 @pg.production('clauses : clauses clause')
 def clauses_more(p):
     clauses = p[0]
-    clause = p[1]
     assert isinstance(clauses, _ClauseList)
-    assert isinstance(clause, ast.Clause)
-    clauses.items.append(clause)
+    return _add_clause(clauses, p[1])
+
+MIXED_ERROR = ("a try statement cannot mix effect clauses and exception "
+               "clauses")
+
+def _add_clause(clauses, box):
+    assert isinstance(box, _ClauseBox)
+    node = box.node
+    if isinstance(node, ast.Clause):
+        if len(clauses.except_clauses) > 0:
+            raise _error(box.token, MIXED_ERROR)
+        clauses.effect_clauses.append(node)
+    else:
+        assert isinstance(node, ast.ExceptClause)
+        if len(clauses.effect_clauses) > 0:
+            raise _error(box.token, MIXED_ERROR)
+        clauses.except_clauses.append(node)
     return clauses
 
 @pg.production('clause : EXCEPT NAME DOT NAME AS NAME COLON suite')
-def clause(p):
-    return ast.Clause(_text(p[1]), _text(p[3]), _text(p[5]), _stmts(p[7]),
-                      _line(p[0]))
+def effect_clause(p):
+    return _ClauseBox(p[0], ast.Clause(
+        _text(p[1]), _text(p[3]), _text(p[5]), _stmts(p[7]), _line(p[0])))
+
+@pg.production('clause : EXCEPT NAME AS NAME COLON suite')
+def except_clause_with_binding(p):
+    return _ClauseBox(p[0], ast.ExceptClause(
+        _text(p[1]), _text(p[3]), _stmts(p[5]), _line(p[0])))
+
+@pg.production('clause : EXCEPT NAME COLON suite')
+def except_clause(p):
+    return _ClauseBox(p[0], ast.ExceptClause(
+        _text(p[1]), None, _stmts(p[3]), _line(p[0])))
 
 # --- Expressions -------------------------------------------------------------
 

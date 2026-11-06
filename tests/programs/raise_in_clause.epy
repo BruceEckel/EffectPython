@@ -1,0 +1,39 @@
+# Milestone 6: as raise_in_method.epy, with an inline clause that
+# raises instead of resuming. The clause runs on the handler side,
+# so the body is abandoned and the exception is caught outside the
+# handle statement, not by the try inside the body.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class NotFound(Exception): ...
+
+def load(path: str) -> str / [FileIO]:
+    try:
+        return perform(FileIO.read(path))
+    except NotFound as e:
+        print("caught in the body:", e)
+    return ""
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(FileIO):
+                print(perform(FileIO.read("settings.json")))
+                print("never printed")
+        except FileIO.read as eff:
+            raise NotFound(eff.path)
+    except NotFound as e:
+        print("missing:", e)
+    try:
+        try:
+            with handle(FileIO):
+                print(load("other.json"))
+                print("never printed")
+        except FileIO.read as eff:
+            raise NotFound(eff.path)
+    except NotFound as e:
+        print("outside the body:", e)
+    return 0

@@ -225,7 +225,7 @@ whose methods take the binding as an inline clause does, return nothing, and cal
 A mode flag on `Handler` would make the checker branch on every method,
 and `self.resume(...)` is out because the binding lives for one dispatch and `self` for the whole body.
 
-### 1.6 Exceptions (designed 2026-11-01, tracked in the row 2026-11-02)
+### 1.6 Exceptions (designed 2026-11-01, tracked in the row 2026-11-02, frontend implemented 2026-11-06)
 
 The dialect has no way to fail on purpose.
 A body fails through a runtime error such as the division in `tests/programs/body_error.epy`,
@@ -366,7 +366,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `/`, `==`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (planned 2026-11-01).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `/`, `==`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from effectpython import <names>` (accepted and ignored)
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`)
@@ -377,9 +377,9 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `if <expr>: <suite> else: <suite>`
     *   `while <expr>: <suite>` (added 2026-10-30 for `tests/programs/many_performs.epy`)
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
-    *   `class <Name>(Exception): ...`, giving an `ExceptionDef` node (1.6; Milestone 6, planned 2026-11-01)
-    *   `raise <expr>`, a `Raise` node (1.6; Milestone 6, planned 2026-11-01)
-    *   `try: <suite> except <Name> [as <name>]: <suite>`, a `Try` node; one production covers this and the `handle` form above, and the action tells them apart by the clauses (1.6; Milestone 6, planned 2026-11-01)
+    *   `class <Name>(Exception): ...`, with `pass` allowed in place of `...` and either one allowed on an indented line, giving an `ExceptionDef` node (1.6; Milestone 6, 2026-11-06)
+    *   `raise <expr>`, a `Raise` node (1.6; Milestone 6, 2026-11-06)
+    *   `try: <suite> except <Name> [as <name>]: <suite>`, a `Try` node with one `ExceptClause` per clause; one production covers this and the `handle` form above, and the action tells them apart by the clauses (1.6; Milestone 6, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
 *   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, and `<name>.resume(<expr>)`. Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31).
 
@@ -404,7 +404,7 @@ The static analyzer runs in three passes over the AST before execution:
             2. Types `eff.<param>` inside each clause from `E.op`'s parameter names and types, and verifies that `eff.resume(val)` is called with a `val` matching `E.op`'s return type.
             3. Computes the net effect of the `HandleNode` as:
                $$\text{Effects}(\text{HandleNode}) = (\text{Effects}(\text{body}) \setminus \text{handled\_effects}) \cup \bigcup_{c \in \text{clauses}} \text{Effects}(c)$$
-        *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, planned 2026-11-02).
+        *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, 2026-11-06).
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
 3.  **Pass 3 — Entrypoint Verification:**
     *   Verifies that `main()` exists and its `declared_effect_row` is empty (`[]`).
@@ -710,7 +710,21 @@ EffectPython/
     *   Add the `raise` keyword, the `ExceptionDef`, `Raise`, and `Try` nodes, the single `try` production whose action separates a `Handle` from a `Try`,
         the Pass 1 and Pass 2 checks of 1.6, `W_Exception` and `RaisedException`, and the `Raise` and `Try` branches of `exec_stmt`.
     *   Order of work, as in Milestone 5: parser with tests, checker with tests, then the runtime, with the acceptance programs strict `xfail` until the runtime passes.
-    *   Design-only as of 2026-11-02, when exceptions moved into the effect row (1.6); no code has changed.
+    *   *Frontend done 2026-11-06.*
+        `lexer.py` has the `raise` keyword, and `ast_nodes.py` has `ExceptionDef`, `Raise`, `Try`, and `ExceptClause`, with a fourth list, `exceptions`, on `Module`.
+        `parser.py` reads an exception class whose body is `...` or `pass`, on the class line or indented, and reads every `try` through one `try_stmt` production:
+        effect clauses around a single `with handle(...)` statement give a `Handle`, class clauses give a `Try`, and the action reports the two errors of 1.6,
+        the mix at the first `except` of the second kind and the missing handle statement at the `try`.
+        `checker.py` collects exception classes in Pass 1 and accepts them in rows.
+        In Pass 2, `check_raise` and `check_try` apply the rules of 1.6, and the signature check words a missing exception class as "raises".
+        Three rejections go beyond the list below:
+        `raise Exception(...)`, since a row cannot name `Exception`;
+        `raise e` on a caught exception, since the row needs the class that a constructor call names;
+        and a function named like an exception class.
+        An unknown name in a row reads "'Nope' is not an effect or an exception class", where it read "unknown effect 'Nope'".
+        `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
+        The seven accepted programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime has `Raise` and `Try`.
+        `rejected_uncaught.epy` passes through the translated binary today, since the checker rejects it before anything runs.
     *   *Acceptance test:*
         *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
         *   `rejected_uncaught.epy`: a `main()` that calls a function declaring `/ [NotFound]` without catching it is rejected by the signature check and exits 1, so no checked program reaches the runtime's `error: NotFound: settings.json` path; a unit test covers that message through `RaisedException` directly.

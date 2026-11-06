@@ -1,0 +1,4 @@
+exit 0
+missing: settings.json
+defaults
+app settings

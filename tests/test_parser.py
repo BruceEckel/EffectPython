@@ -1,5 +1,6 @@
 """Milestone 2, first slice: the lexer and the parser read the
-Milestone 1 subset; from Milestone 5, handler classes too.
+Milestone 1 subset; from Milestone 5, handler classes too; from
+Milestone 6, exceptions.
 
 Run with:  pypy2 -m pytest
 """
@@ -49,6 +50,10 @@ def test_tokens_of_one_line():
 
 def test_keywords_are_renamed_and_names_are_not():
     assert kinds('if defn else') == ['IF', 'NAME', 'ELSE', 'NEWLINE']
+
+def test_raise_is_a_keyword():
+    assert kinds('raise NotFound(x)') == [
+        'RAISE', 'NAME', 'LPAREN', 'NAME', 'RPAREN', 'NEWLINE']
 
 def test_indentation_becomes_indent_and_dedent():
     source = 'def f() -> int:\n    if x:\n        return 1\n    return 2\n'
@@ -270,7 +275,8 @@ def test_line_numbers_of_effect_nodes():
 
 @pytest.mark.parametrize('source, msg', [
     ('class FileIO(Thing):\n    def read() -> str: ...\n',
-     'line 1, column 14: a class must derive from Effect or Handler[...]'),
+     'line 1, column 14: a class must derive from Effect, Handler[...], '
+     'or Exception'),
     ('def main() -> int:\n    try:\n        with open(f):\n'
      '            pass\n    except IO.read as e:\n        pass\n',
      'line 3, column 14: a with statement must use handle(...)'),
@@ -368,7 +374,8 @@ def test_line_numbers_of_handler_nodes():
 @pytest.mark.parametrize('source, msg', [
     ('class Fake(Other[FileIO]):\n    def read(self) -> str:\n'
      '        pass\n',
-     'line 1, column 12: a class must derive from Effect or Handler[...]'),
+     'line 1, column 12: a class must derive from Effect, Handler[...], '
+     'or Exception'),
     ('class Fake(Handler[FileIO]):\n    def read(path: str) -> str:\n'
      '        pass\n',
      "line 2, column 13: a handler method's first parameter must be self"),
@@ -386,6 +393,129 @@ def test_line_numbers_of_handler_nodes():
      "line 2, column 28: unexpected '...'"),
 ])
 def test_handler_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
+    assert info.value.msg == msg
+
+# --- Exceptions (Milestone 6) ------------------------------------------------
+
+EXCEPTION_EXAMPLE = '''\
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class NotFound(Exception): ...
+
+def read_config(path: str) -> str / [FileIO, NotFound]:
+    config = perform(FileIO.read(path))
+    if config == "":
+        raise NotFound(path)
+    return config
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(FileIO):
+                print(read_config("settings.json"))
+        except FileIO.read as eff:
+            eff.resume("")
+    except NotFound as e:
+        print("missing:", e)
+    return 0
+'''
+
+@pytest.mark.parametrize('source', [
+    'class NotFound(Exception): ...\n',
+    'class NotFound(Exception): pass\n',
+    'class NotFound(Exception):\n    ...\n',
+    'class NotFound(Exception):\n    pass\n',
+])
+def test_exception_class_body_forms(source):
+    module = parse(source)
+    assert shape(module.exceptions) == [('ExceptionDef', 'NotFound')]
+
+def test_raise_in_a_function_with_an_exception_in_its_row():
+    fn = parse(EXCEPTION_EXAMPLE).functions[0]
+    assert fn.effect_row == ['FileIO', 'NotFound']
+    assert shape(fn.body[1].body) == [
+        ('Raise', ('Call', 'NotFound', [('Name', 'path')]))]
+
+def test_try_except_around_a_handle_block():
+    main = parse(EXCEPTION_EXAMPLE).functions[1]
+    assert shape(main.body[0]) == (
+        'Try',
+        [('Handle', ['FileIO'],
+          [('ExprStmt', ('Call', 'print',
+                         [('Call', 'read_config',
+                           [('StrLiteral', 'settings.json')])]))],
+          [('Clause', 'FileIO', 'read', 'eff',
+            [('ExprStmt', ('Resume', 'eff', ('StrLiteral', '')))])],
+          [], [])],
+        [('ExceptClause', 'NotFound', 'e',
+          [('ExprStmt', ('Call', 'print',
+                         [('StrLiteral', 'missing:'), ('Name', 'e')]))])])
+
+def test_except_without_as_has_no_binding():
+    source = ('def main() -> int:\n'
+              '    try:\n'
+              '        pass\n'
+              '    except NotFound as e:\n'
+              '        pass\n'
+              '    except Exception:\n'
+              '        pass\n')
+    stmt = parse(source).functions[0].body[0]
+    assert shape(stmt.clauses) == [
+        ('ExceptClause', 'NotFound', 'e', [('Pass',)]),
+        ('ExceptClause', 'Exception', None, [('Pass',)])]
+
+def test_line_numbers_of_exception_nodes():
+    module = parse(EXCEPTION_EXAMPLE)
+    raise_stmt = module.functions[0].body[1].body[0]
+    outer = module.functions[1].body[0]
+    assert (module.exceptions[0].lineno, raise_stmt.lineno) == (6, 11)
+    assert (outer.lineno, outer.body[0].lineno,
+            outer.clauses[0].lineno) == (15, 16, 21)
+
+@pytest.mark.parametrize('source, msg', [
+    ('def main() -> int:\n    try:\n        with handle(IO):\n'
+     '            pass\n    except IO.read as e:\n        pass\n'
+     '    except NotFound:\n        pass\n',
+     'line 7, column 5: a try statement cannot mix effect clauses and '
+     'exception clauses'),
+    ('def main() -> int:\n    try:\n        pass\n'
+     '    except NotFound as e:\n        pass\n'
+     '    except IO.read as e:\n        pass\n',
+     'line 6, column 5: a try statement cannot mix effect clauses and '
+     'exception clauses'),
+    ('def main() -> int:\n    try:\n        pass\n'
+     '    except IO.read as e:\n        pass\n',
+     'line 2, column 5: effect clauses need a with handle(...) statement'),
+    ('def main() -> int:\n    try:\n        with handle(IO):\n'
+     '            pass\n        pass\n    except IO.read as e:\n'
+     '        pass\n',
+     'line 2, column 5: effect clauses need a with handle(...) statement'),
+    ('def main() -> int:\n    try:\n        try:\n'
+     '            with handle(IO):\n                pass\n'
+     '        except IO.read as e:\n            pass\n'
+     '    except Log.write as e:\n        pass\n',
+     'line 2, column 5: effect clauses need a with handle(...) statement'),
+    ('class NotFound(Thing): ...\n',
+     'line 1, column 16: a class must derive from Effect, Handler[...], '
+     'or Exception'),
+    ('class FileIO(Effect): ...\n',
+     'line 1, column 14: an effect class declares at least one operation'),
+    ('class NotFound(Exception):\n    def read() -> str: ...\n',
+     'line 1, column 16: an exception class has no body beyond ... or pass'),
+    ('def main() -> int:\n    raise\n',
+     'line 2, column 10: unexpected end of line'),
+    ('def main() -> int:\n    try:\n        pass\n    except:\n'
+     '        pass\n',
+     "line 4, column 11: unexpected ':'"),
+    ('class NotFound(Exception):\n    count: int\n',
+     "line 2, column 5: unexpected 'count'"),
+])
+def test_exception_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
     assert info.value.msg == msg

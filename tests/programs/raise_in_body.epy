@@ -1,0 +1,29 @@
+# Milestone 6: the example from plan 1.6. The body raises NotFound
+# after the clause resumes it, the exception surfaces at the handle
+# statement, and the try around that statement catches it. The print
+# after the outer try runs with the handler frame popped.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class NotFound(Exception): ...
+
+def read_config(path: str) -> str / [FileIO, NotFound]:
+    config = perform(FileIO.read(path))
+    if config == "":
+        raise NotFound(path)
+    return config
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(FileIO):
+                print(read_config("settings.json"))
+        except FileIO.read as eff:
+            eff.resume("")
+    except NotFound as e:
+        print("missing:", e)
+    print("after")
+    return 0

@@ -1,0 +1,32 @@
+# Milestone 6: as resume_then_error.epy, with an exception the
+# program can catch. The body raises Failed after a resume, and the
+# clause has a statement after its eff.resume() call. The exception
+# surfaces inside resume(), so the clause's second print does not
+# run, and the try around the handle statement catches it.
+
+from effectpython import Effect, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Failed(Exception): ...
+
+def risky(n: int) -> int / [Log, Failed]:
+    perform(Log.note("checking"))
+    if n == 0:
+        raise Failed("n is zero")
+    return 100 // n
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(Log):
+                print(risky(0))
+        except Log.note as eff:
+            print("before resume")
+            eff.resume(0)
+            print("after resume")
+    except Failed as e:
+        print("caught:", e)
+    print("after")
+    return 0

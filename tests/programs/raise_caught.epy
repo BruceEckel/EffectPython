@@ -1,0 +1,31 @@
+# Milestone 6: a function that declares NotFound raises it, and the
+# caller catches it and continues. The clause for Denied is skipped,
+# a call that does not raise returns through the try, and a raise
+# without a message prints an empty one.
+
+class NotFound(Exception): ...
+
+class Denied(Exception):
+    pass
+
+def find(path: str) -> str / [NotFound]:
+    if path == "":
+        raise NotFound()
+    if path == "settings.json":
+        raise NotFound(path)
+    return "contents of " + path
+
+def main() -> int / []:
+    try:
+        print(find("settings.json"))
+    except Denied as e:
+        print("denied:", e)
+    except NotFound as e:
+        print("missing:", e)
+    try:
+        print(find("notes.txt"))
+        find("")
+    except NotFound as e:
+        print("empty:", e, "end")
+    print("after")
+    return 0

@@ -1,0 +1,14 @@
+# Milestone 6: except Exception catches every exception class, and
+# print(e) prints the message.
+
+class NotFound(Exception): ...
+
+def find(path: str) -> str / [NotFound]:
+    raise NotFound(path)
+
+def main() -> int / []:
+    try:
+        print(find("settings.json"))
+    except Exception as e:
+        print(e)
+    return 0

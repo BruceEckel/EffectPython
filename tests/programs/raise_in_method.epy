@@ -1,0 +1,39 @@
+# Milestone 6: a handler method that fails by raising. The method
+# runs on the handler side, so the exception leaves the handle
+# statement and the body is abandoned: its next statement does not
+# run. The method's row carries NotFound to main(), which catches it
+# outside the with. In the second block the body has its own try
+# around the perform, and that clause does not catch the exception.
+
+from effectpython import Effect, Handler, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class NotFound(Exception): ...
+
+class MissingFiles(Handler[FileIO]):
+    def read(self, path: str) -> str / [NotFound]:
+        raise NotFound(path)
+
+def load(path: str) -> str / [FileIO]:
+    try:
+        return perform(FileIO.read(path))
+    except NotFound as e:
+        print("caught in the body:", e)
+    return ""
+
+def main() -> int / []:
+    try:
+        with handle(MissingFiles()):
+            print(perform(FileIO.read("settings.json")))
+            print("never printed")
+    except NotFound as e:
+        print("missing:", e)
+    try:
+        with handle(MissingFiles()):
+            print(load("other.json"))
+            print("never printed")
+    except NotFound as e:
+        print("outside the body:", e)
+    return 0

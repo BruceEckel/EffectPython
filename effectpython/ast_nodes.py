@@ -23,19 +23,24 @@ class Node(BaseBox):
 
 class Module(Node):
     """A whole .epy file: its effect declarations, its handler classes,
-       and its function definitions, each in source order. The import
-       line (from effectpython import ...) leaves no node."""
-    _attrs_ = ['functions', 'effects', 'handlers']
+       its exception classes, and its function definitions, each in
+       source order. The import line (from effectpython import ...)
+       leaves no node."""
+    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions']
 
-    def __init__(self, functions, effects=None, handlers=None, lineno=0):
+    def __init__(self, functions, effects=None, handlers=None,
+                 exceptions=None, lineno=0):
         Node.__init__(self, lineno)
         if effects is None:
             effects = []
         if handlers is None:
             handlers = []
-        self.functions = functions  # list of FunctionDef
-        self.effects = effects      # list of EffectDef
-        self.handlers = handlers    # list of HandlerDef
+        if exceptions is None:
+            exceptions = []
+        self.functions = functions    # list of FunctionDef
+        self.effects = effects        # list of EffectDef
+        self.handlers = handlers      # list of HandlerDef
+        self.exceptions = exceptions  # list of ExceptionDef
 
 class EffectDef(Node):
     """class Name(Effect): followed by operation stubs (plan 1.1)"""
@@ -80,11 +85,21 @@ class FieldDef(Node):
         self.type = type        # str
         self.default = default  # IntLiteral, StrLiteral, or None
 
+class ExceptionDef(Node):
+    """class Name(Exception): ...   (plan 1.6). The body is ... or pass;
+       an exception class has no fields and no base below Exception."""
+    _attrs_ = ['name']
+
+    def __init__(self, name, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name  # str
+
 class FunctionDef(Node):
     """def name(p1: T1, p2: T2) -> ReturnType / [Effect1, Effect2]:
        Parameter type names and the return type are kept as strings for the
        checker; the evaluator ignores them. A function without / [...] has
-       an empty effect_row (plan 1.2)."""
+       an empty effect_row (plan 1.2). The row names effects and
+       exception classes (plan 1.6)."""
     _attrs_ = ['name', 'params', 'param_types', 'return_type', 'effect_row', 'body']
 
     def __init__(self, name, params, param_types, return_type, effect_row, body, lineno=0):
@@ -93,7 +108,7 @@ class FunctionDef(Node):
         self.params = params            # list of str
         self.param_types = param_types  # list of str, parallel to params
         self.return_type = return_type  # str
-        self.effect_row = effect_row    # list of str (effect class names)
+        self.effect_row = effect_row    # list of str (class names)
         self.body = body                # list of Stmt
 
 # --- Statements --------------------------------------------------------------
@@ -200,6 +215,42 @@ class Clause(Node):
         self.binding = binding  # str: the name bound to the W_EffBinding
         self.body = body        # list of Stmt
 
+class Raise(Stmt):
+    """raise value   (plan 1.6). The checker requires value to be a
+       constructor call of an exception class, such as NotFound(path)."""
+    _attrs_ = ['value']
+
+    def __init__(self, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.value = value  # Expr
+
+class Try(Stmt):
+    """try:
+           body
+       except NotFound as e:
+           clause body
+       ...
+       An ordinary try/except (plan 1.6). The parser reads every try
+       through one production and builds a Handle when the clauses
+       name Effect.op, a Try when they name an exception class."""
+    _attrs_ = ['body', 'clauses']
+
+    def __init__(self, body, clauses, lineno=0):
+        Node.__init__(self, lineno)
+        self.body = body        # list of Stmt
+        self.clauses = clauses  # list of ExceptClause
+
+class ExceptClause(Node):
+    """except Name [as binding]: body   (one clause of a Try). Name is
+       an exception class or Exception, which catches every class."""
+    _attrs_ = ['name', 'binding', 'body']
+
+    def __init__(self, name, binding, body, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name        # str
+        self.binding = binding  # str, or None without as
+        self.body = body        # list of Stmt
+
 # --- Expressions -------------------------------------------------------------
 
 class Expr(Node):
@@ -249,7 +300,8 @@ class Compare(Expr):
 
 class Call(Expr):
     """func(arg1, arg2): a call to a module-level function by name, to
-       the built-in print, or to a handler class's constructor."""
+       the built-in print, or to the constructor of a handler class or
+       an exception class."""
     _attrs_ = ['func', 'args']
 
     def __init__(self, func, args, lineno=0):

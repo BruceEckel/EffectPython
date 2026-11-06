@@ -1,0 +1,37 @@
+# Milestone 6: a try/except inside the body that spans a perform.
+# The body's stacklet keeps the try across the suspension, so an
+# exception raised after the resume is caught in the body, which
+# then performs again. The second call returns from inside the try.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class NotFound(Exception): ...
+
+def read_or_default(path: str) -> str / [FileIO]:
+    try:
+        config = perform(FileIO.read(path))
+        if config == "":
+            raise NotFound(path)
+        return config
+    except NotFound as e:
+        print("missing:", e)
+    return perform(FileIO.read("default.json"))
+
+def contents(path: str) -> str:
+    if path == "default.json":
+        return "defaults"
+    if path == "app.json":
+        return "app settings"
+    return ""
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            print(read_or_default("settings.json"))
+            print(read_or_default("app.json"))
+    except FileIO.read as eff:
+        eff.resume(contents(eff.path))
+    return 0

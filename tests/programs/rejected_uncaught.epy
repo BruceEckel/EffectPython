@@ -1,0 +1,12 @@
+# Milestone 6 error path: main() calls a function that declares
+# NotFound and does not catch it. main()'s empty row makes the
+# uncaught exception a static error, so nothing runs.
+
+class NotFound(Exception): ...
+
+def find(path: str) -> str / [NotFound]:
+    raise NotFound(path)
+
+def main() -> int / []:
+    print(find("settings.json"))
+    return 0

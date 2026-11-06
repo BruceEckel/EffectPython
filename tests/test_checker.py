@@ -1,5 +1,6 @@
 """Milestone 2 acceptance: the static effect checker (plan 2.2, 4.2),
-and from Milestone 5 the handler class rules (plan 1.5).
+from Milestone 5 the handler class rules (plan 1.5), and from
+Milestone 6 the exception rules (plan 1.6).
 
 Run with:  pypy2 -m pytest
 """
@@ -130,7 +131,8 @@ MAIN = 'def main() -> int / []:\n    return 0\n'
      UnhandledEffectError,
      'line 8: main() must have an empty effect row, not [FileIO]'),
     ('def f() -> int / [Nope]:\n    return 0\n' + MAIN,
-     InvalidProgram, "line 8: unknown effect 'Nope'"),
+     InvalidProgram,
+     "line 8: 'Nope' is not an effect or an exception class"),
     ('def f() -> int:\n    return perform(Nope.read("a"))\n' + MAIN,
      InvalidProgram, "line 9: unknown effect 'Nope'"),
     ('def f() -> int / [FileIO]:\n    return perform(FileIO.nope())\n'
@@ -392,4 +394,184 @@ FAKE = ('class Fake(Handler[FileIO]):\n'
 def test_rejected_handler_programs(body, error, msg):
     with pytest.raises(error) as info:
         check_source(body)
+    assert info.value.msg == msg
+
+# --- Exceptions (Milestone 6) ------------------------------------------------
+
+EXCEPTIONS = EFFECTS + '''\
+class NotFound(Exception): ...
+
+class Denied(Exception): ...
+
+class Failing(Handler[FileIO]):
+    def read(self, path: str) -> str / [NotFound]:
+        raise NotFound(path)
+    def write(self, path: str, content: str) -> int:
+        return 0
+
+'''
+
+FIND = ('def find(key: str) -> str / [NotFound]:\n'
+        '    raise NotFound(key)\n')
+
+def check_exceptions(body):
+    check(parse(EXCEPTIONS + body))
+
+@pytest.mark.parametrize('name', [
+    'except_exception.epy', 'raise_caught.epy', 'raise_in_body.epy',
+    'raise_in_clause.epy', 'raise_in_method.epy',
+    'raise_in_nested_clause.epy', 'try_around_perform.epy',
+])
+def test_accepts_the_exception_programs(name):
+    check(parse(read_program(name)))
+
+def test_a_declared_exception_reaches_a_caller_that_catches_it():
+    check_exceptions(FIND +
+                     'def main() -> int / []:\n'
+                     '    try:\n'
+                     '        print(find("a"))\n'
+                     '    except NotFound as e:\n'
+                     '        print(e)\n'
+                     '    return 0\n')
+
+def test_a_try_discharges_what_the_callee_declares():
+    check_exceptions(FIND +
+                     'def lookup(key: str) -> str:\n'
+                     '    try:\n'
+                     '        return find(key)\n'
+                     '    except NotFound as e:\n'
+                     '        return "missing"\n'
+                     '    return ""\n' + MAIN)
+
+def test_except_exception_catches_every_class_the_suite_raises():
+    check_exceptions('def find(key: str) -> str / [NotFound, Denied]:\n'
+                     '    if key == "x":\n'
+                     '        raise Denied(key)\n'
+                     '    raise NotFound(key)\n'
+                     'def lookup(key: str) -> str:\n'
+                     '    try:\n'
+                     '        return find(key)\n'
+                     '    except Exception as e:\n'
+                     '        return "failed"\n'
+                     '    return ""\n' + MAIN)
+
+def test_an_except_clause_may_omit_the_binding():
+    check_exceptions(FIND +
+                     'def lookup(key: str) -> str:\n'
+                     '    try:\n'
+                     '        return find(key)\n'
+                     '    except NotFound:\n'
+                     '        return "missing"\n'
+                     '    return ""\n' + MAIN)
+
+def test_an_exception_may_be_raised_without_a_message():
+    check_exceptions('def f() -> int / [NotFound]:\n'
+                     '    raise NotFound()\n' + MAIN)
+
+def test_a_try_around_handle_catches_a_method_exception():
+    check_exceptions('def f() -> str:\n'
+                     '    try:\n'
+                     '        with handle(Failing()):\n'
+                     '            return perform(FileIO.read("a"))\n'
+                     '    except NotFound as e:\n'
+                     '        return "missing"\n'
+                     '    return ""\n' + MAIN)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def find(key: str) -> str:\n    raise NotFound(key)\n' + MAIN,
+     "line 18: function 'find' raises NotFound (line 19) without "
+     "declaring it in its effect row"),
+    (FIND + 'def lookup(key: str) -> str:\n    return find(key)\n' + MAIN,
+     "line 20: function 'lookup' raises NotFound (line 21) without "
+     "declaring it in its effect row"),
+    ('def f() -> str:\n    perform(FileIO.write("a", "b"))\n'
+     '    raise NotFound("a")\n' + MAIN,
+     "line 18: function 'f' performs FileIO (line 19), raises NotFound "
+     "(line 20) without declaring it in its effect row"),
+    ('def f() -> str:\n    with handle(Failing()):\n'
+     '        return perform(FileIO.read("a"))\n    return ""\n' + MAIN,
+     "line 18: function 'f' raises NotFound (line 19) without "
+     "declaring it in its effect row"),
+    ('def f() -> str:\n    with handle(Failing()):\n        try:\n'
+     '            return perform(FileIO.read("a"))\n'
+     '        except NotFound as e:\n            return "missing"\n'
+     '    return ""\n' + MAIN,
+     "line 18: function 'f' raises NotFound (line 19) without "
+     "declaring it in its effect row"),
+    ('def f() -> str:\n    try:\n        raise NotFound("a")\n'
+     '    except NotFound as e:\n        raise Denied("b")\n'
+     '    return ""\n' + MAIN,
+     "line 18: function 'f' raises Denied (line 22) without "
+     "declaring it in its effect row"),
+    ('def f() -> str:\n    try:\n        raise Denied("b")\n'
+     '    except NotFound as e:\n        return "missing"\n'
+     '    return ""\n' + MAIN,
+     "line 18: function 'f' raises Denied (line 20) without "
+     "declaring it in its effect row"),
+    ('def f() -> str:\n    try:\n'
+     '        return perform(FileIO.read("a"))\n'
+     '    except Exception as e:\n        return ""\n'
+     '    return ""\n' + MAIN,
+     "line 18: function 'f' performs FileIO (line 20) without "
+     "declaring it in its effect row"),
+    (FIND + 'def main() -> int / []:\n    print(find("a"))\n'
+     '    return 0\n',
+     "line 20: function 'main' raises NotFound (line 21) without "
+     "declaring it in its effect row"),
+])
+def test_unhandled_exceptions(body, msg):
+    with pytest.raises(UnhandledEffectError) as info:
+        check_exceptions(body)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('body, error, msg', [
+    ('def f() -> int:\n    raise 1\n' + MAIN,
+     InvalidProgram, 'line 19: raise needs an exception, not int'),
+    ('def f() -> int:\n    raise FileIO.read("a")\n' + MAIN,
+     InvalidProgram,
+     'line 19: raise needs an exception, not FileIO.read(...)'),
+    ('def f() -> int:\n    raise Exception("a")\n' + MAIN,
+     InvalidProgram,
+     'line 19: raise needs a declared exception class, not Exception'),
+    ('def f() -> int / [NotFound]:\n    try:\n        pass\n'
+     '    except NotFound as e:\n        raise e\n    return 0\n' + MAIN,
+     InvalidProgram,
+     'line 22: raise needs a constructor call of an exception class, '
+     'not a caught NotFound'),
+    ('def f() -> int:\n    raise x\n' + MAIN, InvalidProgram,
+     'line 19: raise needs an exception, not a value of unknown type'),
+    ('def f() -> int / [NotFound]:\n    raise NotFound(1)\n' + MAIN,
+     InvalidProgram,
+     'line 19: argument 1 of NotFound() must be str, not int'),
+    ('def f() -> int / [NotFound]:\n    raise NotFound("a", "b")\n'
+     + MAIN, InvalidProgram,
+     'line 19: NotFound() takes 0 to 1 arguments (2 given)'),
+    ('def f() -> int:\n    try:\n        pass\n'
+     '    except FileIO as e:\n        pass\n    return 0\n' + MAIN,
+     InvalidProgram, "line 21: 'FileIO' is not an exception class"),
+    ('def f() -> int:\n    try:\n        pass\n'
+     '    except Nope as e:\n        pass\n    return 0\n' + MAIN,
+     InvalidProgram, "line 21: 'Nope' is not an exception class"),
+    ('class NotFound(Exception): ...\n' + MAIN, InvalidProgram,
+     "line 18: exception class 'NotFound' is declared twice"),
+    ('class FileIO(Exception): ...\n' + MAIN, InvalidProgram,
+     "line 18: exception class 'FileIO' is declared twice"),
+    ('def NotFound() -> int:\n    return 0\n' + MAIN, InvalidProgram,
+     "line 18: function 'NotFound' is defined twice"),
+    ('def f() -> int / [Exception]:\n    return 0\n' + MAIN,
+     InvalidProgram,
+     'line 18: an effect row names exception classes, not Exception'),
+    ('class Bad(Handler[DBQuery]):\n'
+     '    def execute(self, sql: str) -> str / [Nope]:\n'
+     '        return sql\n' + MAIN, InvalidProgram,
+     "line 19: 'Nope' is not an effect or an exception class"),
+    ('def g(s: str) -> int:\n    return 0\n'
+     'def f() -> int:\n    try:\n        pass\n'
+     '    except NotFound as e:\n        return g(e)\n'
+     '    return 0\n' + MAIN, InvalidProgram,
+     'line 24: argument 1 of g() must be str, not NotFound'),
+])
+def test_rejected_exception_programs(body, error, msg):
+    with pytest.raises(error) as info:
+        check_exceptions(body)
     assert info.value.msg == msg

@@ -1,0 +1,4 @@
+exit 0
+before resume
+caught: n is zero
+after
