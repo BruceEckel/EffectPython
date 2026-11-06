@@ -371,6 +371,128 @@ The four cases, each an acceptance program of Milestone 6:
     Injecting an exception at the `perform` site would be a second resumption form, `eff.throw(exc)`,
     which would switch into the body with the exception set instead of a value and let `perform` raise it;
     deferred until a program needs it.
+    (Designed in 1.7, 2026-11-06.)
+
+### 1.7 Throwing into the Body (designed 2026-11-06, open questions at the end)
+
+A handler that fails raises an exception (1.6), and that abandons the body.
+The code that performed the operation learns nothing:
+a `try` around its `perform` does not catch what the clause raises (1.6, case 4),
+so it cannot fall back to a default or ask a second source.
+The failure reaches the function that installed the handler, which is the wrong end when the performer is the one that can recover.
+This section adds `eff.throw(<expr>)`, a second way to resume the body:
+the suspended `perform` raises the exception, where `eff.resume(<expr>)` makes it return a value.
+Python has the same pair for generators, `gen.send(value)` and `gen.throw(exc)`.
+
+**The form.**
+
+```python
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+
+class NotFound(Exception): ...
+
+def load(path: str) -> str / [FileIO]:
+    try:
+        return perform(FileIO.read(path))
+    except NotFound as e:
+        print("missing:", e)
+        return "defaults"
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            print(load("settings.json"))
+    except FileIO.read as eff:
+        eff.throw(NotFound(eff.path))
+    return 0
+```
+
+The program prints `missing: settings.json` and then `defaults`.
+`load` catches the failure at its `perform` and continues, so the body is resumed, not abandoned,
+and `main()` needs no `try` for `NotFound`.
+
+`eff.throw(<expr>)` takes an expression whose type is a declared exception class, as `raise` does (1.6).
+It is the binding's one resumption:
+a `resume()` or a second `throw()` on the same binding is the `OneShotContinuationError` of 3.4.
+Like `eff.resume(...)`, it evaluates to `None` once the body completes, and it has a tail form:
+as the last statement of its clause, on the clause's own binding, it switches into the body from the dispatch loop without nesting.
+If the body does not catch the exception, the exception ends the body and follows case 1 of 1.6:
+it surfaces at the `handle` statement, or inside the `eff.throw()` call when the clause has statements after it.
+
+| In a clause | The body | The exception appears |
+| :--- | :--- | :--- |
+| `raise NotFound(p)` | is abandoned | at the `handle` statement |
+| `eff.throw(NotFound(p))` | is resumed | at the suspended `perform` |
+
+**An operation declares what a handler may throw.**
+An exception that arrives at a `perform` must be in the row of the function that performs,
+or the row stops naming what can reach the caller.
+The performing function cannot see the handler, so the declaration belongs to the operation, which both sides share:
+`def read(path: str) -> str / [NotFound]: ...`.
+An operation's row names exception classes; an effect there is an error, since an operation stub performs nothing.
+A `perform(FileIO.read(path))` then contributes `FileIO` and `NotFound` to the function's inferred effects.
+A `handle` block removes `FileIO` and leaves `NotFound`,
+which a `try` removes, inside the body or around the `handle` statement.
+The contract is the operation's, not the handler's:
+a function that performs `FileIO.read` accounts for `NotFound` whichever handler is installed,
+as a Java caller accounts for a method's `throws` clause whichever class implements the interface.
+An operation without a row is what every operation is today, so no existing program changes.
+
+**Checker.**
+Pass 1 reads each operation's row and requires every name to be a declared exception class
+("the row of FileIO.read names exception classes; 'DBQuery' is an effect"), with `Exception` rejected as in a function's row.
+In Pass 2, a `perform` adds the operation's classes beside its effect.
+`<name>.throw(<expr>)` requires `<name>` to be a clause binding, as `resume` does,
+and the expression's type to be an exception class the binding's operation declares
+("FileIO.read does not declare Denied, so eff.throw() cannot deliver it").
+The rules of `raise` for `Exception` and for a value that is not an exception apply to it.
+An `eff.throw()` adds nothing to the clause's effects:
+the class is in the body's set through the `perform`, and the body is where an uncaught throw surfaces.
+The checker overcounts in one case, as it does for `eff.resume()` today:
+a `try` inside a clause around a non-tail `eff.throw()` catches at runtime what the body let through,
+and the function is still charged with the class.
+
+**Handler classes.**
+A method has no binding, and its `return` is its `eff.resume(...)` (1.5).
+Its `raise` gets the matching rule:
+an exception whose class the operation declares is thrown into the body, and any other exception abandons the body as in 1.6.
+A method is then an ordinary implementation of the operation's signature, returning its value or raising what it declares,
+and a reusable handler can report a failure the performer may recover from.
+The method lists the class in its own row, as any function that raises it does.
+`check_handle` leaves the operation's classes out of what it adds to the installing function,
+since they reach that function through the body's performs, less whatever the body catches.
+`raise_in_method.epy` is unaffected: its operation declares nothing, so its method's `NotFound` abandons the body.
+An inline clause has both forms whatever the operation declares: `raise` abandons the body and `eff.throw()` resumes it.
+
+**Runtime.**
+`HandlerFrame` gains `resume_exception` beside `resume_value`, and `switch_into` sets one of the two.
+`perform`, after the switch returns and the hidden frames are back, raises a `RaisedException` for `resume_exception` when it is set.
+The exception is then on the body's stack, and the paths of 1.6 take it from there:
+a `Try` in the body catches it, or `run_body_callback` stores it in `pending_error` and the dispatch loop raises it again on the handler side.
+`dispatch` treats a tail `eff.throw(...)` as it treats a tail `eff.resume(...)`,
+and it calls a handler method under a `try` for `RaisedException`,
+switching into the body with the exception when the operation's row names its class.
+The interpreter records each operation's row for that test.
+A `throw()` anywhere else in a clause mirrors `resume()`: switch, dispatch nested, return `None`.
+The parser folds `<name>.throw(<expr>)` into a `Throw` node as it folds `<name>.resume(<expr>)` into a `Resume`,
+and `OperationDef` gains the row.
+
+**Open questions.**
+
+1.  *Where the declaration lives.*
+    The design puts it in the operation's row.
+    Leaving it out would let any clause throw any class, and a function between the `perform` and the `handle` statement would raise a class its row does not name.
+    Declaring it on the `handle` statement instead would hide it from the performer, which is the function that needs it.
+2.  *Whether a method's `raise` of a declared class is delivered to the performer.*
+    The design says yes, so handler classes can report recoverable failures.
+    The cost is that the same `raise` statement abandons or resumes depending on the operation's row.
+    The alternative keeps `throw` to inline clauses and leaves handler classes with abandonment alone.
+3.  *Whether a performer must account for the class under a handler that cannot throw it.*
+    The design says yes, since the row is checked per operation and not per installed handler.
+    A `handle` block could subtract the classes its clauses provably do not throw, at the cost of a rule that reads the clauses to type the body.
 
 ---
 
@@ -796,3 +918,24 @@ EffectPython/
         *   Reject `raise 1` and `raise FileIO.read("a")`, a constructor call with an `int` argument or two arguments, `except FileIO as e`, `except Nope as e`, a `try` that mixes `except FileIO.read as eff` with `except NotFound as e`, a duplicate exception class, a class deriving from a base other than `Effect`, `Handler[...]`, or `Exception`, and `Exception` in a row.
         *   Reject a function that raises `NotFound` without declaring it, a function that calls such a function and neither declares nor catches `NotFound`, and a `with handle(Failing())` whose handler method declares `NotFound` in a function that does neither.
         *   Accept a function whose `try`/`except NotFound` catches what its callee declares, with no `NotFound` in its own row, and `except Exception` as catching every class the suite can raise.
+7.  **Milestone 7: Throwing into the Body (1.7)**
+    *   *Designed 2026-11-06; not started.* The open questions of 1.7 come first.
+    *   Add the operation row and the `Throw` node, the Pass 1 and Pass 2 checks of 1.7, `resume_exception` on `HandlerFrame`,
+        the tail and nested forms of `eff.throw()`, and the delivery of a handler method's declared exception.
+    *   Order of work, as in Milestones 5 and 6: parser with tests, checker with tests, then the runtime,
+        with the acceptance programs strict `xfail` until the runtime passes.
+        Sections 2.1, 2.2, 3.3, and 3.4 are updated as each part goes in.
+    *   *Acceptance test:*
+        *   `throw_caught.epy`: the program in 1.7; the body catches the exception at its `perform`, prints `missing: settings.json`, and returns `defaults`.
+        *   `throw_through_body.epy`: the body does not catch the exception, the statement after its `perform` does not run,
+            a `try` around the `handle` statement catches it, and a `print` after that `try` runs, showing the frame was popped.
+        *   `throw_then_statements.epy`: a clause with a statement after `eff.throw()`; the body catches the exception and completes, and the clause's statement then runs.
+        *   `throw_in_method.epy`: a `Handler[FileIO]` whose `read` raises the `NotFound` its operation declares; the body catches it and performs again,
+            and a field counts the failures across both performs.
+        *   `many_throws.epy`: ten thousand tail throws, each caught in the body's loop, pass without overflowing the stack, as `many_performs.epy` does for tail resumes.
+        *   `throw_twice.epy`: a second `eff.throw()` on one binding fails with the one-shot error and exits 1.
+        *   `rejected_undeclared_throw.epy`: `eff.throw(Denied())` in a clause for an operation that declares `NotFound` alone is rejected and exits 1.
+        *   Reject an operation row that names an effect, an unknown name, or `Exception`; `eff.throw(1)`; `eff.throw(Exception("x"))`;
+            `x.throw(...)` on a name that is not a clause binding; and a function that performs an operation with a row and neither declares nor catches the class.
+        *   Accept a body that catches the operation's class at the `perform`, a `try` around the `handle` statement that catches it,
+            and an installing function with an empty row whose handler method raises the operation's class and whose body catches it.
