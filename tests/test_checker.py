@@ -587,3 +587,52 @@ def test_rejected_exception_programs(body, error, msg):
     with pytest.raises(error) as info:
         check_exceptions(body)
     assert info.value.msg == msg
+
+CAUGHT = ('    try:\n        raise NotFound("a")\n'
+          '    except NotFound as e:\n        print(e)\n')
+
+@pytest.mark.parametrize('body, lineno', [
+    ('def main() -> int / []:\n' + CAUGHT +
+     '    print(e)\n    return 0\n', 23),
+    ('def main() -> int / []:\n    e = 7\n' + CAUGHT +
+     '    return e\n', 24),
+    ('def main() -> int / []:\n    try:\n        raise NotFound("a")\n'
+     '    except NotFound as e:\n        try:\n'
+     '            raise NotFound("b")\n'
+     '        except NotFound as e:\n            print(e)\n'
+     '        print(e)\n    return 0\n', 26),
+    ('def f() -> int / [NotFound]:\n' + CAUGHT +
+     '    raise e\n' + MAIN, 23),
+    ('def f() -> int:\n' + CAUGHT + '    raise e\n' + MAIN, 23),
+    ('def main() -> int / []:\n' + CAUGHT +
+     '    x = e\n    return 0\n', 23),
+    ('def main() -> int / []:\n' + CAUGHT +
+     '    e.resume(1)\n    return 0\n', 23),
+    ('def main() -> int / []:\n' + CAUGHT +
+     '    print(e.path)\n    return 0\n', 23),
+], ids=['fresh', 'assigned-before', 'nested', 'raise-declared',
+        'raise-undeclared', 'assignment', 'resume', 'field'])
+def test_rejects_a_read_of_a_name_its_clause_deleted(body, lineno):
+    with pytest.raises(InvalidProgram) as info:
+        check_exceptions(body)
+    assert info.value.msg == (
+        "line %d: name 'e' is unbound after the except clause "
+        "that bound it" % lineno)
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n' + CAUGHT +
+    '    e = 7\n    return e\n',
+    'def f() -> int / [NotFound, Denied]:\n    return 0\n'
+    'def main() -> int / []:\n    try:\n        print(f())\n'
+    '    except NotFound as e:\n        print(e)\n'
+    '    except Exception as e:\n        print(e)\n    return 0\n',
+    'def main() -> int / []:\n' + CAUGHT + CAUGHT +
+    '    return 0\n',
+    'def main() -> int / []:\n    try:\n        raise NotFound("a")\n'
+    '    except NotFound as e:\n        try:\n'
+    '            raise NotFound("b")\n'
+    '        except NotFound as e:\n            print(e)\n'
+    '        print("done")\n    return 0\n',
+], ids=['assigned-after', 'second-clause', 'later-try', 'nested'])
+def test_accepts_a_name_bound_again_after_its_clause(body):
+    check_exceptions(body)

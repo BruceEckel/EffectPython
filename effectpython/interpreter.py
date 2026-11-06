@@ -77,9 +77,10 @@ makes the checker reject an exception nobody catches. They stay
 because the unit tests
 build modules by hand and run them without the checker. The cases the
 checker does not
-see remain runtime-only: a variable that was never assigned or that an
-except clause deleted (the checker types an unbound name as UNKNOWN),
-an operator applied to operands of
+see remain runtime-only: a variable that was never assigned (the checker
+types an unbound name as UNKNOWN), a read of a name an except clause
+deleted where the read comes earlier in the source, as in a loop body
+(require_bound follows source order), an operator applied to operands of
 the wrong types (the checker infers types only as far as argument checks
 need), and integer division or modulo by zero.
 """

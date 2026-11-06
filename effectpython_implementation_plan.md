@@ -275,6 +275,11 @@ so a clause can report a failure and raise it again with `raise e` (added 2026-1
 `try: <suite> except <Name> as <e>: <suite>` catches an exception raised in the suite whose class is `<Name>`,
 or any raised exception when `<Name>` is `Exception`;
 the `as <e>` part is optional, and the name is bound for the clause and unbound afterwards, as Python 3 does.
+The checker rejects a read of the name after the clause (added 2026-11-06), with "name 'e' is unbound after the except clause that bound it" at the read's line,
+until an assignment or another clause binds the name again.
+The rule follows source order, as the checker's typing does, and does not ask whether the clause would run:
+a name assigned before the `try` is rejected too, since the clause deletes it whenever the exception is raised.
+A read that precedes the clause in the source but follows it in time, as in a loop body, stays a runtime error.
 Clauses are tried in order, and an exception no clause matches propagates.
 There is no `else`, `finally`, or bare `except:`, and no re-raise through a bare `raise`.
 A runtime error of the interpreter (an undefined name, division by zero) stays uncatchable:
@@ -755,6 +760,16 @@ EffectPython/
         The delete tolerates a missing name, since a nested clause that binds the same name deletes it first.
         The checker needed no change: `check_try` drops the name's type after the clause, so a later read has unknown type,
         and the read fails at runtime with "name 'e' is not defined".
+    *   *Read of a deleted `as` name rejected, 2026-11-06.*
+        The read is now a static error.
+        `Scope` records the names a clause has deleted in `unbound`; `check_try` adds the name when its clause ends,
+        and an assignment, an exception clause, or an effect clause that binds the name removes it (`rebind`).
+        `require_bound` raises "name 'e' is unbound after the except clause that bound it" at a name read,
+        and `require_binding`, `require_instance`, and the `handle()` argument check call it first,
+        so `e.resume(...)`, `e.path`, and `handle(e)` report the deleted name instead of a missing binding or instance.
+        The walk is in source order with no path analysis, like the typing:
+        the checker rejects a read after a clause that ends in `return`, and it accepts a read after an assignment in one branch of an `if`.
+        `tests/test_checker.py` covers the rejections and the ways a name is bound again.
     *   *Acceptance test:*
         *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
         *   `rejected_uncaught.epy`: a `main()` that calls a function declaring `/ [NotFound]` without catching it is rejected by the signature check and exits 1, so no checked program reaches the runtime's `error: NotFound: settings.json` path; a unit test covers that message through `RaisedException` directly.

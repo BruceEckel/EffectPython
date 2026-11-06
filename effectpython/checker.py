@@ -32,6 +32,11 @@ class name is the type of the name an except clause binds. The empty
 string stands for a type the checker cannot determine, and an unknown
 type matches anything.
 
+The name an except clause binds is deleted when the clause ends, so
+the checker rejects a read of it after the clause until something
+binds it again (require_bound). The walk follows source order, as
+the typing does, and does not ask whether the clause would run.
+
 The checker dispatches by isinstance over the ast_nodes classes, as the
 evaluator does, so adding a node means adding a branch in both.
 """
@@ -65,11 +70,13 @@ class Binding(object):
         self.op = op          # OperationDef
 
 class Scope(object):
-    """The types of a function's variables and its clause bindings."""
+    """The types of a function's variables, its clause bindings, and
+    the names an except clause has deleted."""
 
     def __init__(self):
         self.types = {}     # variable name -> type name
         self.bindings = {}  # variable name -> Binding
+        self.unbound = {}   # variable name -> True
 
 class HandlerInfo(object):
     """A handler class as Pass 1 records it: its fields in declaration
@@ -283,6 +290,7 @@ class Checker(object):
             self.check_block(stmt.body, scope, effects)
         elif isinstance(stmt, ast.Assign):
             scope.types[stmt.name] = self.type_of(stmt.value, scope, effects)
+            self.rebind(scope, stmt.name)
         elif isinstance(stmt, ast.AttrAssign):
             info = self.require_instance(scope, stmt.target, stmt.lineno)
             expected = self.require_field(info, stmt.attr, stmt.lineno)
@@ -350,9 +358,11 @@ class Checker(object):
                 if binding in scope.bindings:
                     del scope.bindings[binding]
                 scope.types[binding] = clause.name
+                self.rebind(scope, binding)
                 self.check_block(clause.body, scope, effects)
                 if binding in scope.types:
                     del scope.types[binding]
+                scope.unbound[binding] = True
         for name in body_effects.names:
             if name in self.exceptions and (name in caught
                                             or EXCEPTION in caught):
@@ -373,6 +383,7 @@ class Checker(object):
                 self.fulfill(fulfilled, info, stmt.lineno)
                 stmt.instances.append(name)
             else:
+                self.require_bound(scope, name, stmt.lineno)
                 raise InvalidProgram(
                     stmt.lineno,
                     "'%s' is not an effect or a handler instance" % name)
@@ -419,6 +430,7 @@ class Checker(object):
             covered[key] = True
             scope.bindings[clause.binding] = Binding(clause.effect, op)
             scope.types[clause.binding] = UNKNOWN
+            self.rebind(scope, clause.binding)
             self.check_block(clause.body, scope, effects)
         missing = []
         for name in stmt.effects:
@@ -447,6 +459,7 @@ class Checker(object):
         elif isinstance(expr, ast.StrLiteral):
             return "str"
         elif isinstance(expr, ast.Name):
+            self.require_bound(scope, expr.id, expr.lineno)
             return scope.types.get(expr.id, UNKNOWN)
         elif isinstance(expr, ast.BinOp):
             left = self.type_of(expr.left, scope, effects)
@@ -563,7 +576,22 @@ class Checker(object):
                     lineno, "argument %d of %s must be %s, not %s" %
                     (i + 1, what, param_types[i], actual))
 
+    def rebind(self, scope, name):
+        if name in scope.unbound:
+            del scope.unbound[name]
+
+    def require_bound(self, scope, name, lineno):
+        """Python 3 deletes the name of an except clause when the clause
+        ends, and exec_try does the same. A read after the clause in
+        source order is an error until an assignment or another clause
+        binds the name again, whether or not the clause would run."""
+        if name in scope.unbound:
+            raise InvalidProgram(
+                lineno, "name '%s' is unbound after the except clause "
+                "that bound it" % name)
+
     def require_binding(self, scope, name, lineno):
+        self.require_bound(scope, name, lineno)
         if name not in scope.bindings:
             raise InvalidProgram(
                 lineno, "'%s' is not an except binding or a handler "
@@ -571,6 +599,7 @@ class Checker(object):
         return scope.bindings[name]
 
     def require_instance(self, scope, name, lineno):
+        self.require_bound(scope, name, lineno)
         type_name = scope.types.get(name, UNKNOWN)
         if type_name not in self.handlers:
             raise InvalidProgram(
