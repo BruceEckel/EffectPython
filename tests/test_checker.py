@@ -672,3 +672,15 @@ def test_accepts_a_name_bound_again_after_its_clause(body):
 ], ids=['one-clause', 'every-clause'])
 def test_a_clause_ending_in_return_leaves_its_name_bound(body):
     check_exceptions(body)
+
+def test_a_clause_ending_in_return_leaves_its_name_typed():
+    body = ('def show(text: str) -> int:\n    print(text)\n'
+            '    return 0\n'
+            'def main() -> int / []:\n    e = 7\n'
+            '    try:\n        raise NotFound("a")\n'
+            '    except NotFound as e:\n        return 1\n'
+            '    return show(e)\n')
+    with pytest.raises(InvalidProgram) as info:
+        check_exceptions(body)
+    assert info.value.msg == (
+        'line 27: argument 1 of show() must be str, not int')

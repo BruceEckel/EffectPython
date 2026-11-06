@@ -280,7 +280,7 @@ until an assignment or another clause binds the name again.
 The rule follows source order, as the checker's typing does, and does not ask whether the clause would run:
 a name assigned before the `try` is rejected too, since the clause deletes it whenever the exception is raised.
 A clause whose last statement is a `return` is the exception:
-no code after the `try` runs once that clause has, so the name keeps the state it had before the clause.
+no code after the `try` runs once that clause has, so the name keeps the type and the state it had before the clause.
 A clause that ends in `raise` still deletes the name for the checker, since an enclosing `try` in the same function can catch the exception and continue.
 A read that precedes the clause in the source but follows it in time, as in a loop body, stays a runtime error.
 Clauses are tried in order, and an exception no clause matches propagates.
@@ -780,7 +780,9 @@ EffectPython/
         which keeps it unbound when an earlier clause deleted it.
         The test is the clause's last top-level statement, so a `return` inside a trailing `if` does not qualify,
         and neither does a `raise`, whose exception an enclosing `try` in the same function may catch.
-        The name's type is still dropped after the clause, so the later read has unknown type.
+        The name's type was at first still dropped after the clause, so the later read had unknown type.
+        `check_named_clause`, split out of `check_try`, now restores the type the name had before the clause,
+        so an `int` assigned before the `try` is an `int` again after it and fails an argument check against `str`.
     *   *Acceptance test:*
         *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
         *   `rejected_uncaught.epy`: a `main()` that calls a function declaring `/ [NotFound]` without catching it is rejected by the signature check and exits 1, so no checked program reaches the runtime's `error: NotFound: settings.json` path; a unit test covers that message through `RaisedException` directly.

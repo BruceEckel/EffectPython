@@ -37,7 +37,8 @@ the checker rejects a read of it after the clause until something
 binds it again (require_bound). The walk follows source order, as
 the typing does, and does not ask whether the clause would run. A
 clause that ends in a return is the exception: the code after the
-try cannot follow it, so the name keeps the state it had before.
+try cannot follow it, so the name keeps the type and the state it
+had before.
 
 The checker dispatches by isinstance over the ast_nodes classes, as the
 evaluator does, so adding a node means adding a branch in both.
@@ -359,25 +360,38 @@ class Checker(object):
                     clause.lineno,
                     "'%s' is not an exception class" % clause.name)
             caught[clause.name] = True
-            binding = clause.binding
-            if binding is None:
+            if clause.binding is None:
                 self.check_block(clause.body, scope, effects)
             else:
-                if binding in scope.bindings:
-                    del scope.bindings[binding]
-                was_unbound = binding in scope.unbound
-                scope.types[binding] = clause.name
-                self.rebind(scope, binding)
-                self.check_block(clause.body, scope, effects)
-                if binding in scope.types:
-                    del scope.types[binding]
-                if was_unbound or not ends_in_return(clause.body):
-                    scope.unbound[binding] = True
+                self.check_named_clause(clause, scope, effects)
         for name in body_effects.names:
             if name in self.exceptions and (name in caught
                                             or EXCEPTION in caught):
                 continue
             effects.add(name, body_effects.linenos[name])
+
+    def check_named_clause(self, clause, scope, effects):
+        """Check a clause with its name typed as the class it catches.
+        Afterwards the name is unbound, as Python 3 leaves it. A
+        clause that ends in a return is the exception: no code after
+        the try follows it, so the name gets back the type and the
+        state it had before the clause."""
+        name = clause.binding
+        assert name is not None
+        if name in scope.bindings:
+            del scope.bindings[name]
+        was_unbound = name in scope.unbound
+        old_type = scope.types.get(name, None)
+        scope.types[name] = clause.name
+        self.rebind(scope, name)
+        self.check_block(clause.body, scope, effects)
+        returns = ends_in_return(clause.body)
+        if returns and old_type is not None:
+            scope.types[name] = old_type
+        elif name in scope.types:
+            del scope.types[name]
+        if was_unbound or not returns:
+            scope.unbound[name] = True
 
     def check_handle(self, stmt, scope, effects):
         """Sort the arguments into effects, which need clauses, and
@@ -595,7 +609,8 @@ class Checker(object):
         ends, and exec_try does the same. A read after the clause in
         source order is an error until an assignment or another clause
         binds the name again, whether or not the clause would run.
-        check_try leaves out a clause that ends in a return."""
+        check_named_clause leaves out a clause that ends in a
+        return."""
         if name in scope.unbound:
             raise InvalidProgram(
                 lineno, "name '%s' is unbound after the except clause "
