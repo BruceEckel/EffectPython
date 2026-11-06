@@ -25,14 +25,7 @@ from support import PROGRAMS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPYTHON = os.path.expanduser(
     '~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython')
-NOT_YET = {
-    'throw_caught.epy': 'Milestone 7 runtime',
-    'throw_through_body.epy': 'Milestone 7 runtime',
-    'throw_then_statements.epy': 'Milestone 7 runtime',
-    'throw_in_method.epy': 'Milestone 7 runtime',
-    'many_throws.epy': 'Milestone 7 runtime',
-    'throw_twice.epy': 'Milestone 7 runtime',
-}
+NOT_YET = {}
 
 @pytest.fixture(scope='session')
 def binary(tmp_path_factory):

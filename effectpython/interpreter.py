@@ -34,7 +34,7 @@ of a fulfilled effect, dispatch() calls the method as a function with
 the instance as self and the payload's arguments, and switches into
 the body with the returned value along the tail-resume path, so a
 method cannot resume the body twice, and it abandons the body by
-raising an exception.
+raising an exception the operation's row does not name.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -50,6 +50,15 @@ does not resume. A Try inside the body sits on the body's stack
 slice, which the stacklet keeps across a perform, so it catches what
 the body raises after a resume. It does not catch what a clause or
 method raises, because that exception travels on the handler side.
+
+eff.throw(exc) (plan 1.7) is the second way to switch into the body:
+switch_into() stores the exception in the frame instead of a value,
+and perform() raises it when the switch returns, so the exception
+starts on the body's stack at the perform site and a Try around the
+perform catches it. A handler method whose operation declares the
+class delivers its exception the same way (answer_with_method). A
+tail eff.throw(...) switches from the dispatch loop as a tail resume
+does, and any other eff.throw(...) nests through throw().
 
 rstacklet runs only translated, so the import below is guarded: the
 unit tests import this module without RPython on the path and never
@@ -186,6 +195,7 @@ class HandlerFrame(object):
         self.status = STATUS_RUNNING
         self.pending_payload = None  # W_EffectPayload set by perform()
         self.resume_value = None     # W_Root set by eff.resume()
+        self.resume_exception = None # W_Exception set by eff.throw()
         self.pending_error = None    # EffectError the body raised
         self.pending_return = None   # ReturnSignal the body raised
         self.saved_frames = []       # hidden while a clause runs
@@ -303,10 +313,7 @@ class Interpreter(object):
             self.exec_handle(stmt, env)
         elif isinstance(stmt, ast.Raise):
             w_value = self.eval_expr(stmt.value, env)
-            if not isinstance(w_value, W_Exception):
-                raise EffectPythonRuntimeError(
-                    "raise needs an exception, not %s" % type_name(w_value))
-            raise RaisedException(w_value)
+            raise RaisedException(exception_value(w_value, "raise"))
         elif isinstance(stmt, ast.Try):
             self.exec_try(stmt, env)
         elif isinstance(stmt, ast.Pass):
@@ -389,12 +396,10 @@ class Interpreter(object):
             payload = frame.pending_payload
             if payload.effect_name in frame.instances_w:
                 w_eff = W_EffBinding(payload, frame, h)
-                w_value = self.call_method(
-                    frame.instances_w[payload.effect_name], payload)
-                h = self.switch_into(w_eff, w_value)
+                h = self.answer_with_method(w_eff, payload)
                 continue
             clause = frame.clause_for(payload)
-            tail = tail_resume(clause)
+            tail = tail_switch(clause)
             w_eff = W_EffBinding(payload, frame, h)
             env = frame.env
             name = clause.binding
@@ -409,7 +414,7 @@ class Interpreter(object):
                 for i in range(count):
                     self.exec_stmt(clause.body[i], env)
                 if tail is not None:
-                    w_value = self.eval_expr(tail.value, env)
+                    w_value = self.eval_expr(switch_value(tail), env)
             finally:
                 if had_name:
                     env.vars[name] = w_old
@@ -417,7 +422,11 @@ class Interpreter(object):
                     del env.vars[name]
             if tail is None:
                 return
-            h = self.switch_into(w_eff, w_value)
+            if isinstance(tail, ast.Throw):
+                h = self.switch_into(w_eff, None,
+                                     exception_value(w_value, "throw"))
+            else:
+                h = self.switch_into(w_eff, w_value, None)
         error = frame.pending_error
         if error is not None:
             raise error
@@ -425,10 +434,28 @@ class Interpreter(object):
         if signal is not None:
             raise signal
 
+    def answer_with_method(self, w_eff, payload):
+        """A handler method's return value resumes the body, and an
+        exception it raises whose class its operation declares is
+        thrown into the body (plan 1.7); any other exception abandons
+        the body by propagating out of dispatch (plan 1.6)."""
+        frame = w_eff.frame
+        try:
+            w_value = self.call_method(
+                frame.instances_w[payload.effect_name], payload)
+        except RaisedException as e:
+            op = self.operations[payload.effect_name + "." + payload.op_name]
+            if e.w_exception.class_name not in op.row:
+                raise
+            return self.switch_into(w_eff, None, e.w_exception)
+        return self.switch_into(w_eff, w_value, None)
+
     def perform(self, effect_name, op_name, args_w):
         """Step 2: hide the handling frame and everything above it,
         mail the payload, and switch to the handler side. When a
-        resume() switches back, restore the frames and return its value."""
+        resume() switches back, restore the frames and return its
+        value; when a throw() does, raise its exception here, at the
+        perform site (plan 1.7)."""
         i = len(self.handler_stack) - 1
         while i >= 0 and not self.handler_stack[i].handles(effect_name):
             i -= 1
@@ -443,14 +470,19 @@ class Interpreter(object):
         frame.h_handler = self.sthread.switch(frame.h_handler)
         self.handler_stack.extend(frame.saved_frames)
         frame.saved_frames = []
+        w_exception = frame.resume_exception
+        frame.resume_exception = None
+        if w_exception is not None:
+            raise RaisedException(w_exception)
         w_value = frame.resume_value
         frame.resume_value = None
         return w_value
 
-    def switch_into(self, w_eff, w_value):
-        """Step 4: consume the one-shot handle and switch into the body.
-        Returns the handle that comes back when the body performs again
-        or finishes."""
+    def switch_into(self, w_eff, w_value, w_exception):
+        """Step 4: consume the one-shot handle and switch into the body
+        with a value for the perform to return or an exception for it
+        to raise. Returns the handle that comes back when the body
+        performs again or finishes."""
         if self.sthread.is_empty_handle(w_eff.h_body):
             raise OneShotContinuationError(
                 "Cannot resume a suspended body more than once")
@@ -458,13 +490,21 @@ class Interpreter(object):
         h = w_eff.h_body
         w_eff.h_body = self.sthread.get_null_handle()
         frame.resume_value = w_value
+        frame.resume_exception = w_exception
         frame.status = STATUS_RUNNING
         return self.sthread.switch(h)
 
     def resume(self, w_eff, w_value):
         """eff.resume(...) anywhere but a clause's tail: switch into the
         body and dispatch what it does next, nested in this call."""
-        h = self.switch_into(w_eff, w_value)
+        h = self.switch_into(w_eff, w_value, None)
+        self.dispatch(w_eff.frame, h)
+        return w_None
+
+    def throw(self, w_eff, w_exception):
+        """eff.throw(...) anywhere but a clause's tail: as resume(),
+        with the perform raising instead of returning."""
+        h = self.switch_into(w_eff, None, w_exception)
         self.dispatch(w_eff.frame, h)
         return w_None
 
@@ -550,6 +590,10 @@ class Interpreter(object):
         elif isinstance(expr, ast.Resume):
             w_value = self.eval_expr(expr.value, env)
             return self.resume(self.binding(env, expr.target), w_value)
+        elif isinstance(expr, ast.Throw):
+            w_value = self.eval_expr(expr.value, env)
+            return self.throw(self.binding(env, expr.target),
+                              exception_value(w_value, "throw"))
         else:
             raise EffectPythonRuntimeError("unknown expression node")
 
@@ -629,9 +673,10 @@ class Interpreter(object):
             "unsupported operand types for %s: %s and %s" %
             (op, type_name(w_left), type_name(w_right)))
 
-def tail_resume(clause):
-    """The Resume node when the clause's last statement is
-    eff.resume(...) on the clause's own binding, else None."""
+def tail_switch(clause):
+    """The Resume or Throw node when the clause's last statement is
+    eff.resume(...) or eff.throw(...) on the clause's own binding,
+    else None."""
     if len(clause.body) == 0:
         return None
     last = clause.body[len(clause.body) - 1]
@@ -639,7 +684,24 @@ def tail_resume(clause):
         expr = last.expr
         if isinstance(expr, ast.Resume) and expr.target == clause.binding:
             return expr
+        if isinstance(expr, ast.Throw) and expr.target == clause.binding:
+            return expr
     return None
+
+def switch_value(expr):
+    """The argument expression of a Resume or Throw node."""
+    if isinstance(expr, ast.Resume):
+        return expr.value
+    assert isinstance(expr, ast.Throw)
+    return expr.value
+
+def exception_value(w_value, what):
+    """The W_Exception a raise or a throw delivers; the checker makes
+    any other value unreachable."""
+    if not isinstance(w_value, W_Exception):
+        raise EffectPythonRuntimeError(
+            "%s needs an exception, not %s" % (what, type_name(w_value)))
+    return w_value
 
 def clause_catching(stmt, w_exception):
     """The first clause of a Try that names the exception's class or

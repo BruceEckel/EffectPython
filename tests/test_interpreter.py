@@ -7,7 +7,7 @@ import pytest
 
 from effectpython import ast_nodes as ast
 from effectpython.errors import EffectPythonRuntimeError, RaisedException
-from effectpython.interpreter import Interpreter, Output
+from effectpython.interpreter import Interpreter, Output, tail_switch
 from effectpython.model import W_Int, W_Str, W_None, w_None
 from effectpython.parser import parse
 from effectpython.samples import build_fib_module
@@ -327,3 +327,31 @@ def test_exception_runtime_errors(body, msg):
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_main_body(body)
     assert info.value.msg == msg
+
+# --- Throwing into the body (Milestone 7) ------------------------------------
+
+CLAUSE_PROGRAM = (
+    'class Ask(Effect):\n'
+    '    def value() -> int / [Refused]: ...\n'
+    'class Refused(Exception): ...\n'
+    'def main() -> int / []:\n'
+    '    try:\n'
+    '        with handle(Ask):\n'
+    '            print(perform(Ask.value()))\n'
+    '    except Ask.value as eff:\n'
+    '%s'
+    '    return 0\n')
+
+@pytest.mark.parametrize('clause_body, expected', [
+    ('        eff.throw(Refused())\n', ast.Throw),
+    ('        eff.resume(1)\n', ast.Resume),
+    ('        print(1)\n        eff.throw(Refused())\n', ast.Throw),
+    ('        x = eff.throw(Refused())\n', type(None)),
+    ('        eff.throw(Refused())\n        print(1)\n', type(None)),
+    ('        other.throw(Refused())\n', type(None)),
+], ids=['throw', 'resume', 'throw after a statement', 'assigned',
+        'statement after', 'another binding'])
+def test_tail_switch_finds_a_final_throw_or_resume(clause_body, expected):
+    handle = parse(CLAUSE_PROGRAM % clause_body).functions[0].body[0]
+    clause = handle.clauses[0]
+    assert type(tail_switch(clause)) is expected

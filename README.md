@@ -154,6 +154,36 @@ a handler class reports a failure this way, and the method's row carries the cla
 A `try` inside the body catches an exception the body raises, including one raised after a `perform` resumes.
 It does not catch an exception a handler raises, since the handler runs outside the body.
 
+A handler that leaves the recovery to the performer throws the exception instead:
+
+```python
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+
+def load(path: str) -> str / [FileIO]:
+    try:
+        return perform(FileIO.read(path))
+    except NotFound as e:
+        print("missing:", e)
+        return "defaults"
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            print(load("settings.json"))
+    except FileIO.read as eff:
+        eff.throw(NotFound(eff.path))
+    return 0
+```
+
+This is `tests/programs/throw_caught.epy` without its import and its `NotFound` class, and it prints `missing: settings.json` and then `defaults`.
+`eff.throw(exc)` resumes the body with the suspended `perform` raising `exc` where `eff.resume(value)` makes it return `value`,
+as `gen.throw()` and `gen.send()` do for a Python generator.
+The operation's row names the classes a handler may throw, so `perform(FileIO.read(path))` adds `NotFound` to the performer's effects,
+and `load` catches it or declares it.
+A handler class method raises a class its operation declares to the same effect;
+any other exception a method raises abandons the body as before.
+
 ## Running it
 
 The host is PyPy 2 (`pypy2`) with the RPython source tree checked out beside it;

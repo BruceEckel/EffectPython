@@ -642,6 +642,7 @@ class HandlerFrame(object):
         self.status = STATUS_RUNNING  # RUNNING | SUSPENDED | COMPLETED
         self.pending_payload = None   # W_EffectPayload set by perform()
         self.resume_value = None      # W_Root set by eff.resume(val); perform() clears it when it returns the value
+        self.resume_exception = None  # W_Exception set by eff.throw(exc); perform() clears it and raises it (1.7)
         self.pending_error = None     # EffectError the body raised, re-raised on the handler side
         self.pending_return = None    # ReturnSignal from a return statement in the body, re-raised the same way
         self.saved_frames = []        # list[HandlerFrame]: this frame and the inner frames, hidden while a clause runs
@@ -715,35 +716,38 @@ sequenceDiagram
         which is either `new()` in step 1 or `switch()` inside `switch_into` (step 4).
         The assignment stores the fresh handle of whichever side resumes the body.
     *   When the switch returns, `handler_stack.extend(frame.saved_frames)`, reset `saved_frames` to `[]`,
-        and return `frame.resume_value`, clearing the field.
+        raise a `RaisedException` for `frame.resume_exception` if it is set (1.7), and otherwise return `frame.resume_value`, clearing the field.
 3.  **Dispatching the Handler Clause or Method (`Interpreter.dispatch(frame, h)`), a loop:**
     *   While `h` is not empty, the body is suspended and `frame.pending_payload` holds the performed operation.
     *   If the payload's effect is a key of `frame.instances_w`, a handler method answers it (1.5):
         create `eff = W_EffBinding(payload, frame, h)`, call the instance's method for the operation through `call_function`
         with the instance as `self` ahead of `payload.args_w`, which gives the method fresh locals,
-        then `h = switch_into(eff, value)` (step 4) with the returned value and return to the top of the loop.
-        A method therefore resumes the body once, along the same path as a tail resume, and cannot abandon it;
+        then `h = switch_into(eff, value, None)` (step 4) with the returned value and return to the top of the loop (`answer_with_method`).
+        A `RaisedException` from the method whose class the operation's row names goes into the body instead, `h = switch_into(eff, None, exception)` (1.7);
+        any other exception propagates out of `dispatch`.
+        A method therefore resumes the body once, along the same path as a tail resume, and abandons it by raising an exception alone;
         effects the method performs resolve to outer handlers through the hiding of step 2, as a clause's do.
     *   Otherwise find the clause with `frame.clause_for(payload)` and create `eff = W_EffBinding(payload, frame, h)`.
     *   Bind the clause's name in `frame.env`, the environment of the function containing the `handle` statement,
         the same scope Python gives `except ... as e`, remembering any earlier value of that name.
         Run the clause's statements, and afterwards, in a `finally`, restore the earlier value or delete the name.
         Nested clauses (step 4) share this environment, so the restore is what keeps an outer clause's `eff` intact.
-    *   If the clause's last statement is `eff.resume(<expr>)` on its own binding (`tail_resume`),
+    *   If the clause's last statement is `eff.resume(<expr>)` or `eff.throw(<expr>)` on its own binding (`tail_switch`),
         run every statement but that one, evaluate `<expr>` with the binding still in scope,
-        and after the `finally` call `h = switch_into(eff, value)` (step 4) and return to the top of the loop.
+        and after the `finally` call `h = switch_into(eff, value, None)` or `h = switch_into(eff, None, exception)` (step 4) and return to the top of the loop.
         Otherwise return once the clause finishes.
     *   When `h` is empty, the body finished:
         re-raise `frame.pending_error` if it is set, then `frame.pending_return` if it is set, and otherwise return.
         `dispatch` returns no value.
 4.  **Resuming with `eff.resume(val_w)` (`Interpreter.switch_into` and `Interpreter.resume`):**
-    *   `switch_into(eff, val_w)`: if `eff.h_body` is empty (`is_empty_handle`, which for the shadowstack backend is the null-handle test),
+    *   `switch_into(eff, val_w, exc_w)`, one of the two `None`: if `eff.h_body` is empty (`is_empty_handle`, which for the shadowstack backend is the null-handle test),
         the binding was already consumed: raise a runtime `OneShotContinuationError("Cannot resume a suspended body more than once")`.
-        Otherwise take `h = eff.h_body`, set `eff.h_body` to the null handle, set `frame.resume_value = val_w` and `frame.status = STATUS_RUNNING`,
+        Otherwise take `h = eff.h_body`, set `eff.h_body` to the null handle, set `frame.resume_value = val_w`, `frame.resume_exception = exc_w`, and `frame.status = STATUS_RUNNING`,
         and return `sthread.switch(h)`, which swaps the C stack back to the paused `perform()` site and returns when the body performs again or finishes.
-        Inside the body, `perform` restores the hidden frames and returns `frame.resume_value` as the result of `perform(...)`.
+        Inside the body, `perform` restores the hidden frames and returns `frame.resume_value` as the result of `perform(...)`, or raises `frame.resume_exception` there (1.7).
     *   `resume(eff, val_w)`, for an `eff.resume(...)` anywhere but a clause's tail:
-        `h = switch_into(eff, val_w)`, then `dispatch(frame, h)`, then return `W_None`.
+        `h = switch_into(eff, val_w, None)`, then `dispatch(frame, h)`, then return `W_None`;
+        `throw(eff, exc_w)` is the same with `switch_into(eff, None, exc_w)` (1.7).
         The clause for the body's next `perform` therefore runs nested inside this `resume()` call,
         and the body's exception or `return` surfaces here, so the statements after the `resume()` do not run.
         Control returns to the clause only when the body finishes or a nested clause abandons it.
@@ -932,6 +936,15 @@ EffectPython/
         `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
         The six accepted programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime follows;
         `rejected_undeclared_throw.epy` passes through the translated binary from the start.
+    *   *Done 2026-11-06.*
+        `HandlerFrame` has `resume_exception`, `switch_into` takes a value and an exception with one of them `None`,
+        and `perform` raises a `RaisedException` for the exception after the switch returns, so the paths of 1.6 carry it from the perform site.
+        `dispatch` finds a tail `eff.throw(...)` with `tail_switch`, which replaced `tail_resume`, and switches with the exception;
+        `throw()` beside `resume()` runs the nested form;
+        `answer_with_method` calls a handler method under a `try` for `RaisedException` and throws an exception the operation's row names into the body.
+        No other part of the runtime changed.
+        The six programs passed through the translated binary on the first run, with the output derived by hand when they were written,
+        and `tests/test_interpreter.py` covers `tail_switch` untranslated.
     *   Add the operation row and the `Throw` node, the Pass 1 and Pass 2 checks of 1.7, `resume_exception` on `HandlerFrame`,
         the tail and nested forms of `eff.throw()`, and the delivery of a handler method's declared exception.
     *   Order of work, as in Milestones 5 and 6: parser with tests, checker with tests, then the runtime,
