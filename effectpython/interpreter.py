@@ -77,8 +77,9 @@ makes the checker reject an exception nobody catches. They stay
 because the unit tests
 build modules by hand and run them without the checker. The cases the
 checker does not
-see remain runtime-only: a variable that was never assigned (the checker
-types an unbound name as UNKNOWN), an operator applied to operands of
+see remain runtime-only: a variable that was never assigned or that an
+except clause deleted (the checker types an unbound name as UNKNOWN),
+an operator applied to operands of
 the wrong types (the checker infers types only as far as argument checks
 need), and integer division or modulo by zero.
 """
@@ -315,9 +316,12 @@ class Interpreter(object):
     def exec_try(self, stmt, env):
         """Run the suite; a RaisedException goes to the first clause
         that names its class or Exception, with the clause's name bound
-        to the exception for the clause's duration, as dispatch() binds
-        eff. Without a matching clause it propagates. A ReturnSignal
-        and a runtime error pass through (plan 1.6)."""
+        to the exception. The name is deleted after the clause, as
+        Python 3 deletes it, so a value it held before the try does
+        not come back; dispatch() restores eff instead. A nested
+        clause that binds the same name has deleted it by then.
+        Without a matching clause the exception propagates. A
+        ReturnSignal and a runtime error pass through (plan 1.6)."""
         try:
             self.exec_block(stmt.body, env)
             return
@@ -331,15 +335,11 @@ class Interpreter(object):
         if name is None:
             self.exec_block(clause.body, env)
             return
-        had_name = name in env.vars
-        w_old = env.vars.get(name, None)
         env.define(name, w_exception)
         try:
             self.exec_block(clause.body, env)
         finally:
-            if had_name:
-                env.vars[name] = w_old
-            else:
+            if name in env.vars:
                 del env.vars[name]
 
     # --- effects (plan 3.4) --------------------------------------------------

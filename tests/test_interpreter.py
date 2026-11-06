@@ -234,26 +234,46 @@ def test_exception_without_message_prints_empty_message():
         '    return 0\n')
     assert lines == ["empty:  end"]
 
-def test_as_name_is_restored_after_the_clause():
+@pytest.mark.parametrize('body', [
+    '    try:\n'
+    '        raise NotFound("a")\n'
+    '    except NotFound as e:\n'
+    '        print(e)\n'
+    '    print(e)\n'
+    '    return 0\n',
+    '    e = 7\n'
+    '    try:\n'
+    '        raise NotFound("a")\n'
+    '    except NotFound as e:\n'
+    '        print(e)\n'
+    '    return e\n',
+    '    try:\n'
+    '        raise NotFound("a")\n'
+    '    except NotFound as e:\n'
+    '        try:\n'
+    '            raise NotFound("b")\n'
+    '        except NotFound as e:\n'
+    '            print(e)\n'
+    '        print(e)\n'
+    '    return 0\n',
+], ids=['fresh name', 'name assigned before the try',
+        'name a nested clause bound'])
+def test_as_name_is_unbound_after_the_clause(body):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(body)
+    assert info.value.msg == "name 'e' is not defined"
+
+def test_nested_clauses_may_bind_the_same_name():
     exit_code, lines = run_main_body(
-        '    e = 7\n'
         '    try:\n'
         '        raise NotFound("a")\n'
         '    except NotFound as e:\n'
-        '        print(e)\n'
-        '    return e\n')
-    assert (exit_code, lines) == (7, ["a"])
-
-def test_as_name_is_unbound_after_the_clause():
-    with pytest.raises(EffectPythonRuntimeError) as info:
-        run_main_body(
-            '    try:\n'
-            '        raise NotFound("a")\n'
-            '    except NotFound as e:\n'
-            '        print(e)\n'
-            '    print(e)\n'
-            '    return 0\n')
-    assert info.value.msg == "name 'e' is not defined"
+        '        try:\n'
+        '            raise NotFound("b")\n'
+        '        except NotFound as e:\n'
+        '            print(e)\n'
+        '    return 0\n')
+    assert (exit_code, lines) == (0, ["b"])
 
 @pytest.mark.parametrize('body, expected_exit, printed', [
     ('    try:\n'

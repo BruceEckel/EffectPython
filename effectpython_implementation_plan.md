@@ -332,8 +332,10 @@ a new `EffectError` subclass whose `msg` is `Name: message` or `Name` alone.
 An uncaught exception would print `error: NotFound: settings.json` and exit 1,
 but the checker's row rules make that path unreachable from a checked program, like the branches the interpreter's docstring lists.
 A `Try` statement runs its suite under an RPython `try` that catches `RaisedException` alone,
-finds the first clause whose class matches, binds the name in the function's environment the way a clause's `eff` is bound and restored (3.4, step 3),
-and runs the clause's suite.
+finds the first clause whose class matches, binds the name in the function's environment,
+runs the clause's suite, and deletes the name in a `finally`.
+An `eff` binding is restored to its earlier value (3.4, step 3);
+an `as` name is not, so a variable of that name assigned before the `try` is unbound after the clause, as in Python 3.
 `ReturnSignal` and `EffectPythonRuntimeError` pass through a `Try` untouched.
 
 **Meeting the handlers.**
@@ -735,7 +737,8 @@ EffectPython/
         raises a `RaisedException` for a `Raise`, and runs a `Try` in `exec_try`:
         the suite runs under an RPython `try` that catches `RaisedException` alone,
         `clause_catching` finds the first clause that names the class or `Exception`,
-        and the clause runs with its name bound and then restored, as `dispatch` does for `eff`.
+        and the clause runs with its name bound and then restored, as `dispatch` does for `eff`
+        (changed the same day to delete the name; see the note below).
         The four meetings with the handlers in 1.6 needed no change to `exec_handle`, `dispatch`, or `run_body_callback`.
         The eight programs below pass through the translated binary with the twenty earlier ones,
         and `tests/test_interpreter.py` covers `raise` and `try`/`except` untranslated, including the uncaught message `NotFound: settings.json`.
@@ -745,6 +748,13 @@ EffectPython/
         which covers a constructor call and a name bound by `except <Name> as e`.
         The runtime needed no change, since a `Raise` evaluates its expression to a `W_Exception` either way.
         `raise_again.epy` joins the acceptance programs.
+    *   *`as` name deleted after the clause, 2026-11-06.*
+        `exec_try` first restored a value the name held before the `try`, as `dispatch` does for `eff`,
+        which contradicted 1.6: Python 3 deletes the name.
+        `exec_try` now deletes the name in its `finally`, whatever the name held before.
+        The delete tolerates a missing name, since a nested clause that binds the same name deletes it first.
+        The checker needed no change: `check_try` drops the name's type after the clause, so a later read has unknown type,
+        and the read fails at runtime with "name 'e' is not defined".
     *   *Acceptance test:*
         *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
         *   `rejected_uncaught.epy`: a `main()` that calls a function declaring `/ [NotFound]` without catching it is rejected by the signature check and exits 1, so no checked program reaches the runtime's `error: NotFound: settings.json` path; a unit test covers that message through `RaisedException` directly.
