@@ -16,7 +16,7 @@ declared row, or the function fails with an UnhandledEffectError.
 Pass 3 requires a main() with an empty row.
 
 An exception class sits in the same set as an effect (plan 1.6). A
-raise contributes its class, a try/except removes the classes its
+raise contributes the class of its value, a try/except removes the classes its
 clauses catch from its suite's set and adds whatever the clauses
 perform or raise, and a handler method's row carries its exceptions
 to the function that installs the handler. A row may therefore name
@@ -306,29 +306,26 @@ class Checker(object):
             raise InvalidProgram(stmt.lineno, "unknown statement node")
 
     def check_raise(self, stmt, scope, effects):
-        """The row needs the class a raise contributes, so the value is
-        a constructor call that names it, not a name bound to an
-        exception."""
+        """The row needs the class a raise contributes, so the value's
+        type is a declared exception class: a constructor call, or a
+        name an except clause bound to that class. A name caught as
+        Exception has no class to contribute."""
         value = stmt.value
-        if isinstance(value, ast.Call):
-            if value.func in self.exceptions:
-                self.check_exception_call(value, scope, effects)
-                effects.add(value.func, stmt.lineno)
-                return
-            if value.func == EXCEPTION:
-                raise InvalidProgram(
-                    stmt.lineno, "raise needs a declared exception class, "
-                    "not Exception")
         if isinstance(value, ast.OpCall):
             actual = "%s.%s(...)" % (value.effect, value.op)
+        elif isinstance(value, ast.Call) and value.func == EXCEPTION:
+            actual = EXCEPTION
         else:
             actual = self.type_of(value, scope, effects)
-            if actual in self.exceptions or actual == EXCEPTION:
-                raise InvalidProgram(
-                    stmt.lineno, "raise needs a constructor call of an "
-                    "exception class, not a caught %s" % actual)
-            if actual == UNKNOWN:
-                actual = "a value of unknown type"
+        if actual in self.exceptions:
+            effects.add(actual, stmt.lineno)
+            return
+        if actual == EXCEPTION:
+            raise InvalidProgram(
+                stmt.lineno, "raise needs a declared exception class, "
+                "not Exception")
+        if actual == UNKNOWN:
+            actual = "a value of unknown type"
         raise InvalidProgram(
             stmt.lineno, "raise needs an exception, not %s" % actual)
 

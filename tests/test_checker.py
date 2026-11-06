@@ -418,8 +418,8 @@ def check_exceptions(body):
     check(parse(EXCEPTIONS + body))
 
 @pytest.mark.parametrize('name', [
-    'except_exception.epy', 'raise_caught.epy', 'raise_in_body.epy',
-    'raise_in_clause.epy', 'raise_in_method.epy',
+    'except_exception.epy', 'raise_again.epy', 'raise_caught.epy',
+    'raise_in_body.epy', 'raise_in_clause.epy', 'raise_in_method.epy',
     'raise_in_nested_clause.epy', 'try_around_perform.epy',
 ])
 def test_accepts_the_exception_programs(name):
@@ -467,6 +467,14 @@ def test_an_except_clause_may_omit_the_binding():
 def test_an_exception_may_be_raised_without_a_message():
     check_exceptions('def f() -> int / [NotFound]:\n'
                      '    raise NotFound()\n' + MAIN)
+
+def test_a_clause_may_raise_the_name_it_bound():
+    check_exceptions(FIND +
+                     'def lookup(key: str) -> str / [NotFound]:\n'
+                     '    try:\n'
+                     '        return find(key)\n'
+                     '    except NotFound as e:\n'
+                     '        raise e\n' + MAIN)
 
 def test_a_try_around_handle_catches_a_method_exception():
     check_exceptions('def f() -> str:\n'
@@ -518,6 +526,11 @@ def test_a_try_around_handle_catches_a_method_exception():
      '    return 0\n',
      "line 20: function 'main' raises NotFound (line 21) without "
      "declaring it in its effect row"),
+    (FIND + 'def lookup(key: str) -> str:\n    try:\n'
+     '        return find(key)\n    except NotFound as e:\n'
+     '        raise e\n' + MAIN,
+     "line 20: function 'lookup' raises NotFound (line 24) without "
+     "declaring it in its effect row"),
 ])
 def test_unhandled_exceptions(body, msg):
     with pytest.raises(UnhandledEffectError) as info:
@@ -533,11 +546,10 @@ def test_unhandled_exceptions(body, msg):
     ('def f() -> int:\n    raise Exception("a")\n' + MAIN,
      InvalidProgram,
      'line 19: raise needs a declared exception class, not Exception'),
-    ('def f() -> int / [NotFound]:\n    try:\n        pass\n'
-     '    except NotFound as e:\n        raise e\n    return 0\n' + MAIN,
+    ('def f() -> int:\n    try:\n        pass\n'
+     '    except Exception as e:\n        raise e\n    return 0\n' + MAIN,
      InvalidProgram,
-     'line 22: raise needs a constructor call of an exception class, '
-     'not a caught NotFound'),
+     'line 22: raise needs a declared exception class, not Exception'),
     ('def f() -> int:\n    raise x\n' + MAIN, InvalidProgram,
      'line 19: raise needs an exception, not a value of unknown type'),
     ('def f() -> int / [NotFound]:\n    raise NotFound(1)\n' + MAIN,

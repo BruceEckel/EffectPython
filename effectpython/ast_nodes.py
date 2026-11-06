@@ -216,8 +216,9 @@ class Clause(Node):
         self.body = body        # list of Stmt
 
 class Raise(Stmt):
-    """raise value   (plan 1.6). The checker requires value to be a
-       constructor call of an exception class, such as NotFound(path)."""
+    """raise value   (plan 1.6). The checker requires value's type to
+       be a declared exception class: a constructor call such as
+       NotFound(path), or a name an except clause bound."""
     _attrs_ = ['value']
 
     def __init__(self, value, lineno=0):

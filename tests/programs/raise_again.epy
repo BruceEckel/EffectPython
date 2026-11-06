@@ -1,0 +1,22 @@
+# Milestone 6: a clause that reports what it caught and raises it
+# again with raise e. The name's type is the class the clause names,
+# so load() declares NotFound in its row, and main() catches it.
+
+class NotFound(Exception): ...
+
+def find(path: str) -> str / [NotFound]:
+    raise NotFound(path)
+
+def load(path: str) -> str / [NotFound]:
+    try:
+        return find(path)
+    except NotFound as e:
+        print("load failed:", e)
+        raise e
+
+def main() -> int / []:
+    try:
+        print(load("settings.json"))
+    except NotFound as e:
+        print("missing:", e)
+    return 0

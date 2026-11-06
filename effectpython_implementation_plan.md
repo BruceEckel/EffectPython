@@ -269,7 +269,9 @@ def main() -> int / []:
     return 0
 ```
 
-`raise <expr>` takes a constructor call of an exception class.
+`raise <expr>` takes an expression whose type is a declared exception class:
+a constructor call, or a name that an `except` clause bound to that class,
+so a clause can report a failure and raise it again with `raise e` (added 2026-11-06).
 `try: <suite> except <Name> as <e>: <suite>` catches an exception raised in the suite whose class is `<Name>`,
 or any raised exception when `<Name>` is `Exception`;
 the `as <e>` part is optional, and the name is bound for the clause and unbound afterwards, as Python 3 does.
@@ -305,9 +307,11 @@ since both begin `TRY COLON NEWLINE INDENT` and `with handle(...)` is also an or
 **Checker.**
 Pass 1 collects exception classes beside effects and handler classes, with the same duplicate check,
 and its row validation accepts an exception class where today it accepts an effect alone.
-In Pass 2, a `raise` whose expression is not a constructor call of an exception class is rejected
+In Pass 2, a `raise` whose expression does not have a declared exception class as its type is rejected
 ("raise needs an exception, not int"), as is a constructor call with an argument that is not a `str`
 or with more than one argument.
+A name caught by `except Exception as e` has no class to give the row, so `raise e` there is rejected too
+("raise needs a declared exception class, not Exception"), as is `raise Exception(...)`.
 An `except <Name>` whose name is not an exception class or `Exception` is rejected ("'FileIO' is not an exception class").
 The `as` name has the exception class as its type in the clause's suite.
 A `raise` adds its exception class to the inferred effects, as a `perform` adds its effect,
@@ -718,9 +722,8 @@ EffectPython/
         the mix at the first `except` of the second kind and the missing handle statement at the `try`.
         `checker.py` collects exception classes in Pass 1 and accepts them in rows.
         In Pass 2, `check_raise` and `check_try` apply the rules of 1.6, and the signature check words a missing exception class as "raises".
-        Three rejections go beyond the list below:
-        `raise Exception(...)`, since a row cannot name `Exception`;
-        `raise e` on a caught exception, since the row needs the class that a constructor call names;
+        Two rejections go beyond the list below:
+        `raise Exception(...)`, since a row cannot name `Exception`,
         and a function named like an exception class.
         An unknown name in a row reads "'Nope' is not an effect or an exception class", where it read "unknown effect 'Nope'".
         `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
@@ -736,6 +739,12 @@ EffectPython/
         The four meetings with the handlers in 1.6 needed no change to `exec_handle`, `dispatch`, or `run_body_callback`.
         The eight programs below pass through the translated binary with the twenty earlier ones,
         and `tests/test_interpreter.py` covers `raise` and `try`/`except` untranslated, including the uncaught message `NotFound: settings.json`.
+    *   *`raise e` added 2026-11-06.*
+        The frontend first required a constructor call after `raise`, so a clause could not raise what it caught.
+        `check_raise` now accepts any expression whose type is a declared exception class and adds that class to the inferred effects,
+        which covers a constructor call and a name bound by `except <Name> as e`.
+        The runtime needed no change, since a `Raise` evaluates its expression to a `W_Exception` either way.
+        `raise_again.epy` joins the acceptance programs.
     *   *Acceptance test:*
         *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
         *   `rejected_uncaught.epy`: a `main()` that calls a function declaring `/ [NotFound]` without catching it is rejected by the signature check and exits 1, so no checked program reaches the runtime's `error: NotFound: settings.json` path; a unit test covers that message through `RaisedException` directly.
@@ -745,6 +754,7 @@ EffectPython/
         *   `raise_in_clause.epy`: the same with an inline clause that raises instead of resuming.
         *   `try_around_perform.epy`: a `try`/`except` inside the body spans a `perform`, and an exception raised after the resume is caught inside the body, which then performs again.
         *   `except_exception.epy`: `except Exception as e` catches a `NotFound`, and `print(e)` prints its message.
+        *   `raise_again.epy`: a clause prints what it caught and raises it again with `raise e`, the function declares `NotFound`, and `main()` catches it (added 2026-11-06).
         *   Reject `raise 1` and `raise FileIO.read("a")`, a constructor call with an `int` argument or two arguments, `except FileIO as e`, `except Nope as e`, a `try` that mixes `except FileIO.read as eff` with `except NotFound as e`, a duplicate exception class, a class deriving from a base other than `Effect`, `Handler[...]`, or `Exception`, and `Exception` in a row.
         *   Reject a function that raises `NotFound` without declaring it, a function that calls such a function and neither declares nor catches `NotFound`, and a `with handle(Failing())` whose handler method declares `NotFound` in a function that does neither.
         *   Accept a function whose `try`/`except NotFound` catches what its callee declares, with no `NotFound` in its own row, and `except Exception` as catching every class the suite can raise.
