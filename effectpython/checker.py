@@ -35,7 +35,9 @@ type matches anything.
 The name an except clause binds is deleted when the clause ends, so
 the checker rejects a read of it after the clause until something
 binds it again (require_bound). The walk follows source order, as
-the typing does, and does not ask whether the clause would run.
+the typing does, and does not ask whether the clause would run. A
+clause that ends in a return is the exception: the code after the
+try cannot follow it, so the name keeps the state it had before.
 
 The checker dispatches by isinstance over the ast_nodes classes, as the
 evaluator does, so adding a node means adding a branch in both.
@@ -46,6 +48,12 @@ from effectpython.errors import InvalidProgram, UnhandledEffectError
 UNKNOWN = ""
 FIELD_TYPES = ["int", "str"]
 EXCEPTION = "Exception"
+
+def ends_in_return(stmts):
+    """Whether nothing after the enclosing statement can run once
+    these statements have. A raise does not qualify: an enclosing try
+    in the same function may catch the exception and continue."""
+    return len(stmts) > 0 and isinstance(stmts[-1], ast.Return)
 
 class EffectSet(object):
     """The effects a piece of code may perform and the exception classes
@@ -357,12 +365,14 @@ class Checker(object):
             else:
                 if binding in scope.bindings:
                     del scope.bindings[binding]
+                was_unbound = binding in scope.unbound
                 scope.types[binding] = clause.name
                 self.rebind(scope, binding)
                 self.check_block(clause.body, scope, effects)
                 if binding in scope.types:
                     del scope.types[binding]
-                scope.unbound[binding] = True
+                if was_unbound or not ends_in_return(clause.body):
+                    scope.unbound[binding] = True
         for name in body_effects.names:
             if name in self.exceptions and (name in caught
                                             or EXCEPTION in caught):
@@ -584,7 +594,8 @@ class Checker(object):
         """Python 3 deletes the name of an except clause when the clause
         ends, and exec_try does the same. A read after the clause in
         source order is an error until an assignment or another clause
-        binds the name again, whether or not the clause would run."""
+        binds the name again, whether or not the clause would run.
+        check_try leaves out a clause that ends in a return."""
         if name in scope.unbound:
             raise InvalidProgram(
                 lineno, "name '%s' is unbound after the except clause "

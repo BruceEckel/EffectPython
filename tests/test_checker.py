@@ -610,8 +610,31 @@ CAUGHT = ('    try:\n        raise NotFound("a")\n'
      '    e.resume(1)\n    return 0\n', 23),
     ('def main() -> int / []:\n' + CAUGHT +
      '    print(e.path)\n    return 0\n', 23),
+    ('def main() -> int / []:\n    e = 7\n    try:\n        try:\n'
+     '            raise NotFound("a")\n'
+     '        except NotFound as e:\n            raise e\n'
+     '    except NotFound:\n        print("caught")\n'
+     '    return e\n', 27),
+    ('def main() -> int / []:\n    e = 7\n'
+     '    try:\n        raise NotFound("a")\n'
+     '    except NotFound as e:\n        if 1 == 1:\n'
+     '            return 1\n    return e\n', 25),
+    ('def main() -> int / []:\n' + CAUGHT +
+     '    try:\n        raise NotFound("b")\n'
+     '    except NotFound as e:\n        return 1\n'
+     '    print(e)\n    return 0\n', 27),
+    ('def f() -> int / [NotFound, Denied]:\n    return 0\n'
+     'def main() -> int / []:\n    e = 7\n    try:\n        print(f())\n'
+     '    except NotFound as e:\n        return 1\n'
+     '    except Denied as e:\n        print(e)\n    return e\n', 28),
+    ('def f() -> int / [NotFound, Denied]:\n    return 0\n'
+     'def main() -> int / []:\n    e = 7\n    try:\n        print(f())\n'
+     '    except NotFound as e:\n        print(e)\n'
+     '    except Denied as e:\n        return 1\n    return e\n', 28),
 ], ids=['fresh', 'assigned-before', 'nested', 'raise-declared',
-        'raise-undeclared', 'assignment', 'resume', 'field'])
+        'raise-undeclared', 'assignment', 'resume', 'field',
+        'clause-raises', 'return-in-if', 'deleted-earlier',
+        'other-clause-falls-through', 'earlier-clause-falls-through'])
 def test_rejects_a_read_of_a_name_its_clause_deleted(body, lineno):
     with pytest.raises(InvalidProgram) as info:
         check_exceptions(body)
@@ -635,4 +658,17 @@ def test_rejects_a_read_of_a_name_its_clause_deleted(body, lineno):
     '        print("done")\n    return 0\n',
 ], ids=['assigned-after', 'second-clause', 'later-try', 'nested'])
 def test_accepts_a_name_bound_again_after_its_clause(body):
+    check_exceptions(body)
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    e = 7\n'
+    '    try:\n        raise NotFound("a")\n'
+    '    except NotFound as e:\n        print(e)\n        return 1\n'
+    '    return e\n',
+    'def f() -> int / [NotFound, Denied]:\n    return 0\n'
+    'def main() -> int / []:\n    e = 7\n    try:\n        print(f())\n'
+    '    except NotFound as e:\n        return 1\n'
+    '    except Denied as e:\n        return 2\n    return e\n',
+], ids=['one-clause', 'every-clause'])
+def test_a_clause_ending_in_return_leaves_its_name_bound(body):
     check_exceptions(body)
