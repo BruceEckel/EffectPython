@@ -213,9 +213,9 @@ def test_effect_class_with_operation_stubs():
     module = parse(PLAN_EXAMPLE)
     assert shape(module.effects) == [
         ('EffectDef', 'FileIO', [
-            ('OperationDef', 'read', ['path'], ['str'], 'str'),
+            ('OperationDef', 'read', ['path'], ['str'], 'str', []),
             ('OperationDef', 'write', ['path', 'content'],
-             ['str', 'str'], 'int')])]
+             ['str', 'str'], 'int', [])])]
 
 def test_perform_folds_the_operation_call():
     fn = parse(PLAN_EXAMPLE).functions[0]
@@ -519,3 +519,79 @@ def test_exception_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
     assert info.value.msg == msg
+
+# --- Throwing into the body (Milestone 7) ------------------------------------
+
+THROW_EXAMPLE = '''\
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+    def write(path: str, content: str) -> int / [NotFound, Denied]: ...
+    def close() -> int: ...
+
+class NotFound(Exception): ...
+
+class Denied(Exception): ...
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            print(perform(FileIO.read("settings.json")))
+    except FileIO.read as eff:
+        eff.throw(NotFound(eff.path))
+    except FileIO.write as eff:
+        x = eff.throw(Denied(eff.path))
+    except FileIO.close as eff:
+        eff.resume(0)
+    return 0
+'''
+
+def test_operation_stubs_with_and_without_a_row():
+    module = parse(THROW_EXAMPLE)
+    assert shape(module.effects[0].operations) == [
+        ('OperationDef', 'read', ['path'], ['str'], 'str', ['NotFound']),
+        ('OperationDef', 'write', ['path', 'content'], ['str', 'str'],
+         'int', ['NotFound', 'Denied']),
+        ('OperationDef', 'close', [], [], 'int', [])]
+
+def test_throw_as_a_statement_in_a_clause():
+    clause = parse(THROW_EXAMPLE).functions[0].body[0].clauses[0]
+    assert shape(clause.body) == [
+        ('ExprStmt', ('Throw', 'eff',
+                      ('Call', 'NotFound', [('AttrRead', 'eff', 'path')])))]
+
+def test_throw_as_an_assigned_value():
+    clause = parse(THROW_EXAMPLE).functions[0].body[0].clauses[1]
+    assert shape(clause.body) == [
+        ('Assign', 'x', ('Throw', 'eff',
+                         ('Call', 'Denied', [('AttrRead', 'eff', 'path')])))]
+
+def test_throw_on_an_effect_name_is_a_throw_node():
+    stmt = parse('def main() -> int:\n    FileIO.throw(x)\n'
+                 ).functions[0].body[0]
+    assert shape(stmt) == ('ExprStmt', ('Throw', 'FileIO', ('Name', 'x')))
+
+def test_line_numbers_of_throw_nodes():
+    handle = parse(THROW_EXAMPLE).functions[0].body[0]
+    assert (handle.clauses[0].body[0].expr.lineno,
+            handle.clauses[1].body[0].value.lineno) == (17, 19)
+
+@pytest.mark.parametrize('source, msg', [
+    ('def main() -> int:\n    eff.throw()\n',
+     'line 2, column 9: throw() takes one argument'),
+    ('def main() -> int:\n    eff.throw(1, 2)\n',
+     'line 2, column 9: throw() takes one argument'),
+])
+def test_throw_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('source', [
+    'class FileIO(Effect):\n    def read() -> str / [NotFound,]: ...\n',
+    'class FileIO(Effect):\n    def read() -> str / [NotFound: ...\n',
+])
+def test_malformed_operation_row_is_a_syntax_error(source):
+    with pytest.raises(InvalidSyntax):
+        parse(source)

@@ -1,0 +1,27 @@
+# Milestone 7 stress: ten thousand throws inside one handle block,
+# each caught by the try in the body's loop. The clause ends with
+# eff.throw(...), so dispatch switches into the body from its loop
+# without nesting, as it does for a tail resume (many_performs.epy).
+
+from effectpython import Effect, perform, handle
+
+class Counter(Effect):
+    def tick(n: int) -> int / [Odd]: ...
+
+class Odd(Exception): ...
+
+def main() -> int / []:
+    try:
+        with handle(Counter):
+            i = 0
+            caught = 0
+            while i < 10000:
+                try:
+                    caught = caught + perform(Counter.tick(i))
+                except Odd:
+                    caught = caught + 1
+                i = i + 1
+            print(caught)
+    except Counter.tick as eff:
+        eff.throw(Odd())
+    return 0

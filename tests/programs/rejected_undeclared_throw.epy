@@ -1,0 +1,24 @@
+# Milestone 7, rejected: eff.throw() with a class the operation does
+# not declare. FileIO.read declares NotFound alone, so the performer
+# cannot be expected to catch Denied, and the checker rejects the
+# clause before anything runs.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+
+class NotFound(Exception): ...
+
+class Denied(Exception): ...
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            try:
+                print(perform(FileIO.read("settings.json")))
+            except NotFound:
+                print("missing")
+    except FileIO.read as eff:
+        eff.throw(Denied(eff.path))
+    return 0

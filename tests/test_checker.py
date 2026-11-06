@@ -1,6 +1,7 @@
 """Milestone 2 acceptance: the static effect checker (plan 2.2, 4.2),
-from Milestone 5 the handler class rules (plan 1.5), and from
-Milestone 6 the exception rules (plan 1.6).
+from Milestone 5 the handler class rules (plan 1.5), from Milestone 6
+the exception rules (plan 1.6), and from Milestone 7 the throw rules
+(plan 1.7).
 
 Run with:  pypy2 -m pytest
 """
@@ -684,3 +685,131 @@ def test_a_clause_ending_in_return_leaves_its_name_typed():
         check_exceptions(body)
     assert info.value.msg == (
         'line 27: argument 1 of show() must be str, not int')
+
+# --- Throwing into the body (Milestone 7) ------------------------------------
+
+THROWING = '''\
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+
+class Plain(Effect):
+    def get(key: str) -> str: ...
+
+class NotFound(Exception): ...
+
+class Denied(Exception): ...
+
+class Missing(Handler[FileIO]):
+    def read(self, path: str) -> str / [NotFound]:
+        raise NotFound(path)
+
+'''
+
+CATCHING = ('def main() -> int / []:\n    try:\n'
+            '        with handle(FileIO):\n            try:\n'
+            '                print(perform(FileIO.read("a")))\n'
+            '            except NotFound as e:\n                print(e)\n'
+            '    except FileIO.read as eff:\n')
+
+def check_throwing(body):
+    check(parse(THROWING + body))
+
+@pytest.mark.parametrize('name', [
+    'throw_caught.epy', 'throw_through_body.epy',
+    'throw_then_statements.epy', 'throw_in_method.epy',
+    'many_throws.epy', 'throw_twice.epy',
+])
+def test_accepts_the_throw_programs(name):
+    check(parse(read_program(name)))
+
+@pytest.mark.parametrize('body', [
+    CATCHING + '        eff.throw(NotFound(eff.path))\n    return 0\n',
+    'def main() -> int / []:\n    try:\n        try:\n'
+    '            with handle(FileIO):\n'
+    '                print(perform(FileIO.read("a")))\n'
+    '        except FileIO.read as eff:\n'
+    '            eff.throw(NotFound(eff.path))\n'
+    '    except NotFound as e:\n        print(e)\n    return 0\n',
+    'def load(p: str) -> str / [FileIO, NotFound]:\n'
+    '    return perform(FileIO.read(p))\n' + MAIN,
+    'def main() -> int / []:\n    with handle(Missing()):\n'
+    '        try:\n            print(perform(FileIO.read("a")))\n'
+    '        except NotFound as e:\n            print(e)\n'
+    '    return 0\n',
+    CATCHING + '        eff.throw(NotFound(eff.path))\n'
+    '        print("after")\n    return 0\n',
+    CATCHING + '        try:\n            raise NotFound(eff.path)\n'
+    '        except NotFound as e:\n            eff.throw(e)\n'
+    '    return 0\n',
+], ids=['caught-in-body', 'caught-around-handle', 'declared',
+        'method-caught-in-body', 'statement-after', 'caught-name'])
+def test_accepts_a_throw_the_program_accounts_for(body):
+    check_throwing(body)
+
+@pytest.mark.parametrize('row, msg', [
+    ('DBQuery', "the row of Bad.get names exception classes; "
+     "'DBQuery' is an effect"),
+    ('Nope', "the row of Bad.get names exception classes; "
+     "'Nope' is not an exception class"),
+    ('Exception', 'the row of Bad.get names exception classes, '
+     'not Exception'),
+])
+def test_rejected_operation_rows(row, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_exceptions('class Bad(Effect):\n'
+                         '    def get(key: str) -> str / [%s]: ...\n'
+                         % row + MAIN)
+    assert info.value.msg == 'line 19: ' + msg
+
+@pytest.mark.parametrize('body, msg', [
+    (CATCHING + '        eff.throw(1)\n    return 0\n',
+     'line 23: eff.throw() needs an exception, not int'),
+    (CATCHING + '        eff.throw(Exception("x"))\n    return 0\n',
+     'line 23: eff.throw() needs a declared exception class, '
+     'not Exception'),
+    (CATCHING + '        eff.throw(Denied())\n    return 0\n',
+     'line 23: FileIO.read does not declare Denied, so eff.throw() '
+     'cannot deliver it'),
+    ('def main() -> int / []:\n    try:\n        with handle(Plain):\n'
+     '            print(perform(Plain.get("a")))\n'
+     '    except Plain.get as eff:\n        eff.throw(NotFound())\n'
+     '    return 0\n',
+     'line 20: Plain.get does not declare NotFound, so eff.throw() '
+     'cannot deliver it'),
+    (CATCHING + '        x.throw(NotFound())\n    return 0\n',
+     "line 23: 'x' is not an except binding or a handler instance"),
+    (CATCHING + '        try:\n            raise NotFound("a")\n'
+     '        except Exception as e:\n            eff.throw(e)\n'
+     '    return 0\n',
+     'line 26: eff.throw() needs a declared exception class, '
+     'not Exception'),
+], ids=['int', 'exception', 'undeclared', 'no-row', 'not-a-binding',
+        'caught-as-exception'])
+def test_rejected_throws(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_throwing(body)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('body, msg', [
+    ('def load(p: str) -> str / [FileIO]:\n'
+     '    return perform(FileIO.read(p))\n' + MAIN,
+     "line 15: function 'load' raises NotFound (line 16) without "
+     "declaring it in its effect row"),
+    ('def f() -> str:\n    try:\n        with handle(FileIO):\n'
+     '            return perform(FileIO.read("a"))\n'
+     '    except FileIO.read as eff:\n'
+     '        eff.throw(NotFound(eff.path))\n    return ""\n' + MAIN,
+     "line 15: function 'f' raises NotFound (line 18) without "
+     "declaring it in its effect row"),
+], ids=['performer', 'installer'])
+def test_unhandled_throws(body, msg):
+    with pytest.raises(UnhandledEffectError) as info:
+        check_throwing(body)
+    assert info.value.msg == msg
+
+def test_rejects_the_undeclared_throw_program():
+    with pytest.raises(InvalidProgram) as info:
+        check(parse(read_program('rejected_undeclared_throw.epy')))
+    assert info.value.msg == (
+        'line 23: FileIO.read does not declare Denied, so eff.throw() '
+        'cannot deliver it')

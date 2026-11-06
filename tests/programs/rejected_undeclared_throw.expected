@@ -1,0 +1,2 @@
+exit 1
+error: line 23: FileIO.read does not declare Denied, so eff.throw() cannot deliver it

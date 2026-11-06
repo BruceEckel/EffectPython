@@ -373,7 +373,7 @@ The four cases, each an acceptance program of Milestone 6:
     deferred until a program needs it.
     (Designed in 1.7, 2026-11-06.)
 
-### 1.7 Throwing into the Body (designed 2026-11-06, open questions at the end)
+### 1.7 Throwing into the Body (designed 2026-11-06, open questions settled 2026-11-06)
 
 A handler that fails raises an exception (1.6), and that abandons the body.
 The code that performed the operation learns nothing:
@@ -480,7 +480,7 @@ A `throw()` anywhere else in a clause mirrors `resume()`: switch, dispatch neste
 The parser folds `<name>.throw(<expr>)` into a `Throw` node as it folds `<name>.resume(<expr>)` into a `Resume`,
 and `OperationDef` gains the row.
 
-**Open questions.**
+**Open questions (settled 2026-11-06 as the design recommends).**
 
 1.  *Where the declaration lives.*
     The design puts it in the operation's row.
@@ -505,7 +505,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 *   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `/`, `==`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from effectpython import <names>` (accepted and ignored)
-    *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`)
+    *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
     *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <literal>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; Milestone 5, 2026-10-31)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, `pass`, assignment `<name> = <expr>`, expression statements
@@ -517,7 +517,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `raise <expr>`, a `Raise` node (1.6; Milestone 6, 2026-11-06)
     *   `try: <suite> except <Name> [as <name>]: <suite>`, a `Try` node with one `ExceptClause` per clause; one production covers this and the `handle` form above, and the action tells them apart by the clauses (1.6; Milestone 6, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
-*   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, and `<name>.resume(<expr>)`. Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31).
+*   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31).
 
 Two constraints on the lexer, found when translating `experiments/rply_addition.py` (2026-10-28), which confirmed that `rply` 0.7.8 translates with this toolchain:
 
@@ -533,7 +533,8 @@ The static analyzer runs in three passes over the AST before execution:
     *   Allows recursive and mutually recursive functions by seeding the symbol table from explicit annotations before checking function bodies.
 2.  **Pass 2 — Intra-Procedural Effect Verification:**
     *   For each function body, computes the active `inferred_effects: set[str]` of each AST node bottom-up:
-        *   `PerformNode(Effect.op, args)`: produces `{Effect}`, verifies `args` match `Effect.op`'s parameter types, and types the `perform` expression with `Effect.op`'s return type.
+        *   `PerformNode(Effect.op, args)`: produces `{Effect}` plus the classes in `Effect.op`'s row (1.7; Milestone 7, 2026-11-06), verifies `args` match `Effect.op`'s parameter types, and types the `perform` expression with `Effect.op`'s return type.
+        *   `ThrowNode(binding, expr)`: produces nothing; requires `binding` to be a clause binding and `expr`'s type to be an exception class in the binding's operation's row (1.7; Milestone 7, 2026-11-06).
         *   `CallNode(callee, args)`: looks up `callee` in the function table and unions `callee.declared_effect_row` into the current scope's `inferred_effects`.
         *   `HandleNode(handled_effects, body, clauses)`:
             1. Verifies that for every `E` in `handled_effects`, `clauses` provide an `except E.op as eff:` clause for **every** operation declared on `E` (exhaustiveness check).
@@ -919,7 +920,18 @@ EffectPython/
         *   Reject a function that raises `NotFound` without declaring it, a function that calls such a function and neither declares nor catches `NotFound`, and a `with handle(Failing())` whose handler method declares `NotFound` in a function that does neither.
         *   Accept a function whose `try`/`except NotFound` catches what its callee declares, with no `NotFound` in its own row, and `except Exception` as catching every class the suite can raise.
 7.  **Milestone 7: Throwing into the Body (1.7)**
-    *   *Designed 2026-11-06; not started.* The open questions of 1.7 come first.
+    *   *Designed 2026-11-06*, and the open questions of 1.7 were settled the same day as the design recommends.
+    *   *Frontend done 2026-11-06.*
+        `ast_nodes.py` gives `OperationDef` a `row` and adds `Throw`;
+        `parser.py` reads the row on an operation stub through the `effect_row` production a function uses,
+        and folds `<name>.throw(<expr>)` into a `Throw` as it folds `resume`.
+        `checker.py` validates operation rows in Pass 1 after the exception classes are collected (`check_operation_row`),
+        adds an operation's classes at each `perform`, checks a `Throw` against its binding's operation,
+        and leaves an operation's classes out of what a handler's method rows add to the installing function.
+        `check_raise` and the `Throw` check share `require_exception`, so the two report the same messages, prefixed `raise` or `eff.throw()`.
+        `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
+        The six accepted programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime follows;
+        `rejected_undeclared_throw.epy` passes through the translated binary from the start.
     *   Add the operation row and the `Throw` node, the Pass 1 and Pass 2 checks of 1.7, `resume_exception` on `HandlerFrame`,
         the tail and nested forms of `eff.throw()`, and the delivery of a handler method's declared exception.
     *   Order of work, as in Milestones 5 and 6: parser with tests, checker with tests, then the runtime,

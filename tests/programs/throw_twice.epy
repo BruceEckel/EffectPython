@@ -1,0 +1,23 @@
+# Milestone 7: a clause that calls eff.throw() twice. The first throw
+# is the binding's one resumption: the body catches the exception and
+# runs to completion. The second finds the one-shot handle consumed
+# and raises OneShotContinuationError, as a second resume does.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value() -> int / [Refused]: ...
+
+class Refused(Exception): ...
+
+def main() -> int / []:
+    try:
+        with handle(Ask):
+            try:
+                print(perform(Ask.value()))
+            except Refused:
+                print("refused")
+    except Ask.value as eff:
+        eff.throw(Refused())
+        eff.throw(Refused())
+    return 0

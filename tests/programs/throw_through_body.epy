@@ -1,0 +1,29 @@
+# Milestone 7: a thrown exception the body does not catch. It ends
+# the body at the perform, so the statement after it does not run,
+# and it surfaces at the handle statement as a raise in the body
+# would (plan 1.6, case 1). The try around that statement catches
+# it, and the print after the try shows the frame was popped.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+
+class NotFound(Exception): ...
+
+def load(path: str) -> str / [FileIO, NotFound]:
+    config = perform(FileIO.read(path))
+    print("never printed")
+    return config
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(FileIO):
+                print(load("settings.json"))
+        except FileIO.read as eff:
+            eff.throw(NotFound(eff.path))
+    except NotFound as e:
+        print("missing:", e)
+    print("after")
+    return 0

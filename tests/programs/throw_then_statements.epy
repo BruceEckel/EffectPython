@@ -1,0 +1,28 @@
+# Milestone 7: a clause with a statement after eff.throw(). The throw
+# is not the clause's tail, so it runs nested, as a non-tail resume
+# does: the body catches the exception and runs to completion inside
+# the throw() call, and the clause's next statement runs after that.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+
+class NotFound(Exception): ...
+
+def load(path: str) -> str / [FileIO]:
+    try:
+        return perform(FileIO.read(path))
+    except NotFound as e:
+        print("missing:", e)
+        return "defaults"
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            print(load("settings.json"))
+            print("body done")
+    except FileIO.read as eff:
+        eff.throw(NotFound(eff.path))
+        print("after the throw")
+    return 0

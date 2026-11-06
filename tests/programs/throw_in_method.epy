@@ -1,0 +1,35 @@
+# Milestone 7: a handler method that raises the exception its
+# operation declares. The exception is thrown into the body, where
+# load() catches it at the perform and returns a default, so the body
+# performs again. The method's row lists NotFound, but that class
+# reaches main() through the body alone, which catches it, so main()
+# keeps its empty row. The field counts the failures across both
+# performs.
+
+from effectpython import Effect, Handler, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+
+class NotFound(Exception): ...
+
+class MissingFiles(Handler[FileIO]):
+    failures: int = 0
+    def read(self, path: str) -> str / [NotFound]:
+        self.failures = self.failures + 1
+        raise NotFound(path)
+
+def load(path: str) -> str / [FileIO]:
+    try:
+        return perform(FileIO.read(path))
+    except NotFound as e:
+        print("missing:", e)
+        return "defaults"
+
+def main() -> int / []:
+    missing = MissingFiles()
+    with handle(missing):
+        print(load("settings.json"))
+        print(load("users.json"))
+    print(missing.failures)
+    return 0

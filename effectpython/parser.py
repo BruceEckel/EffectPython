@@ -13,8 +13,9 @@ reads them as calls and the productions check them: perform(X) must
 wrap an Effect.op(...) call and becomes a Perform node, with handle(...)
 must name handle, and a class must derive from Effect, Handler[...],
 or Exception.
-An attribute call name.resume(x) becomes a Resume node; any other
-Effect.op(...) call is an OpCall. A handle(...) argument is a bare
+An attribute call name.resume(x) becomes a Resume node and
+name.throw(x) a Throw node; any other Effect.op(...) call is an
+OpCall. A handle(...) argument is a bare
 name or a constructor call Name(...); the checker decides whether a
 bare name is an effect or a handler instance (plan 1.5).
 
@@ -305,13 +306,15 @@ def opdefs_more(p):
     ops.items.append(op)
     return ops
 
-@pg.production('opdef : DEF NAME LPAREN params RPAREN ARROW NAME COLON'
-               ' ELLIPSIS NEWLINE')
+@pg.production('opdef : DEF NAME LPAREN params RPAREN ARROW NAME'
+               ' effect_row COLON ELLIPSIS NEWLINE')
 def opdef(p):
     params = p[3]
+    row = p[7]
     assert isinstance(params, _ParamList)
+    assert isinstance(row, _NameList)
     return ast.OperationDef(_text(p[1]), params.names, params.types,
-                            _text(p[6]), _line(p[0]))
+                            _text(p[6]), row.items, _line(p[0]))
 
 @pg.production('funcdef : DEF NAME LPAREN params RPAREN ARROW NAME'
                ' effect_row COLON suite')
@@ -610,6 +613,10 @@ def attr_call(p):
         if len(args.items) != 1:
             raise _error(p[2], "resume() takes one argument")
         return ast.Resume(_text(p[0]), args.items[0], _line(p[0]))
+    if _text(p[2]) == 'throw':
+        if len(args.items) != 1:
+            raise _error(p[2], "throw() takes one argument")
+        return ast.Throw(_text(p[0]), args.items[0], _line(p[0]))
     return ast.OpCall(_text(p[0]), _text(p[2]), args.items, _line(p[0]))
 
 @pg.production('atom : LPAREN expr RPAREN')

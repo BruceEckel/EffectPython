@@ -1,0 +1,27 @@
+# Milestone 7: the program of plan 1.7. The clause throws NotFound
+# into the body instead of raising it, so the suspended perform
+# raises it inside load(), whose try catches it and returns a
+# default. The body is resumed, not abandoned, and main() needs no
+# try for NotFound.
+
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str / [NotFound]: ...
+
+class NotFound(Exception): ...
+
+def load(path: str) -> str / [FileIO]:
+    try:
+        return perform(FileIO.read(path))
+    except NotFound as e:
+        print("missing:", e)
+        return "defaults"
+
+def main() -> int / []:
+    try:
+        with handle(FileIO):
+            print(load("settings.json"))
+    except FileIO.read as eff:
+        eff.throw(NotFound(eff.path))
+    return 0

@@ -23,6 +23,13 @@ to the function that installs the handler. A row may therefore name
 exception classes beside effects, and main()'s empty row makes an
 exception nobody catches a static error.
 
+An operation's row names the exception classes a handler may throw
+into the body with eff.throw() (plan 1.7), so a perform() contributes
+those classes beside its effect, and eff.throw() must name one of
+them. A handler method that raises one of them delivers it to the
+perform, so those classes are left out of what the method's row
+carries to the installing function.
+
 Along the way the checker types expressions far enough to check the
 arguments of perform(), resume(), ordinary calls, and constructor
 calls against the declared parameter types. A type is a type name; a
@@ -142,6 +149,9 @@ class Checker(object):
                     exc.lineno,
                     "exception class '%s' is declared twice" % exc.name)
             self.exceptions[exc.name] = exc
+        for effect in self.module.effects:
+            for op in effect.operations:
+                self.check_operation_row(effect, op)
         for handler in self.module.handlers:
             self.collect_handler(handler)
         for fn in self.module.functions:
@@ -176,10 +186,11 @@ class Checker(object):
                     method.lineno, "method '%s' of handler class '%s' is "
                     "not an operation of %s" %
                     (method.name, handler.name, handler.effect))
-            self.check_signature(handler, method, ops[method.name])
+            op = ops[method.name]
+            self.check_signature(handler, method, op)
             for name in method.effect_row:
                 self.require_row_name(name, method.lineno)
-                if name not in info.rows:
+                if name not in info.rows and name not in op.row:
                     info.rows.append(name)
         for op in ops.keys():
             if op not in methods:
@@ -230,6 +241,24 @@ class Checker(object):
             raise InvalidProgram(
                 method.lineno, "%s must return %s, as %s.%s does" %
                 (what, op.return_type, handler.effect, op.name))
+
+    def check_operation_row(self, effect, op):
+        """An operation performs nothing, so its row names the exception
+        classes a handler may throw into the body, and no effect."""
+        for name in op.row:
+            if name in self.exceptions:
+                continue
+            if name == EXCEPTION:
+                raise InvalidProgram(
+                    op.lineno, "the row of %s.%s names exception classes, "
+                    "not Exception" % (effect.name, op.name))
+            if name in self.effects:
+                what = "an effect"
+            else:
+                what = "not an exception class"
+            raise InvalidProgram(
+                op.lineno, "the row of %s.%s names exception classes; "
+                "'%s' is %s" % (effect.name, op.name, name, what))
 
     def require_effect(self, name, lineno):
         if name not in self.effects:
@@ -323,11 +352,15 @@ class Checker(object):
             raise InvalidProgram(stmt.lineno, "unknown statement node")
 
     def check_raise(self, stmt, scope, effects):
-        """The row needs the class a raise contributes, so the value's
-        type is a declared exception class: a constructor call, or a
-        name an except clause bound to that class. A name caught as
-        Exception has no class to contribute."""
-        value = stmt.value
+        """The row needs the class a raise contributes."""
+        name = self.require_exception(stmt.value, scope, effects,
+                                      "raise", stmt.lineno)
+        effects.add(name, stmt.lineno)
+
+    def require_exception(self, value, scope, effects, what, lineno):
+        """The declared exception class that is value's type: a
+        constructor call, or a name an except clause bound to that
+        class. A name caught as Exception has no class to give."""
         if isinstance(value, ast.OpCall):
             actual = "%s.%s(...)" % (value.effect, value.op)
         elif isinstance(value, ast.Call) and value.func == EXCEPTION:
@@ -335,16 +368,15 @@ class Checker(object):
         else:
             actual = self.type_of(value, scope, effects)
         if actual in self.exceptions:
-            effects.add(actual, stmt.lineno)
-            return
+            return actual
         if actual == EXCEPTION:
             raise InvalidProgram(
-                stmt.lineno, "raise needs a declared exception class, "
-                "not Exception")
+                lineno, "%s needs a declared exception class, not "
+                "Exception" % what)
         if actual == UNKNOWN:
             actual = "a value of unknown type"
         raise InvalidProgram(
-            stmt.lineno, "raise needs an exception, not %s" % actual)
+            lineno, "%s needs an exception, not %s" % (what, actual))
 
     def check_try(self, stmt, scope, effects):
         """The suite's effects, less the classes the clauses catch, plus
@@ -503,6 +535,8 @@ class Checker(object):
                             expr.effect + "." + expr.op, expr.lineno,
                             scope, effects)
             effects.add(expr.effect, expr.lineno)
+            for name in op.row:
+                effects.add(name, expr.lineno)
             return op.return_type
         elif isinstance(expr, ast.OpCall):
             raise InvalidProgram(
@@ -531,6 +565,18 @@ class Checker(object):
                     expr.lineno, "%s.resume() for %s.%s must pass %s, not %s"
                     % (expr.target, binding.effect, binding.op.name,
                        expected, actual))
+            return "None"
+        elif isinstance(expr, ast.Throw):
+            binding = self.require_binding(scope, expr.target,
+                                           expr.lineno)
+            name = self.require_exception(
+                expr.value, scope, effects, "%s.throw()" % expr.target,
+                expr.lineno)
+            if name not in binding.op.row:
+                raise InvalidProgram(
+                    expr.lineno, "%s.%s does not declare %s, so "
+                    "%s.throw() cannot deliver it" %
+                    (binding.effect, binding.op.name, name, expr.target))
             return "None"
         else:
             raise InvalidProgram(expr.lineno, "unknown expression node")

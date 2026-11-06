@@ -52,15 +52,20 @@ class EffectDef(Node):
         self.operations = operations  # list of OperationDef
 
 class OperationDef(Node):
-    """def op(p1: T1, p2: T2) -> ReturnType: ...   inside an Effect class"""
-    _attrs_ = ['name', 'params', 'param_types', 'return_type']
+    """def op(p1: T1, p2: T2) -> ReturnType / [Exc1, Exc2]: ...   inside
+       an Effect class. The row names the exception classes a handler
+       may throw into the body at the perform (plan 1.7); without it
+       the row is empty."""
+    _attrs_ = ['name', 'params', 'param_types', 'return_type', 'row']
 
-    def __init__(self, name, params, param_types, return_type, lineno=0):
+    def __init__(self, name, params, param_types, return_type, row,
+                 lineno=0):
         Node.__init__(self, lineno)
         self.name = name
         self.params = params            # list of str
         self.param_types = param_types  # list of str, parallel to params
         self.return_type = return_type  # str
+        self.row = row                  # list of str (exception classes)
 
 class HandlerDef(Node):
     """class Name(Handler[Effect]): followed by field declarations and
@@ -347,6 +352,17 @@ class AttrRead(Expr):
 class Resume(Expr):
     """target.resume(value): returns value to the suspended perform and
        evaluates to the body's result once it completes (plan 3.4)."""
+    _attrs_ = ['target', 'value']
+
+    def __init__(self, target, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.target = target  # str: a variable name
+        self.value = value    # Expr
+
+class Throw(Expr):
+    """target.throw(value): makes the suspended perform raise value,
+       an exception the operation's row declares, and evaluates to
+       None once the body completes (plan 1.7)."""
     _attrs_ = ['target', 'value']
 
     def __init__(self, target, value, lineno=0):
