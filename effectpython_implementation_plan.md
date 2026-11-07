@@ -812,8 +812,9 @@ sequenceDiagram
         `run_body_callback(h, arg)` reads the interpreter and the frame from `global_state`, stores `frame.h_handler = h`,
         and runs the `with` body through `exec_block` inside a `try` that stores an `EffectError` in `frame.pending_error`
         (from Milestone 6 this includes a `RaisedException`, so a `raise` in the body follows the same path, 1.6)
-        and a `ReturnSignal` (a `return` statement in the body) in `frame.pending_return`;
-        any other RPython exception is an interpreter bug and aborts the binary.
+        and a `ReturnSignal` (a `return` statement in the body) in `frame.pending_return`,
+        and a `StackOverflow` from RPython's stack check, for a body that recurses past the C stack limit, as an `EffectPythonRuntimeError` in `frame.pending_error` (added 2026-11-07).
+        An RPython exception that escaped the callback would hand `stacklet_new` a garbage handle and segfault the binary, so no other kind may escape it.
         It then sets `frame.status = STATUS_COMPLETED` and returns `frame.h_handler`, which finishes the stacklet.
     *   `new()` returns on the handler side either when the body first performs (with a live handle) or when it finishes (with an empty handle).
         Call `dispatch(frame, h)` (step 3) inside a `try`/`finally` that pops the top of `handler_stack` when `frame.status == STATUS_COMPLETED`:
@@ -1119,10 +1120,16 @@ EffectPython/
         a `finally` whose perform is abandoned by an outer handler, and a handler method's undeclared exception unwinding the body before it propagates.
         `tests/test_interpreter.py` covers `exec_try`'s `finally` untranslated, and `NOT_YET` is empty.
         The two stress programs added afterwards passed on their first run as well.
-        Writing them showed a limit that predates this milestone, confirmed against the binary of the Milestone 8 frontend commit:
-        a body that recurses past the interpreter's depth (about 1,500 calls, or 1,000 with a `try` at each level) segfaults,
-        where the same recursion outside a body ends in RPython's `Fatal RPython error: StackOverflow`,
-        so the stack check does not fire inside a stacklet. The stress program stays at 500 levels for that reason.
+        Writing them showed a defect that predates this milestone, confirmed against the binary of the Milestone 8 frontend commit:
+        a body that recursed past the interpreter's depth (about 1,500 calls, or 1,000 with a `try` at each level) segfaulted,
+        where the same recursion outside a body ended in RPython's `Fatal RPython error: StackOverflow`.
+        The stack check does fire inside a stacklet; what failed was the `StackOverflow` it raises escaping `run_body_callback`,
+        which caught `EffectError` and `ReturnSignal` alone, so the stacklet code received a garbage handle.
+        Fixed the same day: the callback turns a `StackOverflow` into an `EffectPythonRuntimeError("maximum recursion depth exceeded")` in `pending_error`,
+        and `entry_point` reports the same message for a recursion outside a body instead of the fatal error and its traceback;
+        both exit 1, as any runtime error does, and `deep_recursion.epy` and `deep_recursion_in_body.epy` hold them to it.
+        A `finally` in the body runs as the error leaves it, since the error is an ordinary `EffectError` by then.
+        The stress program stays at 500 levels, well inside the limit.
     *   Add the `finally` keyword and `Try.finalbody`, the `try`/`finally` forms of 2.1 including the desugared `finally` on a handler statement,
         the `finalbody` term in the checker's `Try` formula, `Unwind` in `errors.py`, the third resumption in `switch_into` and `perform`,
         the unwinding paths in `dispatch` and `answer_with_method`, and the `finally` in `exec_try`.

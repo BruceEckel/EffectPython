@@ -1,0 +1,4 @@
+exit 1
+got 1
+close
+error: maximum recursion depth exceeded

@@ -108,15 +108,17 @@ in the source, as in a loop body, or sits in one branch of an if, and a
 read of a name an except clause deleted where the read comes earlier in
 the source (require_bound follows source order), an operator applied to operands of
 the wrong types where one operand's type is unknown (the checker infers
-types only as far as argument checks need), and integer division or
-modulo by zero.
+types only as far as argument checks need), integer division or
+modulo by zero, and a recursion that outgrows the C stack, which
+RPython's stack check stops and run_body_callback or the entry point
+reports as "maximum recursion depth exceeded".
 """
 import os
 try:
-    from rpython.rlib import rstacklet
+    from rpython.rlib import rstacklet, rstackovf
     from rpython.rtyper.lltypesystem import llmemory
 except ImportError:
-    rstacklet = llmemory = None
+    rstacklet = rstackovf = llmemory = None
 from effectpython import ast_nodes as ast
 from effectpython.errors import (EffectError, EffectPythonRuntimeError,
                                  OneShotContinuationError, RaisedException,
@@ -242,7 +244,14 @@ class GlobalState(object):
 
 global_state = GlobalState()
 
+RECURSION_LIMIT = "maximum recursion depth exceeded"
+
 def run_body_callback(h, arg):
+    """Run the body and leave what ended it in the frame. RPython's
+    stack check raises StackOverflow in a body that recurses too deep,
+    and it becomes a runtime error here: an RPython exception that
+    escaped this callback would hand the stacklet code a garbage
+    handle, and the binary would segfault instead of reporting it."""
     frame = global_state.frame
     interp = global_state.interp
     frame.h_handler = h
@@ -252,6 +261,9 @@ def run_body_callback(h, arg):
         frame.pending_error = e
     except ReturnSignal as sig:
         frame.pending_return = sig
+    except rstackovf.StackOverflow:
+        rstackovf.check_stack_overflow()
+        frame.pending_error = EffectPythonRuntimeError(RECURSION_LIMIT)
     frame.status = STATUS_COMPLETED
     return frame.h_handler
 

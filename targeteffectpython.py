@@ -10,15 +10,18 @@ Run untranslated with:
     PYTHONPATH=~/pypy/pypy2.7-v8.0.1-src pypy2 targeteffectpython.py program.epy
 
 The binary parses the .epy file named on the command line, runs the
-static effect checker over it, and then runs its main(). Exit code 1 reports an error in the program, 2 a usage error.
+static effect checker over it, and then runs its main(). Exit code 1
+reports an error in the program, including a recursion that outgrows
+the C stack, which RPython's stack check turns into StackOverflow;
+exit code 2 is a usage error.
 """
 import sys
 
-from rpython.rlib import rvmprof
+from rpython.rlib import rstackovf, rvmprof
 
 from effectpython.errors import EffectError
 from effectpython.checker import check
-from effectpython.interpreter import Interpreter
+from effectpython.interpreter import Interpreter, RECURSION_LIMIT
 from effectpython.parser import parse
 
 # --- vmprof workaround ------------------------------------------------------
@@ -64,6 +67,10 @@ def entry_point(argv):
         return Interpreter(module).run_main()
     except EffectError as e:
         print "error:", e.msg
+        return 1
+    except rstackovf.StackOverflow:
+        rstackovf.check_stack_overflow()
+        print "error:", RECURSION_LIMIT
         return 1
 
 def target(driver, args):

@@ -1,0 +1,27 @@
+# The same recursion inside a handled body. The stack check fires in
+# the body's stacklet, run_body_callback turns the StackOverflow into
+# a runtime error, and the body's finally runs as the error leaves it.
+# The error then surfaces at the handle statement and ends the program
+# with exit code 1.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value() -> int: ...
+
+def descend(n: int) -> int / [Ask]:
+    if n == 0:
+        print("got", perform(Ask.value()))
+    return descend(n + 1)
+
+def main() -> int / []:
+    try:
+        with handle(Ask):
+            try:
+                print(descend(0))
+            finally:
+                print("close")
+    except Ask.value as eff:
+        eff.resume(1)
+    print("not reached")
+    return 0

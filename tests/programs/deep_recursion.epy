@@ -1,0 +1,10 @@
+# A recursion with no base case outgrows the C stack. RPython's stack
+# check stops it, and the binary reports it as a runtime error with
+# exit code 1 instead of aborting.
+
+def descend(n: int) -> int:
+    return descend(n + 1)
+
+def main() -> int:
+    print("descending")
+    return descend(0)
