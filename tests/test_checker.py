@@ -199,6 +199,30 @@ def test_rejected_programs(body, error, msg):
         check_source(body)
     assert info.value.msg == msg
 
+@pytest.mark.parametrize('expr, msg', [
+    ('"a" + 1', 'str and int'),
+    ('1 < "b"', 'int and str'),
+    ('"a" - "b"', 'str and str'),
+    ('"a" < "b"', 'str and str'),
+    ('True < False', 'bool and bool'),
+    ('(1 == 1) + 1', 'bool and int'),
+])
+def test_rejects_operands_of_the_wrong_types(expr, msg):
+    op = expr.split(' ')[-2]
+    with pytest.raises(InvalidProgram) as info:
+        check_source('def f() -> int:\n    x = %s\n    return 0\n'
+                     % expr + MAIN)
+    assert info.value.msg == (
+        'line 9: unsupported operand types for %s: %s' % (op, msg))
+
+@pytest.mark.parametrize('expr', [
+    '1 + 2 * 3 // 4 % 5', '1 < 2', '7 == 7', '"a" + "b"', '"a" != "b"',
+    'True == False', 'unknown + 1', '"a" + unknown',
+])
+def test_accepts_operands_of_matching_types(expr):
+    check_source('def f() -> int:\n    x = %s\n    return 0\n'
+                 % expr + MAIN)
+
 # --- Handler classes (Milestone 5) -------------------------------------------
 
 HANDLERS = EFFECTS + '''\

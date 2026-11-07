@@ -699,7 +699,7 @@ Everything in this list is rejected before the program runs, with a line number:
 - `Exception` in a row, since a row names the classes that can reach a caller.
 
 What remains for runtime is what the checker does not settle:
-integer division or modulo by zero, an operator applied to operands of the wrong types, a name assigned on no path, and resuming twice.
+integer division or modulo by zero, an operator whose operand types the checker could not both see, a name assigned on no path, and resuming twice.
 Those stop the program with an `error:` line and exit code 1, and no `try` catches them:
 
 ```python tests/programs/body_error.epy

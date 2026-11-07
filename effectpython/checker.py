@@ -37,7 +37,10 @@ handler class name is the type of its instances, so a name holding
 one may be passed to handle() and its fields read, and an exception
 class name is the type of the name an except clause binds. The empty
 string stands for a type the checker cannot determine, and an unknown
-type matches anything.
+type matches anything. An operator whose operands both have known
+types must have a pair the interpreter supports (OPERATORS), so the
+runtime's "unsupported operand types" error is reached only through
+an operand of unknown type.
 
 The name an except clause binds is deleted when the clause ends, so
 the checker rejects a read of it after the clause until something
@@ -55,6 +58,11 @@ from effectpython.errors import InvalidProgram, UnhandledEffectError
 
 UNKNOWN = ""
 FIELD_TYPES = ["int", "str"]
+OPERATORS = {
+    "int": ["+", "-", "*", "//", "%", "<", "<=", ">", ">=", "==", "!="],
+    "str": ["+", "==", "!="],
+    "bool": ["==", "!="],
+}
 EXCEPTION = "Exception"
 
 def ends_in_return(stmts):
@@ -525,12 +533,14 @@ class Checker(object):
         elif isinstance(expr, ast.BinOp):
             left = self.type_of(expr.left, scope, effects)
             right = self.type_of(expr.right, scope, effects)
+            self.check_operands(expr.op, left, right, expr.lineno)
             if left == UNKNOWN:
                 return right
             return left
         elif isinstance(expr, ast.Compare):
-            self.type_of(expr.left, scope, effects)
-            self.type_of(expr.right, scope, effects)
+            left = self.type_of(expr.left, scope, effects)
+            right = self.type_of(expr.right, scope, effects)
+            self.check_operands(expr.op, left, right, expr.lineno)
             return "bool"
         elif isinstance(expr, ast.Call):
             return self.check_call(expr, scope, effects)
@@ -585,6 +595,18 @@ class Checker(object):
             return "None"
         else:
             raise InvalidProgram(expr.lineno, "unknown expression node")
+
+    def check_operands(self, op, left, right, lineno):
+        """Both operand types known and not a pair the interpreter's
+        binop() or compare() accepts is the runtime error, reported
+        early with the runtime's words."""
+        if left == UNKNOWN or right == UNKNOWN:
+            return
+        if left == right and op in OPERATORS.get(left, []):
+            return
+        raise InvalidProgram(
+            lineno, "unsupported operand types for %s: %s and %s" %
+            (op, left, right))
 
     def check_call(self, expr, scope, effects):
         if expr.func == "print":

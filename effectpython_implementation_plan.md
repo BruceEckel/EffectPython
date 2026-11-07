@@ -537,6 +537,7 @@ The static analyzer runs in three passes over the AST before execution:
     *   For each function body, computes the active `inferred_effects: set[str]` of each AST node bottom-up:
         *   `PerformNode(Effect.op, args)`: produces `{Effect}` plus the classes in `Effect.op`'s row (1.7; Milestone 7, 2026-11-06), verifies `args` match `Effect.op`'s parameter types, and types the `perform` expression with `Effect.op`'s return type.
         *   `ThrowNode(binding, expr)`: produces nothing; requires `binding` to be a clause binding and `expr`'s type to be an exception class in the binding's operation's row (1.7; Milestone 7, 2026-11-06).
+        *   `BinOp` and `Compare`: when both operand types are known, the pair must be one the interpreter supports (`int` with every operator, `str` with `+`, `==`, and `!=`, `bool` with `==` and `!=`), else "unsupported operand types for +: str and int" at the expression's line, the runtime's message moved to the checker (added 2026-11-06); an operand of unknown type passes, and the runtime keeps the check for that case.
         *   `CallNode(callee, args)`: looks up `callee` in the function table and unions `callee.declared_effect_row` into the current scope's `inferred_effects`.
         *   `HandleNode(handled_effects, body, clauses)`:
             1. Verifies that for every `E` in `handled_effects`, `clauses` provide an `except E.op as eff:` clause for **every** operation declared on `E` (exhaustiveness check).

@@ -82,7 +82,9 @@ raise of a value that is not an exception (check_raise), an exception
 constructor call with more than a str message
 (check_exception_call, in construct_exception), and a
 RaisedException that reaches entry_point, since main()'s empty row
-makes the checker reject an exception nobody catches. They stay
+makes the checker reject an exception nobody catches; and an operator
+on operands of the wrong types where the checker knows both types
+(check_operands, in binop and compare). They stay
 because the unit tests
 build modules by hand and run them without the checker. The cases the
 checker does not
@@ -90,8 +92,9 @@ see remain runtime-only: a variable that was never assigned (the checker
 types an unbound name as UNKNOWN), a read of a name an except clause
 deleted where the read comes earlier in the source, as in a loop body
 (require_bound follows source order), an operator applied to operands of
-the wrong types (the checker infers types only as far as argument checks
-need), and integer division or modulo by zero.
+the wrong types where one operand's type is unknown (the checker infers
+types only as far as argument checks need), and integer division or
+modulo by zero.
 """
 import os
 try:
