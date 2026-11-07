@@ -28,7 +28,7 @@ so a line number in an error message counts from the file's first line, a few li
 
 The dialect is a proof of concept, and you will notice what it lacks sooner than what it has.
 The values are `int`, `str`, and `bool`, with `True` and `False` as the literals.
-There are no lists, dicts, or tuples, no `for` loop, no string methods, and no `else`, `finally`, or bare `except:` on a `try`.
+There are no lists, dicts, or tuples, no `for` loop, no string methods, and no `else` or bare `except:` on a `try`.
 `print` is the one built-in; it takes any number of arguments and separates them with spaces, as Python does.
 Every parameter and return type is written out, and the checker reads them.
 Those limits are the size of the project, not design choices, and they do not get in the way of the effects.
@@ -324,6 +324,57 @@ A suspended body can be resumed once.
 A clause that calls `eff.resume()` twice gets a runtime error on the second call,
 `Cannot resume a suspended body more than once`, from `tests/programs/double_resume.epy`.
 
+### `finally` in an abandoned body
+
+An abandoned body is not dropped where it stopped.
+It is unwound, so a `try`/`finally` inside it runs its `finally` suite, as it would in Python when a generator is closed at a `yield`.
+
+```python tests/programs/finally_in_body.epy
+from effectpython import Effect, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+def work() -> int / [Abort]:
+    print("open")
+    try:
+        perform(Abort.stop("done early"))
+        print("never printed")
+        return 1
+    finally:
+        print("close")
+
+def main() -> int / []:
+    try:
+        with handle(Abort):
+            print(work())
+    except Abort.stop as eff:
+        print("aborted:", eff.reason)
+    print("after")
+    return 0
+```
+
+```text tests/programs/finally_in_body.expected
+open
+aborted: done early
+close
+after
+```
+
+The order of the output is the order of events.
+The clause runs first and prints `aborted: done early`.
+It ends without resuming, so the body is unwound from its `perform`: `print("never printed")` is skipped, the `finally` prints `close`, and `work()` ends there.
+`print(work())` has nothing to print, and the program continues with `after`.
+A `return` or an exception that leaves a clause unwinds the body the same way before the function returns or the exception travels on;
+`tests/programs/finally_on_return_in_clause.epy` and `tests/programs/finally_on_raise_in_clause.epy` show both.
+
+A `finally` suite is ordinary code, so it may perform an effect while the body is unwound,
+and the handler for that effect answers it as usual (`tests/programs/finally_performs.epy`).
+If it raises an exception or returns, that outcome replaces the unwinding, as Python's rule for a `finally` goes:
+in `tests/programs/finally_raises.epy` the body's `finally` raises `Dirty`, which surfaces at the `with handle` statement and is caught by a `try` around it.
+A `finally` may also follow the effect clauses of a handler statement.
+It belongs to the function that installs the handler and runs when the block completes or a clause abandons the body (`tests/programs/handle_with_finally.epy`).
+
 ## 6. Handler classes
 
 A clause handles one block.
@@ -468,6 +519,8 @@ Its constructor takes an optional `str` message, which `print(e)` prints;
 `NotFound()` without a message prints an empty string, which is the double space in the third line.
 A `try` whose clauses name exception classes is an ordinary Python `try`/`except`:
 the first clause whose class matches runs, and `except Exception` matches every class.
+A `finally` suite may follow the clauses, or stand alone after the `try` suite, and it runs however the `try` ends
+(`tests/programs/try_finally.epy` shows the three cases without effects).
 
 The exception class belongs in the row beside the effects.
 `find` declares `/ [NotFound]` because it raises one,
@@ -575,7 +628,7 @@ outside the body: other.json
 ```
 
 The method runs outside the body, so its exception leaves the `with` statement with the body still suspended,
-and the body's next statement does not run.
+and the body's next statement does not run; the body is unwound first, as in section 5, so a `finally` inside it still runs.
 The method's row carries `NotFound` to the function that installs the handler, which must catch or declare it.
 The second block shows the consequence for the body:
 `load` has a `try` around its `perform`, and that `try` does not catch what the handler raises,

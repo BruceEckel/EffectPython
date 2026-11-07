@@ -55,6 +55,19 @@ class RaisedException(EffectError):
             msg = "%s: %s" % (msg, w_exception.message)
         EffectError.__init__(self, msg)
 
+class Unwind(EffectError):
+    """Runtime: the signal that unwinds an abandoned body (plan 1.8).
+    The dispatch loop that abandons a body switches into it with this
+    exception, and the suspended perform raises it, so it runs every
+    finally on the way out of the body's stacklet. It carries the
+    HandlerFrame that began the unwinding: that frame's loop swallows
+    it when the body has finished, and any other frame's loop re-raises
+    it. The dialect cannot name it, so no except clause catches it."""
+
+    def __init__(self, frame):
+        self.frame = frame
+        EffectError.__init__(self, "unwinding an abandoned body")
+
 class InvalidSyntax(EffectError):
     """Compile-time: the lexer or parser rejected the source. lineno and
     colno are 1-based; lineno is 0 when the error is at end of input and

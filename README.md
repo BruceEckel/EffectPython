@@ -41,7 +41,8 @@ The program above is `tests/programs/nested.epy`.
 The `try`/`with handle`/`except` block is valid Python 3 syntax,
 but the interpreter runs it as a handler frame, not an exception handler:
 `eff.resume(value)` returns control to the suspended `perform`,
-and a clause that never resumes abandons the suspended code.
+and a clause that does not resume abandons the suspended code,
+which is unwound so that a `finally` inside it runs.
 The checker rejects a function that performs an effect missing from its `/ [...]` row,
 a `handle` block missing a clause for one of the effect's operations,
 and a `main()` whose row is not empty.
@@ -143,6 +144,8 @@ The class belongs in the `/ [...]` row beside the effects:
 and `main()` keeps its empty row because it catches the failure.
 A `try` whose clauses name a class is a Python `try`/`except`,
 and `except Exception` catches every class.
+A `finally` suite may follow the clauses or stand alone after the `try` suite;
+it runs however the `try` ends, including when a handler abandons the body around it.
 A clause that names a class raises what it caught again with `raise e`, and the function then declares that class;
 a clause written `except Exception as e` cannot, since `e` has no class for the row.
 The checker rejects a function that raises a class missing from its row, or calls a function that does,
@@ -150,7 +153,7 @@ so an exception nobody catches is a static error at `main()`.
 
 Where the exception is raised decides what it does to a handled body.
 Raised in the body, it surfaces at the `handle` statement, and a `try` around that statement catches it, as `main()` does here.
-Raised in a clause or a handler method, it abandons the suspended body;
+Raised in a clause or a handler method, it abandons the suspended body, which is unwound before the exception travels on;
 a handler class reports a failure this way, and the method's row carries the class to the function that installs the handler.
 A `try` inside the body catches an exception the body raises, including one raised after a `perform` resumes.
 It does not catch an exception a handler raises, since the handler runs outside the body.

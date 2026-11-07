@@ -62,7 +62,7 @@ def main() -> int / []:
     return 0
 ```
 
-> **Note on Execution Semantics:** Even though the surface syntax uses `try` / `except` with `with handle(...)` for Python 3 parser compatibility, the EffectPython AST evaluator compiles this construct into an **algebraic effect handler frame** (not a stack-unwinding exception). Calling `eff.resume(val)` returns control directly to the suspended `perform()` call site and runs the body until it finishes or a later clause abandons it; the clause for the body's next `perform` runs nested inside the `eff.resume(val)` call, unless that call is the clause's last statement, written as an expression statement on the clause's own binding, in which case the handler loops instead of nesting (3.4, steps 3 and 4). When the `with handle(...)` body completes normally, execution proceeds past the `try`/`except` block. A clause that finishes without calling `eff.resume(...)` also proceeds past the block, and the suspended body is abandoned (3.4, step 5). An exception raised inside the body is not caught by the `except Effect.op` clauses, which handle effects: it surfaces where the handler side regains control: inside the innermost `eff.resume(...)` call still waiting for the body, if there is one, and otherwise at the `with handle(...)` statement. From there it propagates out of the `try`/`except` block (3.4, steps 3 and 4).
+> **Note on Execution Semantics:** Even though the surface syntax uses `try` / `except` with `with handle(...)` for Python 3 parser compatibility, the EffectPython AST evaluator compiles this construct into an **algebraic effect handler frame** (not a stack-unwinding exception). Calling `eff.resume(val)` returns control directly to the suspended `perform()` call site and runs the body until it finishes or a later clause abandons it; the clause for the body's next `perform` runs nested inside the `eff.resume(val)` call, unless that call is the clause's last statement, written as an expression statement on the clause's own binding, in which case the handler loops instead of nesting (3.4, steps 3 and 4). When the `with handle(...)` body completes normally, execution proceeds past the `try`/`except` block. A clause that finishes without calling `eff.resume(...)` also proceeds past the block, after the suspended body is unwound, which runs its `finally` suites (1.8; 3.4, step 5). An exception raised inside the body is not caught by the `except Effect.op` clauses, which handle effects: it surfaces where the handler side regains control: inside the innermost `eff.resume(...)` call still waiting for the body, if there is one, and otherwise at the `with handle(...)` statement. From there it propagates out of the `try`/`except` block (3.4, steps 3 and 4).
 
 ### 1.5 Handler Classes (designed 2026-10-30, open questions settled 2026-10-31, implemented 2026-10-31)
 The `try`/`with handle`/`except` form in 1.4 writes the clauses inline,
@@ -286,7 +286,7 @@ no code after the `try` runs once that clause has, so the name keeps the type, t
 A clause that ends in `raise` still deletes the name for the checker, since an enclosing `try` in the same function can catch the exception and continue.
 A read that precedes the clause in the source but follows it in time, as in a loop body, stays a runtime error.
 Clauses are tried in order, and an exception no clause matches propagates.
-There is no `else` or bare `except:`, and no re-raise through a bare `raise`; `finally` is designed in 1.8.
+There is no `else` or bare `except:`, and no re-raise through a bare `raise`; `finally` is added in 1.8.
 A runtime error of the interpreter (an undefined name, division by zero) stays uncatchable:
 it reports a program the checker could not reject, not a failure the program planned for.
 
@@ -499,9 +499,9 @@ and `OperationDef` gains the row.
 ### 1.8 `finally` and Abandonment (designed 2026-11-06, open questions settled 2026-11-06)
 
 A clause that ends without resuming abandons the suspended body (3.4, step 5), and so do a `return` in a clause and an exception raised in a clause or a handler method (1.6).
-Today abandonment drops the body's stacklet: no statement of the body runs again, and the stacklet is freed when its handle becomes unreachable.
+Before this section, abandonment dropped the body's stacklet: no statement of the body ran again, and the stacklet was freed when its handle became unreachable.
 That is sound for a body that holds nothing, and wrong for one that holds a resource.
-The dialect has no `finally`, so the question has not arisen; adding `finally` raises it, because a `finally` inside an abandoned body would be skipped.
+The dialect had no `finally`, so the question had not arisen; adding `finally` raises it, because a `finally` inside an abandoned body would be skipped.
 Every effect system meets this: Koka runs a continuation's finalizers when the continuation is discarded,
 and Python runs a generator's `finally` blocks when the generator is closed, by raising `GeneratorExit` at the suspended `yield`.
 This section adds `try`/`finally` and settles abandonment the same way: an abandoned body is unwound, not dropped.
@@ -579,16 +579,18 @@ $\text{Effects}(\text{Try}) = (\text{Effects}(\text{suite}) \setminus \text{caug
 A `finally` on a handler statement contributes its effects to the installing function, as the desugaring places it.
 Nothing else changes: a `finally` is a suite like any other, and the `as` name of a clause is already unbound when it runs.
 
-**Runtime.**
-`HandlerFrame` gains `unwinding`, set when its dispatch loop begins an unwind.
-`switch_into` takes a third kind of resumption, and `perform` raises `Unwind(frame)` after the hidden frames are restored, as it raises a thrown exception.
+**Runtime (implemented 2026-11-07).**
+`HandlerFrame` gains `resume_unwind`, a third mailbox field beside `resume_value` and `resume_exception`:
+`unwind_into(eff)` stores `Unwind(frame)` there and calls `switch_into`, and `perform` raises it after the hidden frames are restored, as it raises a thrown exception.
 `exec_try` runs its suite and clauses under an RPython `try`/`finally` that runs `finalbody`, so `ReturnSignal`, `EffectPythonRuntimeError`, `RaisedException`, and `Unwind` all pass through it with the `finally` run.
 `run_body_callback` stores `Unwind` in `pending_error` as it stores any `EffectError`.
-The dispatch loop, where today it returns with the body suspended, unwinds instead:
-`h = switch_into(eff, unwind)` and back to the top of the loop, so a `finally` that performs is answered.
+The dispatch loop, where it used to return with the body suspended, unwinds instead:
+`h = unwind_into(eff)` and back to the top of the loop, so a `finally` that performs is answered.
 When the loop ends with `pending_error` an `Unwind` of this frame, it clears it and returns; another frame's `Unwind` it re-raises.
-The clause body and the handler method call run under a `try` that, on `ReturnSignal` or `EffectError` with the body still suspended, unwinds first and re-raises after.
+The clause body and the handler method call run under a `try` that, on `ReturnSignal` or `EffectError` with the body still suspended, unwinds first (a nested `dispatch` that runs until the body finishes) and re-raises after.
 A body's stacklet now always runs to completion, so nothing depends on the GC destructor freeing an abandoned stacklet (3.4, step 5), though it still would.
+A `finally` in a function the body called, rather than in the body's own suite, follows Python too:
+its `return` is caught by that function's call, so the function returns the value and the body continues after the call, the unwinding over.
 
 **Open questions (settled 2026-11-06 as the design recommends).**
 
@@ -757,6 +759,7 @@ class HandlerFrame(object):
         self.pending_payload = None   # W_EffectPayload set by perform()
         self.resume_value = None      # W_Root set by eff.resume(val); perform() clears it when it returns the value
         self.resume_exception = None  # W_Exception set by eff.throw(exc); perform() clears it and raises it (1.7)
+        self.resume_unwind = None     # Unwind set by unwind_into() when the body is abandoned; perform() clears it and raises it (1.8)
         self.pending_error = None     # EffectError the body raised, re-raised on the handler side
         self.pending_return = None    # ReturnSignal from a return statement in the body, re-raised the same way
         self.saved_frames = []        # list[HandlerFrame]: this frame and the inner frames, hidden while a clause runs
@@ -849,16 +852,21 @@ sequenceDiagram
     *   If the clause's last statement is `eff.resume(<expr>)` or `eff.throw(<expr>)` on its own binding (`tail_switch`),
         run every statement but that one, evaluate `<expr>` with the binding still in scope,
         and after the `finally` call `h = switch_into(eff, value, None)` or `h = switch_into(eff, None, exception)` (step 4) and return to the top of the loop.
-        Otherwise return once the clause finishes.
+        Otherwise the clause has abandoned the body: `h = unwind_into(eff)` (step 5) and back to the top of the loop,
+        unless the body has finished through a `resume()` inside the clause, in which case `h` is the empty handle.
+    *   The method call and the clause run under a `try` that catches `ReturnSignal` and `EffectError`:
+        if the body is still suspended (`eff.h_body` is not empty), `unwind(eff)` runs a nested `dispatch` from `unwind_into(eff)` until the body finishes, and the signal is then re-raised (step 5).
     *   When `h` is empty, the body finished:
-        re-raise `frame.pending_error` if it is set, then `frame.pending_return` if it is set, and otherwise return.
+        take and clear `frame.pending_error` and re-raise it, unless it is an `Unwind` that names this frame, which the loop swallows;
+        then take, clear, and re-raise `frame.pending_return` if it is set; and otherwise return.
         `dispatch` returns no value.
 4.  **Resuming with `eff.resume(val_w)` (`Interpreter.switch_into` and `Interpreter.resume`):**
-    *   `switch_into(eff, val_w, exc_w)`, one of the two `None`: if `eff.h_body` is empty (`is_empty_handle`, which for the shadowstack backend is the null-handle test),
+    *   `switch_into(eff, val_w, exc_w)`, at most one of the two set: if `eff.h_body` is empty (`is_empty_handle`, which for the shadowstack backend is the null-handle test),
         the binding was already consumed: raise a runtime `OneShotContinuationError("Cannot resume a suspended body more than once")`.
         Otherwise take `h = eff.h_body`, set `eff.h_body` to the null handle, set `frame.resume_value = val_w`, `frame.resume_exception = exc_w`, and `frame.status = STATUS_RUNNING`,
         and return `sthread.switch(h)`, which swaps the C stack back to the paused `perform()` site and returns when the body performs again or finishes.
-        Inside the body, `perform` restores the hidden frames and returns `frame.resume_value` as the result of `perform(...)`, or raises `frame.resume_exception` there (1.7).
+        Inside the body, `perform` restores the hidden frames and raises `frame.resume_unwind` if `unwind_into` set it (step 5),
+        else raises `frame.resume_exception` if set (1.7), and else returns `frame.resume_value` as the result of `perform(...)`.
     *   `resume(eff, val_w)`, for an `eff.resume(...)` anywhere but a clause's tail:
         `h = switch_into(eff, val_w, None)`, then `dispatch(frame, h)`, then return `W_None`;
         `throw(eff, exc_w)` is the same with `switch_into(eff, None, exc_w)` (1.7).
@@ -873,16 +881,24 @@ sequenceDiagram
     *   A program cannot catch a runtime error of the body, so it propagates through every clause nested on the handler side,
         out of the `try`/`except` block, and up to `entry_point`, which reports it and exits 1.
         A `RaisedException` takes the same route until a `Try` statement around it has a clause for its class (1.6).
-5.  **Non-Resuming Handlers (Abort / Early Exit):**
-    *   If a handler clause finishes without calling `eff.resume(...)`, `dispatch` returns,
-        the suspended body stays hidden and is abandoned, and execution proceeds past the `try`/`except` block.
-    *   `StackletThread` has no `destroy` method.
-        The `shadowstack` backend frees an abandoned stacklet from its GC destructor when the handle object becomes unreachable,
-        so dropping the `W_EffBinding`, with the handle inside it, is the whole cleanup; nothing sets `eff.h_body` to null on this path.
-    *   A clause that raises an exception (1.6, Milestone 6) abandons the body the same way,
+5.  **Non-Resuming Handlers (Abort / Early Exit), unwinding the body (1.8):**
+    *   If a handler clause finishes without calling `eff.resume(...)` or `eff.throw(...)`, the body is abandoned and `dispatch` unwinds it:
+        `unwind_into(eff)` stores `Unwind(frame)` in `frame.resume_unwind` and switches into the body through `switch_into`, consuming the one-shot handle;
+        `perform` restores the hidden frames and raises the `Unwind`, which no `except` clause catches,
+        so it runs each `finally` on its way out of the body and reaches `run_body_callback`, which stores it in `pending_error` and finishes the stacklet.
+        The loop goes on meanwhile: a `finally` that performs is answered as any perform is, and the clause's `resume()` continues the unwinding.
+        When the loop ends it finds its own `Unwind`, clears it, and returns, and execution proceeds past the `try`/`except` block;
+        a `finally` that raised an exception or returned has replaced the `Unwind` in the mailbox, and the loop re-raises that instead.
+    *   A clause that raises an exception (1.6, Milestone 6) or returns abandons the body too,
         as does a handler method whose exception the operation's row does not name (1.7):
-        the exception propagates out of `dispatch` and `exec_handle`, the hidden frame is dropped, and the exception continues from the `handle` statement.
+        the `try` around the clause or method in `dispatch` (step 3) catches the signal, unwinds the body through a nested `dispatch` when `eff.h_body` is still live,
+        and re-raises it, so the exception or `return` continues from the `handle` statement after the body's `finally` suites have run.
         A method's exception whose class the row names is thrown into the body instead (step 3).
+    *   An outer clause's `Unwind` reaches an inner frame's loop through its body's `pending_error`, or through a perform in its clause (both when the inner body's stacklet finishes);
+        the loop re-raises it, since the `Unwind` names another frame, and the signal climbs to the frame that began it, unwinding each body on the way.
+    *   `StackletThread` has no `destroy` method, and none is needed: every body's stacklet runs to completion, since an abandoned one is unwound.
+        The `shadowstack` backend would still free a stacklet from its GC destructor when the handle object became unreachable.
+        Before 1.8, abandonment dropped the body's stacklet that way, with its `W_EffBinding`, and no statement of the body ran again.
 
 ---
 
@@ -909,13 +925,13 @@ EffectPython/
 │   ├── model.py            # W_Root, W_None, W_Bool, W_Int, W_Str, W_EffectPayload, W_EffBinding, W_HandlerInstance, W_Exception
 │   ├── interpreter.py      # AST evaluator, HandlerFrame, rstacklet integration
 │   ├── samples.py          # Hand-built Fibonacci AST, used by test_interpreter.py and test_parser.py
-│   └── errors.py           # EffectError and its subclasses: InvalidSyntax, InvalidProgram, UnhandledEffectError, EffectPythonRuntimeError, OneShotContinuationError, RaisedException
+│   └── errors.py           # EffectError and its subclasses: InvalidSyntax, InvalidProgram, UnhandledEffectError, EffectPythonRuntimeError, OneShotContinuationError, RaisedException, Unwind
 ├── experiments/
 │   ├── rply_addition.py    # rply translates (2.1)
 │   └── stacklet_mailbox.py # The four rstacklet rules in a translated binary (3.2)
 └── tests/
     ├── support.py          # PROGRAMS, read_program, shape, ListOutput
-    ├── test_interpreter.py # Milestone 1, and the untranslated parts of Milestones 5, 6, and 7
+    ├── test_interpreter.py # Milestone 1, and the untranslated parts of Milestones 5 to 8
     ├── test_parser.py      # Lexer and parser, Milestone 2 and each later milestone's forms
     ├── test_checker.py     # Checker, Milestone 2 and each later milestone's rules
     ├── test_runtime.py     # Milestones 3 and 4 onward: translate once, run every program in programs/
@@ -1090,10 +1106,21 @@ EffectPython/
         and `parser.py` reads the three `try` forms through one action, `_try`, which wraps a `Handle` in a clause-less `Try` when effect clauses carry a `finally`.
         `check_try` adds the `finalbody`'s effects after the subtraction.
         `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
-        The eight programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime follows.
+        The eight programs below parsed and passed the checker, and they were strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime followed the next day.
+    *   *Done 2026-11-07.*
+        `Unwind` in `errors.py` carries the frame that began the unwinding;
+        `HandlerFrame` has `resume_unwind` rather than the `unwinding` flag the design named, since the switch needs a mailbox field that `perform` clears, and a flag beside it would add nothing;
+        `unwind_into` sets it and switches through the unchanged `switch_into`, and `perform` raises it before it looks at the exception or the value.
+        `dispatch` runs the method call or the clause (now `answer_with_clause`) under a `try` for `ReturnSignal` and `EffectError` that calls `unwind`, a nested `dispatch` from `unwind_into` when the body is still suspended, and re-raises;
+        a clause with no tail switch unwinds from the loop, and the loop clears the mailbox as it re-raises and swallows its own `Unwind`.
+        `exec_try` runs the former body, now `exec_clauses`, under a `try`/`finally` for `finalbody`.
+        The eight programs passed through the translated binary on the first run, with the output derived by hand when they were written,
+        and a scratch program confirmed three cases they leave out: a `finally` whose `return` ends the unwinding inside a called function,
+        a `finally` whose perform is abandoned by an outer handler, and a handler method's undeclared exception unwinding the body before it propagates.
+        `tests/test_interpreter.py` covers `exec_try`'s `finally` untranslated, and `NOT_YET` is empty.
     *   Add the `finally` keyword and `Try.finalbody`, the `try`/`finally` forms of 2.1 including the desugared `finally` on a handler statement,
-        the `finalbody` term in the checker's `Try` formula, `Unwind` in `errors.py`, `HandlerFrame.unwinding`,
-        the third resumption in `switch_into` and `perform`, the unwinding paths in `dispatch` and `answer_with_method`, and the `finally` in `exec_try`.
+        the `finalbody` term in the checker's `Try` formula, `Unwind` in `errors.py`, the third resumption in `switch_into` and `perform`,
+        the unwinding paths in `dispatch` and `answer_with_method`, and the `finally` in `exec_try`.
     *   Order of work, as in Milestones 5 to 7: parser with tests, checker with tests, then the runtime,
         with the acceptance programs strict `xfail` until the runtime passes.
         Sections 2.1, 2.2, 3.3, and 3.4 are updated as each part goes in; 3.4 step 5 is rewritten.

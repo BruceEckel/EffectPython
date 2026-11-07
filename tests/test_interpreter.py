@@ -364,3 +364,109 @@ def test_tail_switch_finds_a_final_throw_or_resume(clause_body, expected):
     handle = parse(CLAUSE_PROGRAM % clause_body).functions[0].body[0]
     clause = handle.clauses[0]
     assert type(tail_switch(clause)) is expected
+
+# --- try/finally (Milestone 8), without a handle statement -------------------
+
+@pytest.mark.parametrize('body, expected_exit, printed', [
+    ('    try:\n'
+     '        print("body")\n'
+     '    finally:\n'
+     '        print("finally")\n'
+     '    print("after")\n'
+     '    return 0\n',
+     0, ["body", "finally", "after"]),
+    ('    try:\n'
+     '        return 3\n'
+     '    finally:\n'
+     '        print("finally")\n',
+     3, ["finally"]),
+    ('    try:\n'
+     '        raise NotFound("a")\n'
+     '    except NotFound as e:\n'
+     '        print("caught")\n'
+     '    finally:\n'
+     '        print("finally")\n'
+     '    return 0\n',
+     0, ["caught", "finally"]),
+    ('    try:\n'
+     '        raise NotFound("a")\n'
+     '    except NotFound as e:\n'
+     '        return 4\n'
+     '    finally:\n'
+     '        print("finally")\n',
+     4, ["finally"]),
+    ('    try:\n'
+     '        try:\n'
+     '            raise NotFound("a")\n'
+     '        finally:\n'
+     '            print("inner")\n'
+     '    except NotFound as e:\n'
+     '        print("caught", e)\n'
+     '    finally:\n'
+     '        print("outer")\n'
+     '    return 0\n',
+     0, ["inner", "caught a", "outer"]),
+], ids=['completes', 'return in the suite', 'caught exception',
+        'return from a clause', 'nested finally after a clause'])
+def test_finally_runs_however_the_try_ends(body, expected_exit, printed):
+    exit_code, lines = run_main_body(body)
+    assert (exit_code, lines) == (expected_exit, printed)
+
+@pytest.mark.parametrize('clauses', [
+    '',
+    '        except Denied as e:\n'
+    '            print("denied")\n',
+], ids=['no clauses', 'clause for another class'])
+def test_finally_runs_before_an_uncaught_exception_propagates(clauses):
+    exit_code, lines = run_main_body(
+        '    try:\n'
+        '        try:\n'
+        '            raise NotFound("a")\n'
+        + clauses +
+        '        finally:\n'
+        '            print("finally")\n'
+        '    except NotFound as e:\n'
+        '        print("outer", e)\n'
+        '    return 0\n')
+    assert lines == ["finally", "outer a"]
+
+def test_return_in_finally_replaces_the_exception():
+    exit_code, lines = run_main_body(
+        '    try:\n'
+        '        raise NotFound("a")\n'
+        '    finally:\n'
+        '        return 5\n')
+    assert (exit_code, lines) == (5, [])
+
+def test_exception_in_finally_replaces_the_return():
+    exit_code, lines = run_main_body(
+        '    try:\n'
+        '        try:\n'
+        '            return 3\n'
+        '        finally:\n'
+        '            raise Denied("b")\n'
+        '    except Denied as e:\n'
+        '        print("denied", e)\n'
+        '    return 0\n')
+    assert (exit_code, lines) == (0, ["denied b"])
+
+def test_runtime_error_passes_through_a_finally():
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(
+            '    try:\n'
+            '        x = 1 // 0\n'
+            '    finally:\n'
+            '        print("finally")\n'
+            '    return 0\n')
+    assert info.value.msg == "integer division by zero"
+
+def test_as_name_is_unbound_in_the_finally():
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(
+            '    try:\n'
+            '        raise NotFound("a")\n'
+            '    except NotFound as e:\n'
+            '        print(e)\n'
+            '    finally:\n'
+            '        print(e)\n')
+    assert info.value.msg == "name 'e' is not defined"

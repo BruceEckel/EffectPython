@@ -60,6 +60,21 @@ class delivers its exception the same way (answer_with_method). A
 tail eff.throw(...) switches from the dispatch loop as a tail resume
 does, and any other eff.throw(...) nests through throw().
 
+Abandoning a body (plan 1.8) is the third way to switch into it. A
+clause that ends without resuming, a return that leaves a clause, and
+an exception that leaves a clause or a method with the body still
+suspended all unwind it: the dispatch loop switches in with an
+Unwind, an EffectError the dialect cannot name, and perform() raises
+it, so it runs every finally suite on the way out of the body's
+stacklet while no except clause can catch it. exec_try runs its
+finally under an RPython try/finally, so a finally that performs is
+answered by the same loop, and one that raises an exception or
+returns replaces the unwinding, as Python's does. The body therefore
+always runs to completion; when the loop finds its own Unwind in the
+mailbox it swallows it, and another frame's Unwind it re-raises,
+which carries an outer abandonment through every body nested inside
+the abandoned one.
+
 rstacklet runs only translated, so the import below is guarded: the
 unit tests import this module without RPython on the path and never
 execute a handle statement. Every runtime error that depends on it
@@ -104,7 +119,8 @@ except ImportError:
     rstacklet = llmemory = None
 from effectpython import ast_nodes as ast
 from effectpython.errors import (EffectError, EffectPythonRuntimeError,
-                                 OneShotContinuationError, RaisedException)
+                                 OneShotContinuationError, RaisedException,
+                                 Unwind)
 from effectpython.model import (W_Root, W_Int, W_Str, W_Bool,
                                 W_EffectPayload, W_EffBinding,
                                 W_Exception, W_HandlerInstance, w_None,
@@ -199,6 +215,7 @@ class HandlerFrame(object):
         self.pending_payload = None  # W_EffectPayload set by perform()
         self.resume_value = None     # W_Root set by eff.resume()
         self.resume_exception = None # W_Exception set by eff.throw()
+        self.resume_unwind = None    # Unwind set when the body is abandoned
         self.pending_error = None    # EffectError the body raised
         self.pending_return = None   # ReturnSignal the body raised
         self.saved_frames = []       # hidden while a clause runs
@@ -325,6 +342,18 @@ class Interpreter(object):
             raise EffectPythonRuntimeError("unknown statement node")
 
     def exec_try(self, stmt, env):
+        """Run the suite and the clause that catches what it raises,
+        then the finally suite however the first part ended: a
+        ReturnSignal, a runtime error, an uncaught RaisedException,
+        and an Unwind all pass through it with the finally run, and a
+        return or an exception in the finally replaces them (plan 1.8).
+        """
+        try:
+            self.exec_clauses(stmt, env)
+        finally:
+            self.exec_block(stmt.finalbody, env)
+
+    def exec_clauses(self, stmt, env):
         """Run the suite; a RaisedException goes to the first clause
         that names its class or Exception, with the clause's name bound
         to the exception. The name is deleted after the clause, as
@@ -357,8 +386,8 @@ class Interpreter(object):
 
     def exec_handle(self, stmt, env):
         """Step 1: run the body in a new stacklet and dispatch whatever
-        comes back. The frame is popped once the body has completed;
-        a clause that abandons the body leaves it hidden by perform()."""
+        comes back. The frame is popped once the body has completed,
+        which a body that was abandoned does by unwinding."""
         instances_w = {}
         for call in stmt.constructions:
             self.install(instances_w, self.eval_expr(call, env))
@@ -394,48 +423,83 @@ class Interpreter(object):
         clause that ends with eff.resume(...) on its own binding,
         switches into the body from this loop, so sequential performs
         handled that way do not nest on the C stack. A resume()
-        anywhere else runs nested through resume()."""
+        anywhere else runs nested through resume(). A clause that ends
+        without switching abandons the body, and so does a return or
+        an exception leaving a clause or a method: the body is unwound
+        before the loop goes on or the signal continues (plan 1.8)."""
         while not self.sthread.is_empty_handle(h):
             payload = frame.pending_payload
-            if payload.effect_name in frame.instances_w:
-                w_eff = W_EffBinding(payload, frame, h)
-                h = self.answer_with_method(w_eff, payload)
-                continue
-            clause = frame.clause_for(payload)
-            tail = tail_switch(clause)
             w_eff = W_EffBinding(payload, frame, h)
-            env = frame.env
-            name = clause.binding
-            had_name = name in env.vars
-            w_old = env.vars.get(name, None)
-            env.define(name, w_eff)
-            w_value = w_None
             try:
-                count = len(clause.body)
-                if tail is not None:
-                    count -= 1
-                for i in range(count):
-                    self.exec_stmt(clause.body[i], env)
-                if tail is not None:
-                    w_value = self.eval_expr(switch_value(tail), env)
-            finally:
-                if had_name:
-                    env.vars[name] = w_old
+                if payload.effect_name in frame.instances_w:
+                    h = self.answer_with_method(w_eff, payload)
                 else:
-                    del env.vars[name]
-            if tail is None:
-                return
-            if isinstance(tail, ast.Throw):
-                h = self.switch_into(w_eff, None,
-                                     exception_value(w_value, "throw"))
-            else:
-                h = self.switch_into(w_eff, w_value, None)
+                    h = self.answer_with_clause(w_eff, payload)
+            except (ReturnSignal, EffectError):
+                self.unwind(w_eff)
+                raise
         error = frame.pending_error
         if error is not None:
+            frame.pending_error = None
+            if isinstance(error, Unwind) and error.frame is frame:
+                return
             raise error
         signal = frame.pending_return
         if signal is not None:
+            frame.pending_return = None
             raise signal
+
+    def answer_with_clause(self, w_eff, payload):
+        """Bind the clause's name for the clause's duration and run it,
+        then switch into the body with its tail value or exception, or
+        unwind the body when the clause ends without a tail."""
+        frame = w_eff.frame
+        clause = frame.clause_for(payload)
+        tail = tail_switch(clause)
+        env = frame.env
+        name = clause.binding
+        had_name = name in env.vars
+        w_old = env.vars.get(name, None)
+        env.define(name, w_eff)
+        w_value = w_None
+        try:
+            count = len(clause.body)
+            if tail is not None:
+                count -= 1
+            for i in range(count):
+                self.exec_stmt(clause.body[i], env)
+            if tail is not None:
+                w_value = self.eval_expr(switch_value(tail), env)
+        finally:
+            if had_name:
+                env.vars[name] = w_old
+            else:
+                del env.vars[name]
+        if tail is None:
+            if self.sthread.is_empty_handle(w_eff.h_body):
+                return w_eff.h_body
+            return self.unwind_into(w_eff)
+        if isinstance(tail, ast.Throw):
+            return self.switch_into(w_eff, None,
+                                    exception_value(w_value, "throw"))
+        return self.switch_into(w_eff, w_value, None)
+
+    def unwind(self, w_eff):
+        """Unwind the body a clause or method is leaving by a return or
+        an exception, when it is still suspended, and dispatch what it
+        performs on the way out. The loop ends by swallowing this
+        frame's Unwind, or by raising what replaced it."""
+        if self.sthread.is_empty_handle(w_eff.h_body):
+            return
+        h = self.unwind_into(w_eff)
+        self.dispatch(w_eff.frame, h)
+
+    def unwind_into(self, w_eff):
+        """Switch into the suspended body with an Unwind for its
+        perform to raise (plan 1.8)."""
+        frame = w_eff.frame
+        frame.resume_unwind = Unwind(frame)
+        return self.switch_into(w_eff, None, None)
 
     def answer_with_method(self, w_eff, payload):
         """A handler method's return value resumes the body, and an
@@ -458,7 +522,8 @@ class Interpreter(object):
         mail the payload, and switch to the handler side. When a
         resume() switches back, restore the frames and return its
         value; when a throw() does, raise its exception here, at the
-        perform site (plan 1.7)."""
+        perform site (plan 1.7); when an abandoning clause does, raise
+        the Unwind that runs the body's finally suites (plan 1.8)."""
         i = len(self.handler_stack) - 1
         while i >= 0 and not self.handler_stack[i].handles(effect_name):
             i -= 1
@@ -473,6 +538,10 @@ class Interpreter(object):
         frame.h_handler = self.sthread.switch(frame.h_handler)
         self.handler_stack.extend(frame.saved_frames)
         frame.saved_frames = []
+        unwind = frame.resume_unwind
+        frame.resume_unwind = None
+        if unwind is not None:
+            raise unwind
         w_exception = frame.resume_exception
         frame.resume_exception = None
         if w_exception is not None:
@@ -484,7 +553,8 @@ class Interpreter(object):
     def switch_into(self, w_eff, w_value, w_exception):
         """Step 4: consume the one-shot handle and switch into the body
         with a value for the perform to return or an exception for it
-        to raise. Returns the handle that comes back when the body
+        to raise; unwind_into() sets the Unwind beforehand and passes
+        neither. Returns the handle that comes back when the body
         performs again or finishes."""
         if self.sthread.is_empty_handle(w_eff.h_body):
             raise OneShotContinuationError(
