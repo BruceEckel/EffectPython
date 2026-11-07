@@ -286,7 +286,7 @@ no code after the `try` runs once that clause has, so the name keeps the type, t
 A clause that ends in `raise` still deletes the name for the checker, since an enclosing `try` in the same function can catch the exception and continue.
 A read that precedes the clause in the source but follows it in time, as in a loop body, stays a runtime error.
 Clauses are tried in order, and an exception no clause matches propagates.
-There is no `else`, `finally`, or bare `except:`, and no re-raise through a bare `raise`.
+There is no `else` or bare `except:`, and no re-raise through a bare `raise`; `finally` is designed in 1.8.
 A runtime error of the interpreter (an undefined name, division by zero) stays uncatchable:
 it reports a program the checker could not reject, not a failure the program planned for.
 
@@ -495,6 +495,115 @@ and `OperationDef` gains the row.
 3.  *Whether a performer must account for the class under a handler that cannot throw it.*
     The design says yes, since the row is checked per operation and not per installed handler.
     A `handle` block could subtract the classes its clauses provably do not throw, at the cost of a rule that reads the clauses to type the body.
+
+### 1.8 `finally` and Abandonment (designed 2026-11-06, open questions at the end)
+
+A clause that ends without resuming abandons the suspended body (3.4, step 5), and so do a `return` in a clause and an exception raised in a clause or a handler method (1.6).
+Today abandonment drops the body's stacklet: no statement of the body runs again, and the stacklet is freed when its handle becomes unreachable.
+That is sound for a body that holds nothing, and wrong for one that holds a resource.
+The dialect has no `finally`, so the question has not arisen; adding `finally` raises it, because a `finally` inside an abandoned body would be skipped.
+Every effect system meets this: Koka runs a continuation's finalizers when the continuation is discarded,
+and Python runs a generator's `finally` blocks when the generator is closed, by raising `GeneratorExit` at the suspended `yield`.
+This section adds `try`/`finally` and settles abandonment the same way: an abandoned body is unwound, not dropped.
+
+**The form.**
+
+```python
+from effectpython import Effect, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+def work() -> int / [Abort]:
+    print("open")
+    try:
+        perform(Abort.stop("done early"))
+        print("never printed")
+        return 1
+    finally:
+        print("close")
+
+def main() -> int / []:
+    try:
+        with handle(Abort):
+            print(work())
+    except Abort.stop as eff:
+        print("aborted:", eff.reason)
+    print("after")
+    return 0
+```
+
+The program prints `open`, `aborted: done early`, `close`, and `after`.
+The clause runs first and does not resume; the body is then unwound, which runs its `finally`; and execution continues after the `try`.
+`print(work())` does not run, since `work` returns nothing: the body ends by unwinding.
+
+`try: <suite> finally: <suite>` is Python's: the second suite runs after the first, whether the first completes, returns, raises, or is unwound.
+`try: <suite> except <Name> [as <e>]: <suite> ... finally: <suite>` combines the two, with the `finally` after the matching clause.
+A `try` with effect clauses may carry a `finally` too, which the parser places around the `Handle` as a `Try` with no clauses;
+it runs when the block completes or is abandoned, and it belongs to the installing function, not the body.
+There is still no `else`.
+
+**Unwinding.**
+Abandonment becomes a third way to switch into the body, beside a value (`resume`) and an exception (`throw`):
+the body is resumed with an internal `Unwind` signal, and the suspended `perform` raises it.
+`Unwind` is an RPython exception the dialect cannot name, so no `except` clause catches it,
+and it propagates out through the body's calls, running each `finally` on the way, until the body's stacklet finishes.
+Unwinding happens when a clause ends without having resumed or thrown, when a `return` leaves a clause with the body still suspended,
+and when an exception leaves a clause or a handler method with the body still suspended.
+In the first case the dispatch loop unwinds the body and then returns, as it returns today after a completed body.
+In the other two it unwinds the body and then lets the `return` or the exception continue.
+A body that completed before the clause ended, through a non-tail `resume()`, has nothing to unwind, and the one-shot handle says so.
+
+A `finally` may do during unwinding whatever it may do otherwise.
+If it performs, the `perform` switches to the handler side and the dispatch loop answers it as it answers any other,
+so a `finally` can log through an effect or close a resource through one; the clause's `resume()` continues the unwinding.
+If it raises an exception, the exception replaces the unwinding: it reaches `run_body_callback` as a body exception does (1.6, case 1)
+and surfaces at the `handle` statement, where a `try` can catch it.
+If it returns, the `return` replaces the unwinding the same way, and the installing function returns that value, as a `return` in a body does today.
+Both are Python's rules for a `finally` that raises or returns while an exception is in flight, and both also replace the outcome that caused the unwinding:
+a clause's `return 3` followed by a body `finally` that raises `NotFound` makes the function raise `NotFound`.
+
+**Nested bodies.**
+An outer clause that abandons a body unwinds every body suspended inside it.
+The `Unwind` raised at the inner body's `perform` runs that body's `finally` blocks and ends its stacklet;
+the inner frame's dispatch loop finds it in `pending_error`, re-raises it on the outer body's stack, where it runs the outer body's `finally` blocks,
+and the outer frame's loop finds it and stops, since that frame began the unwinding.
+`Unwind` carries the frame that began it, and a dispatch loop that meets another frame's `Unwind` re-raises it.
+A body that is unwinding may perform an outer effect from a `finally` and be abandoned again by that handler;
+the new `Unwind` replaces the old, and the outcome is the same, every body unwound and execution continuing after the outer `try`.
+
+**Checker.**
+A `Try` gains a `finalbody`, whose effects join the statement's effects unconditionally:
+$\text{Effects}(\text{Try}) = (\text{Effects}(\text{suite}) \setminus \text{caught}) \cup \bigcup_c \text{Effects}(c) \cup \text{Effects}(\text{finalbody})$.
+`Unwind` is not an exception class and appears in no row.
+A `finally` on a handler statement contributes its effects to the installing function, as the desugaring places it.
+Nothing else changes: a `finally` is a suite like any other, and the `as` name of a clause is already unbound when it runs.
+
+**Runtime.**
+`HandlerFrame` gains `unwinding`, set when its dispatch loop begins an unwind.
+`switch_into` takes a third kind of resumption, and `perform` raises `Unwind(frame)` after the hidden frames are restored, as it raises a thrown exception.
+`exec_try` runs its suite and clauses under an RPython `try`/`finally` that runs `finalbody`, so `ReturnSignal`, `EffectPythonRuntimeError`, `RaisedException`, and `Unwind` all pass through it with the `finally` run.
+`run_body_callback` stores `Unwind` in `pending_error` as it stores any `EffectError`.
+The dispatch loop, where today it returns with the body suspended, unwinds instead:
+`h = switch_into(eff, unwind)` and back to the top of the loop, so a `finally` that performs is answered.
+When the loop ends with `pending_error` an `Unwind` of this frame, it clears it and returns; another frame's `Unwind` it re-raises.
+The clause body and the handler method call run under a `try` that, on `ReturnSignal` or `EffectError` with the body still suspended, unwinds first and re-raises after.
+A body's stacklet now always runs to completion, so nothing depends on the GC destructor freeing an abandoned stacklet (3.4, step 5), though it still would.
+
+**Open questions.**
+
+1.  *Unwind, or document that `finally` is skipped.*
+    Skipping is what dropping the stacklet does today, and it is simpler.
+    The design unwinds, because a `finally` that may not run is not a `finally`, and because the mechanism is `eff.throw()` with an internal signal.
+2.  *Whether a `finally` may perform during unwinding.*
+    The design says yes: closing a resource through an effect is the use case, and the dispatch loop needs no new path for it.
+    Forbidding it would need a checker rule that tells a `finally` from the rest of the suite.
+3.  *What a `finally` that raises or returns during unwinding does.*
+    The design follows Python: the new outcome replaces the unwinding and whatever caused it.
+    The alternative, finishing the unwind and then restoring the original outcome, is what a `with` statement's `__exit__` does when it returns false, and it would need the clause's pending `return` or exception kept aside.
+4.  *Whether a `finally` on the handler statement is allowed.*
+    The design allows it by desugaring, since a reader expects `try`/`except`/`finally` to accept it.
+    Rejecting it would be a parser rule with a message pointing at a `try` around the statement.
 
 ---
 
@@ -973,3 +1082,22 @@ EffectPython/
             `x.throw(...)` on a name that is not a clause binding; and a function that performs an operation with a row and neither declares nor catches the class.
         *   Accept a body that catches the operation's class at the `perform`, a `try` around the `handle` statement that catches it,
             and an installing function with an empty row whose handler method raises the operation's class and whose body catches it.
+8.  **Milestone 8: `finally` and Abandonment (1.8)**
+    *   *Designed 2026-11-06; not started.* The open questions of 1.8 come first.
+    *   Add the `finally` keyword and `Try.finalbody`, the `try`/`finally` forms of 2.1 including the desugared `finally` on a handler statement,
+        the `finalbody` term in the checker's `Try` formula, `Unwind` in `errors.py`, `HandlerFrame.unwinding`,
+        the third resumption in `switch_into` and `perform`, the unwinding paths in `dispatch` and `answer_with_method`, and the `finally` in `exec_try`.
+    *   Order of work, as in Milestones 5 to 7: parser with tests, checker with tests, then the runtime,
+        with the acceptance programs strict `xfail` until the runtime passes.
+        Sections 2.1, 2.2, 3.3, and 3.4 are updated as each part goes in; 3.4 step 5 is rewritten.
+    *   *Acceptance test:*
+        *   `try_finally.epy`: `try`/`finally` without effects; the `finally` runs after a completing suite, after a `return`, and after a caught exception with `except` and `finally` together.
+        *   `finally_in_body.epy`: the program in 1.8; the clause does not resume, the body's `finally` runs after the clause and before the code after the `try`, and the body's statements after the `perform` do not run.
+        *   `finally_performs.epy`: the body's `finally` performs a `Log` effect during unwinding, an outer clause resumes it, and the unwinding completes.
+        *   `finally_in_nested_body.epy`: an outer clause abandons a body with an inner handled body suspended inside it; the inner body's `finally` runs, then the outer body's, then the code after the outer `try`.
+        *   `finally_on_return_in_clause.epy`: a clause returns; the body's `finally` runs before the function returns, and the exit code is the clause's value.
+        *   `finally_on_raise_in_clause.epy`: a clause raises `NotFound`; the body's `finally` runs, and the exception is caught outside the `handle` statement.
+        *   `finally_raises.epy`: the body's `finally` raises during unwinding; the exception surfaces at the `handle` statement and is caught there, replacing the abandonment.
+        *   `handle_with_finally.epy`: a `finally` on the handler statement runs after the block completes and, in a second block, after a clause abandons the body.
+        *   Reject a function whose `finally` performs or raises without the name in its row, and a `try` with neither clauses nor `finally`.
+        *   Accept `try`/`except`/`finally` and `try`/`finally` inside a body, inside a clause, and inside a handler method.
