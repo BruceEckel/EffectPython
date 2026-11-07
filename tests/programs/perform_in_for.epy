@@ -1,0 +1,42 @@
+# Milestone 9: a perform inside a for. The first loop performs on
+# each pass, and the clause appends to a list the body walks next,
+# which the body sees since the list is shared. The second loop is
+# abandoned on its second pass: the finally inside the suite runs
+# once, for that pass, and the finally around the loop runs after it.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value(i: int) -> int: ...
+
+class Abort(Effect):
+    def stop() -> int: ...
+
+def main() -> int / []:
+    seen = []
+    try:
+        with handle(Ask):
+            total = 0
+            for i in range(3):
+                total = total + perform(Ask.value(i))
+            print("total", total)
+            for s in seen:
+                print("seen", s)
+    except Ask.value as eff:
+        seen.append(eff.i * 10)
+        eff.resume(eff.i * 10)
+    try:
+        with handle(Abort):
+            try:
+                for i in range(5):
+                    try:
+                        print("pass", i)
+                        if i == 1:
+                            perform(Abort.stop())
+                    finally:
+                        print("end of pass", i)
+            finally:
+                print("loop done")
+    except Abort.stop as eff:
+        print("abandoned")
+    return 0

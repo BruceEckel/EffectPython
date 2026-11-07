@@ -1,0 +1,11 @@
+exit 0
+total 30
+seen 0
+seen 10
+seen 20
+pass 0
+end of pass 0
+pass 1
+abandoned
+end of pass 1
+loop done

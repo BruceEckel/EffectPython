@@ -1,0 +1,32 @@
+# Milestone 9: the program of plan 1.9. A handler field holds a list
+# that the installing function reads after the block, and a second
+# instance of the class holds a list of its own.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Collector(Handler[Log]):
+    entries: list[str] = []
+    def note(self, text: str) -> int:
+        self.entries.append(text)
+        return len(self.entries)
+
+def squares(n: int) -> list[int] / [Log]:
+    result = []
+    for i in range(n):
+        result.append(i * i)
+        perform(Log.note("squared " + str(i)))
+    return result
+
+def main() -> int / []:
+    collector = Collector()
+    with handle(collector):
+        xs = squares(4)
+    print(xs, len(xs), xs[0], xs[-1])
+    for entry in collector.entries:
+        print(entry)
+    other = Collector()
+    print(len(other.entries), len(collector.entries))
+    return 0

@@ -1,0 +1,6 @@
+exit 0
+[3, 1, 2] 3 3 2
+[3, 10, 2, 4] 4
+True False False
+['a', 'b'] [True, False] [] 3
+7Trues

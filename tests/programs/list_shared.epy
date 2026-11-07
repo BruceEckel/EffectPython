@@ -1,0 +1,13 @@
+# Milestone 9: lists are shared by reference. A function that appends
+# to a parameter appends to the caller's list, and ys = xs aliases.
+
+def add(xs: list[int], n: int) -> int:
+    xs.append(n)
+    return len(xs)
+
+def main() -> int:
+    xs = [1]
+    ys = xs
+    print(add(xs, 2), add(ys, 3))
+    print(xs, ys, xs == ys)
+    return 0

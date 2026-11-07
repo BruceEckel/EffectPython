@@ -1,0 +1,10 @@
+# Milestone 9: for over range() with one and two arguments. The loop
+# name stays bound after the loop with the last integer.
+
+def main() -> int:
+    for i in range(3):
+        print("i", i)
+    for j in range(2, 5):
+        print("j", j)
+    print(i, j)
+    return 0

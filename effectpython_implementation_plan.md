@@ -607,7 +607,7 @@ its `return` is caught by that function's call, so the function returns the valu
     The design allows it by desugaring, since a reader expects `try`/`except`/`finally` to accept it.
     Rejecting it would be a parser rule with a message pointing at a `try` around the statement.
 
-### 1.9 Lists and the `for` Loop (designed 2026-11-07)
+### 1.9 Lists and the `for` Loop (designed 2026-11-07, open questions settled 2026-11-07)
 
 Every acceptance program so far counts with a `while` loop and an integer, and a handler that collects what it sees keeps a running `str`,
 because the dialect has no sequence type and no loop over one.
@@ -684,8 +684,9 @@ The names `len` and `range` join `print` as built-ins: a function with one of th
 **Runtime.**
 `W_List(items_w)` holds a `list[W_Root]`, with `str()` producing the Python form, which quotes a `str` element with single quotes
 (the dialect's strings have no escapes, so no element needs any).
-`ListLiteral`, `Index`, `IndexAssign`, and a `Builtin` call for `len` are new nodes;
-`xs.append(v)` reuses the attribute-call node the parser builds for `NAME.NAME(args)` today, and the interpreter picks the list case by the target's value, as the checker picks it by type.
+`ListLiteral`, `Index`, `IndexAssign`, `For`, `ForRange`, and `MethodCall` are new nodes, and `len()`, `str()`, and `range()` are `Call` nodes the checker and the interpreter recognize by name, as `print` is;
+`xs.append(v)` on a name is the `OpCall` the parser builds for `name.op(args)`, and the interpreter picks the list case by the name's value, as the checker picks it by type,
+while `self.entries.append(v)` on a field is a `MethodCall` whose target is an expression (frontend, 2026-11-07).
 `exec_for` evaluates the iterable once, then loops by index against the list's current length, defining the name in the environment before each run of the suite;
 the parser folds `for <name> in range(<args>)` into a `ForRange` node, as it folds `perform(...)`, so the runtime counts without building a list.
 An index out of range, or a non-integer index on a value the checker could not type, is an `EffectPythonRuntimeError`, "list index out of range", uncatchable like division by zero.
@@ -701,7 +702,7 @@ A clause that holds the list being walked, through the installing function's env
 that is Python's behavior for the same program, and the acceptance program `perform_in_for.epy` checks it.
 The checker needs no rule for it.
 
-**Open questions (recommendations in italics).**
+**Open questions (recommendations in italics; settled 2026-11-07 as recommended).**
 
 1.  *Whether `range()` is a value or a `for`-only form.*
     A materialized `range()` would be a `list[int]`, usable anywhere, and `print(range(3))` would print `[0, 1, 2]` where Python prints `range(0, 3)`.
@@ -722,6 +723,13 @@ The checker needs no rule for it.
     The program above builds a log entry from an integer, which no construct does today, and a loop that labels its iterations needs it.
     *The design adds `str()` as a third built-in, accepting an `int`, a `str`, or a `bool` and giving what `print` would print; `W_Root.str()` has the conversion.*
 
+**Frontend notes (2026-11-07).**
+Attribute reads, attribute calls, and indexing became postfix productions on an expression, as in Python's grammar, since `self.entries.append(text)` is a three-name chain the `NAME.NAME(...)` atoms could not read;
+the actions require a name on the left of an attribute read and of an assignment target, and one assignment production sorts its target into `Assign`, `AttrAssign`, or `IndexAssign`.
+A unary minus, which the grammar lacked, folds into the literal it negates or into `0 - x`, so `xs[-1]` parses and no node is added.
+A bare `list` annotation is a syntax error, since the checker spells the element-less type of `[]` that way and the two must not meet.
+A name holding `[]` takes the element type of the first value appended to it, so a later `append` of another type is rejected, which goes a little past the design's "not caught".
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -730,7 +738,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for` and `in`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from effectpython import <names>` (accepted and ignored)
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
@@ -740,13 +748,16 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
     *   `if <expr>: <suite>`, with an optional `else: <suite>`
     *   `while <expr>: <suite>` (added 2026-10-30 for `tests/programs/many_performs.epy`)
+    *   `for <name> in <expr>: <suite>`, a `For` node, or a `ForRange` node when the expression is a call to `range` (1.9; Milestone 9, 2026-11-07)
+    *   indexed assignment `<expr>[<expr>] = <expr>`, an `IndexAssign` node; one production reads every assignment and sorts the target into `Assign`, `AttrAssign`, or `IndexAssign` (1.9; Milestone 9, 2026-11-07)
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
     *   `class <Name>(Exception): ...`, with `pass` allowed in place of `...` and either one allowed on an indented line, giving an `ExceptionDef` node (1.6; Milestone 6, 2026-11-06)
     *   `raise <expr>`, a `Raise` node (1.6; Milestone 6, 2026-11-06)
     *   `try: <suite> except <Name> [as <name>]: <suite>`, a `Try` node with one `ExceptClause` per clause; one production covers this and the `handle` form above, and the action tells them apart by the clauses (1.6; Milestone 6, 2026-11-06)
     *   `finally: <suite>` after the clauses of either `try` form, or after a `try` suite with no clauses, filling `Try.finalbody`; on effect clauses the `Handle` is wrapped in a clause-less `Try` (1.8; Milestone 8, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
-*   **Expressions:** Integer/string literals, `True` and `False` (a `BoolLiteral`, added 2026-11-06, which `==` and `!=` compare), variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31).
+*   **Expressions:** Integer/string literals, `True` and `False` (a `BoolLiteral`, added 2026-11-06, which `==` and `!=` compare), variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31). Milestone 9 adds list literals `[<exprs>]`, indexing `<expr>[<expr>]` (an `Index`), a method call on an expression `<expr>.<name>(<args>)` (a `MethodCall`; on a name it is the `OpCall` above), the built-in calls `len(...)`, `str(...)`, and `range(...)`, and a unary minus folded into the literal it negates or into `0 - x`; attribute reads, attribute calls, and indexing are postfix forms on an expression, with a name required on the left of a dot (1.9; Milestone 9, 2026-11-07).
+*   **Types:** a parameter, return, or field type is a name or `list[int]`, `list[str]`, or `list[bool]`, which the parser reads into one string (1.9; Milestone 9, 2026-11-07).
 
 Two constraints on the lexer, found when translating `experiments/rply_addition.py` (2026-10-28), which confirmed that `rply` 0.7.8 translates with this toolchain:
 
@@ -773,6 +784,7 @@ The static analyzer runs in three passes over the AST before execution:
             3. Computes the net effect of the `HandleNode` as:
                $$\text{Effects}(\text{HandleNode}) = (\text{Effects}(\text{body}) \setminus \text{handled\_effects}) \cup \bigcup_{c \in \text{clauses}} \text{Effects}(c)$$
         *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, 2026-11-06); a `finalbody` unions its effects unconditionally (1.8; Milestone 8, 2026-11-06).
+        *   Lists (1.9; Milestone 9, 2026-11-07): a `ListLiteral` has the type `list[T]` of its elements, which must share one type, or the element-less `list` when it is empty, which `matches` accepts for any list type; `Index` has the element type and needs an `int` index; `IndexAssign` and `append` need a value of the element type, and a name holding `[]` takes the element type of its first `append`; `len()` of a list or `str` is `int`, `str()` of a scalar is `str`, and `range()` outside a `for` is rejected; `For` binds its name to the iterable's element type and `ForRange` to `int`, each an assignment for the `Name` rule, and both union the suite's effects; `==` and `!=` are the operators of a list type; and `len`, `str`, and `range` join `print` as names a function cannot take.
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
 3.  **Pass 3 — Entrypoint Verification:**
     *   Verifies that `main()` exists and its `declared_effect_row` is empty (`[]`).
@@ -1267,7 +1279,14 @@ EffectPython/
         *   Reject a function whose `finally` performs or raises without the name in its row, and a `try` with neither clauses nor `finally`.
         *   Accept `try`/`except`/`finally` and `try`/`finally` inside a body, inside a clause, and inside a handler method.
 9.  **Milestone 9: Lists and the `for` Loop (1.9)**
-    *   *Designed 2026-11-07*, with six open questions and recommendations in 1.9.
+    *   *Designed 2026-11-07*, with six open questions and recommendations in 1.9, settled the same day as recommended.
+    *   *Frontend done 2026-11-07.*
+        `lexer.py` has `for` and `in`; `ast_nodes.py` has `For`, `ForRange`, `IndexAssign`, `ListLiteral`, `Index`, and `MethodCall`;
+        `parser.py` reads types through a `type` nonterminal, attribute and index forms as postfix productions, one assignment production, the `for` statement with `range` folded, and a unary minus (1.9, frontend notes);
+        `checker.py` has the rules of 1.9 and 2.2, with `matches` in place of the equality tests on types.
+        `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
+        The seven programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime follows;
+        `rejected_range_value.epy` passes through the translated binary from the start.
     *   Add the keywords `for` and `in`, the `list[T]` type form, the list literal, `len()`, `str()`, indexing and indexed assignment, `append`, list equality,
         the `for` statement over a list and over `range()`, the checker rules of 1.9, `W_List`, `exec_for`, and list fields built fresh per construction.
     *   Order of work, as in Milestones 5 to 8: parser with tests, checker with tests, then the runtime,
@@ -1281,5 +1300,6 @@ EffectPython/
         *   `collector.epy`: the program in 1.9; a handler field holds a list, and two instances of the class hold two lists.
         *   `perform_in_for.epy`: a `perform` inside a `for` over `range()`, resumed by a clause that appends to a list the body walks next; then a clause that abandons the body mid-loop, with a `finally` inside the suite that runs once and a `finally` around the loop that runs after it.
         *   `list_index_error.epy`: `xs[3]` on a list of three is a runtime error with exit code 1.
+        *   `rejected_range_value.epy`: `xs = range(3)` is rejected and exits 1.
         *   Reject `[1, "a"]`; `xs = range(3)`; `for x in 5`; `len(5)`; `n[0]`, `n[0] = 1`, and `n.append(1)` on an `int`; `xs.append("a")` on a `list[int]`; `xs[0] = "a"` on a `list[int]`; a read of the loop name before the loop; and `def len(...)`.
         *   Accept `result = []` then `result.append(1)` and `return result` from `-> list[int]`; a `list[bool]` field defaulting to `[]`; and `for` inside a clause, a handler method, and a `finally`.

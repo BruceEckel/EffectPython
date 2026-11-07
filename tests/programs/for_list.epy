@@ -1,0 +1,12 @@
+# Milestone 9: a for over a list walks it by index against its live
+# length, as Python does, so an append inside the body lengthens the
+# walk. The loop name holds the last element afterwards.
+
+def main() -> int:
+    xs = [1, 2, 3]
+    for x in xs:
+        print(x)
+        if x == 2:
+            xs.append(4)
+    print(xs, x)
+    return 0

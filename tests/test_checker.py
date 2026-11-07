@@ -1,7 +1,8 @@
 """Milestone 2 acceptance: the static effect checker (plan 2.2, 4.2),
 from Milestone 5 the handler class rules (plan 1.5), from Milestone 6
 the exception rules (plan 1.6), from Milestone 7 the throw rules
-(plan 1.7), and from Milestone 8 the finally rules (plan 1.8).
+(plan 1.7), from Milestone 8 the finally rules (plan 1.8), and from
+Milestone 9 the list and for rules (plan 1.9).
 
 Run with:  pypy2 -m pytest
 """
@@ -373,10 +374,10 @@ FAKE = ('class Fake(Handler[FileIO]):\n'
      '        return 0\n' + MAIN, InvalidProgram,
      "line 9: method 'read' of handler class 'Fake' must return str, "
      "as FileIO.read does"),
-    ('class Fake(Handler[FileIO]):\n    items: list\n' + FAKE[29:] + MAIN,
+    ('class Fake(Handler[FileIO]):\n    items: Nope\n' + FAKE[29:] + MAIN,
      InvalidProgram,
-     "line 9: field 'items' of handler class 'Fake' must be int or str, "
-     "not list"),
+     "line 9: field 'items' of handler class 'Fake' must be int, str, or "
+     "list[...], not Nope"),
     ('class Fake(Handler[FileIO]):\n    writes: int = "x"\n' + FAKE[29:]
      + MAIN, InvalidProgram,
      "line 9: default of field 'writes' must be int, not str"),
@@ -959,3 +960,150 @@ def test_rejects_a_read_of_the_clause_name_in_its_finally():
     assert info.value.msg == (
         "line 24: name 'e' is unbound after the except clause "
         "that bound it")
+
+# --- Lists and the for loop (Milestone 9) ------------------------------------
+
+COLLECTOR = ('class Log(Effect):\n    def note(text: str) -> int: ...\n'
+             'class Collector(Handler[Log]):\n'
+             '    entries: list[str] = []\n'
+             '    def note(self, text: str) -> int:\n'
+             '        self.entries.append(text)\n'
+             '        return len(self.entries)\n')
+
+LISTED = ('def names() -> list[str]:\n    return ["a", "b"]\n'
+          'def f() -> int:\n    for x in names():\n')
+
+@pytest.mark.parametrize('name', [
+    'collector.epy', 'for_list.epy', 'for_range.epy', 'list_ops.epy',
+    'list_shared.epy', 'perform_in_for.epy', 'list_index_error.epy',
+])
+def test_accepts_the_list_programs(name):
+    check(parse(read_program(name)))
+
+def test_rejects_the_range_value_program():
+    with pytest.raises(InvalidProgram) as info:
+        check(parse(read_program('rejected_range_value.epy')))
+    assert info.value.msg == (
+        'line 5: range() is allowed only as the iterable of a for '
+        'statement')
+
+@pytest.mark.parametrize('body', [
+    'def f() -> list[int]:\n    result = []\n    result.append(1)\n'
+    '    return result\n' + MAIN,
+    'class Fake(Handler[FileIO]):\n    flags: list[bool] = []\n'
+    + FAKE[29:] + MAIN,
+    'def main() -> int / []:\n    try:\n        with handle(DBQuery):\n'
+    '            print(perform(DBQuery.execute("q")))\n'
+    '    except DBQuery.execute as eff:\n        for i in range(2):\n'
+    '            print(i)\n        eff.resume(eff.sql)\n    return 0\n',
+    'class Fake(Handler[FileIO]):\n'
+    '    def read(self, path: str) -> str:\n'
+    '        for part in [path, path]:\n            print(part)\n'
+    '        return path\n'
+    '    def write(self, path: str, content: str) -> int:\n'
+    '        return 0\n' + MAIN,
+    'def f() -> int:\n    try:\n        pass\n    finally:\n'
+    '        for i in range(1, 3):\n            print(i)\n'
+    '    return 0\n' + MAIN,
+], ids=['built-from-empty', 'empty-field-default', 'for-in-clause',
+        'for-in-method', 'for-in-finally'])
+def test_accepts_a_list_program(body):
+    check_source(body)
+
+@pytest.mark.parametrize('stmt', [
+    'print(xs[-1])', 'print(xs == [])', 'print([] == [])',
+    'print(len("ab"))', 'print(str(1) + str(True))', 'print(xs[i])',
+    'xs[i] = v',
+])
+def test_accepts_a_list_operation(stmt):
+    check_source('def f(xs: list[int], i: int, v: int) -> int:\n'
+                 '    %s\n    return 0\n' % stmt + MAIN)
+
+def test_a_for_binds_its_name_to_the_element_type():
+    check_source(LISTED + '        print(x + "!")\n    return 0\n' + MAIN)
+
+def test_a_for_name_of_element_type_rejects_a_mismatched_operand():
+    with pytest.raises(InvalidProgram) as info:
+        check_source(LISTED + '        print(x + 1)\n    return 0\n' + MAIN)
+    assert info.value.msg == (
+        'line 12: unsupported operand types for +: str and int')
+
+def test_a_for_over_an_empty_list_leaves_its_name_untyped():
+    check_source('def f() -> int:\n    xs = []\n    for x in xs:\n'
+                 '        print(x + 1, x + "a")\n    return 0\n' + MAIN)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n    xs = [1, "a"]\n    return 0\n' + MAIN,
+     'line 9: list elements must share a type: int and str'),
+    ('def f() -> int:\n    xs = range(3)\n    return 0\n' + MAIN,
+     'line 9: range() is allowed only as the iterable of a for '
+     'statement'),
+    ('def f() -> int:\n    for x in 5:\n        pass\n    return 0\n'
+     + MAIN, 'line 9: for needs a list or range(), not int'),
+    ('def f() -> int:\n    print(len(5))\n    return 0\n' + MAIN,
+     'line 9: len() needs a list or str, not int'),
+    ('def f() -> int:\n    print(len("a", "b"))\n    return 0\n' + MAIN,
+     'line 9: len() takes 1 arguments (2 given)'),
+    ('def f() -> int:\n    n = 1\n    return n[0]\n' + MAIN,
+     "line 10: 'n' is not a list"),
+    ('def f() -> int:\n    n = 1\n    n[0] = 1\n    return 0\n' + MAIN,
+     "line 10: 'n' is not a list"),
+    ('def f() -> int:\n    n = 1\n    n.append(1)\n    return 0\n' + MAIN,
+     "line 10: 'n' is not a list"),
+    ('def f() -> int:\n    xs = [1]\n    xs.append("a")\n    return 0\n'
+     + MAIN, 'line 10: argument 1 of append() must be int, not str'),
+    ('def f() -> int:\n    xs = [1]\n    xs[0] = "a"\n    return 0\n'
+     + MAIN, 'line 10: the list holds int; cannot assign str'),
+    ('def f() -> int:\n    xs = [1]\n    print(xs["a"])\n    return 0\n'
+     + MAIN, 'line 10: a list index must be int, not str'),
+    ('def f() -> int:\n    xs = [1]\n    xs.pop(1)\n    return 0\n'
+     + MAIN, "line 10: a list has no method 'pop'"),
+    ('def f() -> int:\n    print(x)\n    for x in [1]:\n        pass\n'
+     '    return 0\n' + MAIN, "line 9: name 'x' is not defined"),
+    ('def f() -> int:\n    for i in range():\n        pass\n'
+     '    return 0\n' + MAIN,
+     'line 9: range() takes 1 to 2 arguments (0 given)'),
+    ('def f() -> int:\n    for i in range(1, 2, 3):\n        pass\n'
+     '    return 0\n' + MAIN,
+     'line 9: range() takes 1 to 2 arguments (3 given)'),
+    ('def f() -> int:\n    for i in range("a"):\n        pass\n'
+     '    return 0\n' + MAIN,
+     'line 9: argument 1 of range() must be int, not str'),
+    ('def f() -> int:\n    print(str([1]))\n    return 0\n' + MAIN,
+     'line 9: str() needs an int, str, or bool, not list[int]'),
+    ('def f() -> int:\n    print([1] == ["a"])\n    return 0\n' + MAIN,
+     'line 9: unsupported operand types for ==: list[int] and list[str]'),
+    ('def f() -> int:\n    print([1] + [2])\n    return 0\n' + MAIN,
+     'line 9: unsupported operand types for +: list[int] and list[int]'),
+    ('def f() -> int:\n    r = []\n    r.append(1)\n    r.append("a")\n'
+     '    return 0\n' + MAIN,
+     'line 11: argument 1 of append() must be int, not str'),
+    ('def f(xs: list[str]) -> int:\n    return 0\n'
+     'def g() -> int:\n    r = []\n    r.append(1)\n    return f(r)\n'
+     + MAIN, 'line 13: argument 1 of f() must be list[str], not list[int]'),
+    ('class Fake(Handler[FileIO]):\n    xs: list[int] = 1\n' + FAKE[29:]
+     + MAIN, "line 9: default of field 'xs' must be list[int], not int"),
+    ('class Fake(Handler[FileIO]):\n    xs: int = []\n' + FAKE[29:]
+     + MAIN, "line 9: default of field 'xs' must be int, not list"),
+    (COLLECTOR + 'def f() -> int:\n    c = Collector()\n'
+     '    c.entries = 1\n    return 0\n' + MAIN,
+     "line 17: field 'entries' of handler class 'Collector' is "
+     "list[str]; cannot assign int"),
+], ids=['mixed-elements', 'range-value', 'for-over-int', 'len-of-int',
+        'len-two-arguments', 'index-not-a-list', 'index-assign-not-a-list',
+        'append-not-a-list', 'append-mismatch', 'index-assign-mismatch',
+        'str-index', 'no-method', 'read-before-for', 'range-no-arguments',
+        'range-three-arguments', 'range-str', 'str-of-list',
+        'compare-mismatch', 'list-plus', 'append-fixes-element',
+        'argument-list-type', 'list-field-int-default',
+        'int-field-list-default', 'list-field-assign'])
+def test_rejected_list_programs(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('name', ['len', 'str', 'range'])
+def test_a_function_cannot_take_a_built_in_name(name):
+    with pytest.raises(InvalidProgram) as info:
+        check_source('def %s(x: int) -> int:\n    return x\n' % name + MAIN)
+    assert info.value.msg == "line 8: '%s' is a built-in" % name

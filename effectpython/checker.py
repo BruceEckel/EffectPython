@@ -51,6 +51,14 @@ clause that ends in a return is the exception: the code after the
 try cannot follow it, so the name keeps the type and the state it
 had before.
 
+Lists (plan 1.9) are types like the others: "list[int]", "list[str]",
+and "list[bool]" are type names, and "list" is the type of [], an
+empty literal whose element type nothing fixes, which matches any
+list type as an unknown type matches anything (matches). A for over
+a list binds its name to the element type, and over range() to int.
+len(), str(), and range() are built-in names beside print, and a
+function cannot take one of them.
+
 The checker dispatches by isinstance over the ast_nodes classes, as the
 evaluator does, so adding a node means adding a branch in both.
 """
@@ -58,13 +66,36 @@ from effectpython import ast_nodes as ast
 from effectpython.errors import InvalidProgram, UnhandledEffectError
 
 UNKNOWN = ""
+LIST = "list"
 FIELD_TYPES = ["int", "str"]
 OPERATORS = {
     "int": ["+", "-", "*", "//", "%", "<", "<=", ">", ">=", "==", "!="],
     "str": ["+", "==", "!="],
     "bool": ["==", "!="],
+    LIST: ["==", "!="],
 }
+BUILTINS = ["print", "len", "str", "range"]
 EXCEPTION = "Exception"
+
+def is_list(type_name):
+    return type_name == LIST or type_name.startswith("list[")
+
+def element_of(type_name):
+    """The element type of list[T], or unknown for a bare list."""
+    if type_name == LIST:
+        return UNKNOWN
+    assert type_name.startswith("list[")
+    end = len(type_name) - 1
+    assert end >= 5
+    return type_name[5:end]
+
+def matches(actual, expected):
+    """Whether a value of the actual type may stand where the expected
+    type is wanted: an unknown type matches anything, and [] matches
+    any list."""
+    if actual == UNKNOWN or expected == UNKNOWN or actual == expected:
+        return True
+    return actual == LIST and is_list(expected)
 
 def ends_in_return(stmts):
     """Whether nothing after the enclosing statement can run once
@@ -169,6 +200,9 @@ class Checker(object):
                 raise InvalidProgram(
                     fn.lineno,
                     "function '%s' is defined twice" % fn.name)
+            if fn.name in BUILTINS:
+                raise InvalidProgram(
+                    fn.lineno, "'%s' is a built-in" % fn.name)
             self.functions[fn.name] = fn
             for name in fn.effect_row:
                 self.require_row_name(name, fn.lineno)
@@ -213,10 +247,11 @@ class Checker(object):
             raise InvalidProgram(
                 field.lineno, "field '%s' is declared twice in handler "
                 "class '%s'" % (field.name, info.name))
-        if field.type not in FIELD_TYPES:
+        if field.type not in FIELD_TYPES and not is_list(field.type):
             raise InvalidProgram(
                 field.lineno, "field '%s' of handler class '%s' must be "
-                "int or str, not %s" % (field.name, info.name, field.type))
+                "int, str, or list[...], not %s" %
+                (field.name, info.name, field.type))
         if field.default is None:
             if info.required < len(info.field_names):
                 raise InvalidProgram(
@@ -225,13 +260,15 @@ class Checker(object):
             info.required += 1
         elif isinstance(field.default, ast.IntLiteral):
             self.check_default(field, "int")
-        else:
+        elif isinstance(field.default, ast.StrLiteral):
             self.check_default(field, "str")
+        else:
+            self.check_default(field, LIST)
         info.field_names.append(field.name)
         info.field_types[field.name] = field.type
 
     def check_default(self, field, actual):
-        if actual != field.type:
+        if not matches(actual, field.type):
             raise InvalidProgram(
                 field.lineno, "default of field '%s' must be %s, not %s" %
                 (field.name, field.type, actual))
@@ -335,6 +372,20 @@ class Checker(object):
         elif isinstance(stmt, ast.While):
             self.type_of(stmt.test, scope, effects)
             self.check_block(stmt.body, scope, effects)
+        elif isinstance(stmt, ast.For):
+            iterable = self.type_of(stmt.iterable, scope, effects)
+            if iterable == UNKNOWN or iterable == LIST:
+                element = UNKNOWN
+            elif is_list(iterable):
+                element = element_of(iterable)
+            else:
+                raise InvalidProgram(
+                    stmt.lineno,
+                    "for needs a list or range(), not %s" % iterable)
+            self.check_loop(stmt.name, element, stmt.body, scope, effects)
+        elif isinstance(stmt, ast.ForRange):
+            self.check_range(stmt.args, stmt.lineno, scope, effects)
+            self.check_loop(stmt.name, "int", stmt.body, scope, effects)
         elif isinstance(stmt, ast.Assign):
             scope.types[stmt.name] = self.type_of(stmt.value, scope, effects)
             self.rebind(scope, stmt.name)
@@ -342,11 +393,19 @@ class Checker(object):
             info = self.require_instance(scope, stmt.target, stmt.lineno)
             expected = self.require_field(info, stmt.attr, stmt.lineno)
             actual = self.type_of(stmt.value, scope, effects)
-            if actual != UNKNOWN and actual != expected:
+            if not matches(actual, expected):
                 raise InvalidProgram(
                     stmt.lineno, "field '%s' of handler class '%s' is %s; "
                     "cannot assign %s" % (stmt.attr, info.name, expected,
                                           actual))
+        elif isinstance(stmt, ast.IndexAssign):
+            element = self.check_index(stmt.target, stmt.index, stmt.lineno,
+                                       scope, effects)
+            actual = self.type_of(stmt.value, scope, effects)
+            if element != UNKNOWN and not matches(actual, element):
+                raise InvalidProgram(
+                    stmt.lineno, "the list holds %s; cannot assign %s" %
+                    (element, actual))
         elif isinstance(stmt, ast.ExprStmt):
             self.type_of(stmt.expr, scope, effects)
         elif isinstance(stmt, ast.Pass):
@@ -359,6 +418,55 @@ class Checker(object):
             self.check_try(stmt, scope, effects)
         else:
             raise InvalidProgram(stmt.lineno, "unknown statement node")
+
+    def check_loop(self, name, element, body, scope, effects):
+        """The name a for binds is an assignment for the source-order
+        rule: it stays bound after the loop."""
+        scope.types[name] = element
+        self.rebind(scope, name)
+        self.check_block(body, scope, effects)
+
+    def check_range(self, args, lineno, scope, effects):
+        if len(args) < 1 or len(args) > 2:
+            raise InvalidProgram(
+                lineno, "range() takes 1 to 2 arguments (%d given)" %
+                len(args))
+        self.check_args(["start", "stop"][:len(args)], ["int", "int"],
+                        args, "range()", lineno, scope, effects)
+
+    def check_index(self, target, index, lineno, scope, effects):
+        """The element type of the list target, unknown when the checker
+        cannot see it."""
+        type_name = self.type_of(target, scope, effects)
+        if type_name != UNKNOWN and not is_list(type_name):
+            raise InvalidProgram(
+                lineno, "%s is not a list" % describe(target, type_name))
+        actual = self.type_of(index, scope, effects)
+        if not matches(actual, "int"):
+            raise InvalidProgram(
+                lineno, "a list index must be int, not %s" % actual)
+        if type_name == UNKNOWN:
+            return UNKNOWN
+        return element_of(type_name)
+
+    def check_append(self, target, method, args, lineno, scope, effects):
+        """xs.append(v) on a list: the one method a list has. A name
+        holding [] takes the element type of the first value appended,
+        so the next append must match it."""
+        type_name = self.type_of(target, scope, effects)
+        if not is_list(type_name):
+            raise InvalidProgram(
+                lineno, "%s is not a list" % describe(target, type_name))
+        if method != "append":
+            raise InvalidProgram(
+                lineno, "a list has no method '%s'" % method)
+        self.check_args(["value"], [element_of(type_name)], args,
+                        "append()", lineno, scope, effects)
+        if type_name == LIST and isinstance(target, ast.Name):
+            element = self.type_of(args[0], scope, effects)
+            if element != UNKNOWN:
+                scope.types[target.id] = "list[%s]" % element
+        return "None"
 
     def check_raise(self, stmt, scope, effects):
         """The row needs the class a raise contributes."""
@@ -533,6 +641,25 @@ class Checker(object):
         elif isinstance(expr, ast.Name):
             self.require_bound(scope, expr.id, expr.lineno)
             return scope.types.get(expr.id, UNKNOWN)
+        elif isinstance(expr, ast.ListLiteral):
+            element = UNKNOWN
+            for item in expr.elements:
+                actual = self.type_of(item, scope, effects)
+                if element == UNKNOWN:
+                    element = actual
+                elif actual != UNKNOWN and actual != element:
+                    raise InvalidProgram(
+                        expr.lineno, "list elements must share a type: "
+                        "%s and %s" % (element, actual))
+            if element == UNKNOWN:
+                return LIST
+            return "list[%s]" % element
+        elif isinstance(expr, ast.Index):
+            return self.check_index(expr.target, expr.index, expr.lineno,
+                                    scope, effects)
+        elif isinstance(expr, ast.MethodCall):
+            return self.check_append(expr.target, expr.method, expr.args,
+                                     expr.lineno, scope, effects)
         elif isinstance(expr, ast.BinOp):
             left = self.type_of(expr.left, scope, effects)
             right = self.type_of(expr.right, scope, effects)
@@ -557,6 +684,10 @@ class Checker(object):
                 effects.add(name, expr.lineno)
             return op.return_type
         elif isinstance(expr, ast.OpCall):
+            if expr.effect in scope.types:
+                return self.check_append(
+                    ast.Name(expr.effect, expr.lineno), expr.op, expr.args,
+                    expr.lineno, scope, effects)
             raise InvalidProgram(
                 expr.lineno, "%s.%s(...) must be the argument of perform()"
                 % (expr.effect, expr.op))
@@ -578,7 +709,7 @@ class Checker(object):
                                            expr.lineno)
             actual = self.type_of(expr.value, scope, effects)
             expected = binding.op.return_type
-            if actual != UNKNOWN and actual != expected:
+            if not matches(actual, expected):
                 raise InvalidProgram(
                     expr.lineno, "%s.resume() for %s.%s must pass %s, not %s"
                     % (expr.target, binding.effect, binding.op.name,
@@ -605,7 +736,10 @@ class Checker(object):
         early with the runtime's words."""
         if left == UNKNOWN or right == UNKNOWN:
             return
-        if left == right and op in OPERATORS.get(left, []):
+        if is_list(left) and is_list(right):
+            if (matches(left, right) or matches(right, left)) and op in OPERATORS[LIST]:
+                return
+        elif left == right and op in OPERATORS.get(left, []):
             return
         raise InvalidProgram(
             lineno, "unsupported operand types for %s: %s and %s" %
@@ -616,6 +750,12 @@ class Checker(object):
             for arg in expr.args:
                 self.type_of(arg, scope, effects)
             return "None"
+        if expr.func == "len" or expr.func == "str":
+            return self.check_builtin(expr, scope, effects)
+        if expr.func == "range":
+            raise InvalidProgram(
+                expr.lineno, "range() is allowed only as the iterable of "
+                "a for statement")
         if expr.func in self.handlers:
             return self.check_construction(expr, scope, effects)
         if expr.func in self.exceptions:
@@ -629,6 +769,23 @@ class Checker(object):
         for name in fn.effect_row:
             effects.add(name, expr.lineno)
         return fn.return_type
+
+    def check_builtin(self, expr, scope, effects):
+        """len() of a list or str is int; str() of a scalar is str."""
+        if len(expr.args) != 1:
+            raise InvalidProgram(
+                expr.lineno, "%s() takes 1 arguments (%d given)" %
+                (expr.func, len(expr.args)))
+        actual = self.type_of(expr.args[0], scope, effects)
+        if expr.func == "len":
+            if actual == UNKNOWN or actual == "str" or is_list(actual):
+                return "int"
+            raise InvalidProgram(
+                expr.lineno, "len() needs a list or str, not %s" % actual)
+        if actual == UNKNOWN or actual in ["int", "str", "bool"]:
+            return "str"
+        raise InvalidProgram(
+            expr.lineno, "str() needs an int, str, or bool, not %s" % actual)
 
     def check_construction(self, expr, scope, effects):
         """A handler class's constructor takes its fields in order; the
@@ -671,7 +828,7 @@ class Checker(object):
                 (what, len(params), len(args)))
         for i in range(len(args)):
             actual = self.type_of(args[i], scope, effects)
-            if actual != UNKNOWN and actual != param_types[i]:
+            if not matches(actual, param_types[i]):
                 raise InvalidProgram(
                     lineno, "argument %d of %s must be %s, not %s" %
                     (i + 1, what, param_types[i], actual))
@@ -734,6 +891,15 @@ class Checker(object):
             raise UnhandledEffectError(
                 main.lineno, "main() must have an empty effect row, not "
                 "[%s]" % ", ".join(main.effect_row))
+
+def describe(target, type_name):
+    """'xs' for a name, 'self.entries' for a field, and the type for
+    anything else, in a 'is not a list' message."""
+    if isinstance(target, ast.Name):
+        return "'%s'" % target.id
+    if isinstance(target, ast.AttrRead):
+        return "'%s.%s'" % (target.target, target.attr)
+    return "a value of type %s" % type_name
 
 def signature(op):
     """name: type, name: type for an operation's parameters."""

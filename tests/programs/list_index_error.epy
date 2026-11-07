@@ -1,0 +1,8 @@
+# Milestone 9: an index past the end is a runtime error, uncatchable
+# like division by zero, and the program exits 1.
+
+def main() -> int:
+    xs = [1, 2, 3]
+    print(xs[2])
+    print(xs[3])
+    return 0

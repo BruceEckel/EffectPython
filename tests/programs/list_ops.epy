@@ -1,0 +1,17 @@
+# Milestone 9: the list operations. A literal, len(), indexing from
+# both ends, indexed assignment, append, equality, and print of a
+# list of each element type; len() of a str and str() of each scalar.
+
+def main() -> int:
+    xs = [3, 1, 2]
+    print(xs, len(xs), xs[0], xs[-1])
+    xs[1] = 10
+    xs.append(4)
+    print(xs, len(xs))
+    print(xs == [3, 10, 2, 4], xs != [3, 10, 2, 4], xs == [])
+    names = ["a", "b"]
+    flags = [True, False]
+    empty = []
+    print(names, flags, empty, len("abc"))
+    print(str(7) + str(True) + str("s"))
+    return 0

@@ -1,0 +1,8 @@
+# Milestone 9: range() is the iterable of a for and not a value, so
+# binding it to a name is rejected before the program runs.
+
+def main() -> int:
+    xs = range(3)
+    for x in xs:
+        print(x)
+    return 0

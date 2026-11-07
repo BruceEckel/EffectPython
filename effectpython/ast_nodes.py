@@ -148,6 +148,28 @@ class While(Stmt):
         self.test = test  # Expr
         self.body = body  # list of Stmt
 
+class For(Stmt):
+    """for name in iterable: body, over a list (plan 1.9)"""
+    _attrs_ = ['name', 'iterable', 'body']
+
+    def __init__(self, name, iterable, body, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name          # str
+        self.iterable = iterable  # Expr
+        self.body = body          # list of Stmt
+
+class ForRange(Stmt):
+    """for name in range(args): body, which the parser folds from a
+       For whose iterable is a call to range, so the runtime counts
+       without building a list (plan 1.9)"""
+    _attrs_ = ['name', 'args', 'body']
+
+    def __init__(self, name, args, body, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name  # str
+        self.args = args  # list of Expr: stop, or start and stop
+        self.body = body  # list of Stmt
+
 class Assign(Stmt):
     """name = value"""
     _attrs_ = ['name', 'value']
@@ -166,6 +188,16 @@ class AttrAssign(Stmt):
         Node.__init__(self, lineno)
         self.target = target  # str: a variable name
         self.attr = attr      # str
+        self.value = value    # Expr
+
+class IndexAssign(Stmt):
+    """target[index] = value on a list (plan 1.9)"""
+    _attrs_ = ['target', 'index', 'value']
+
+    def __init__(self, target, index, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.target = target  # Expr
+        self.index = index    # Expr
         self.value = value    # Expr
 
 class ExprStmt(Stmt):
@@ -290,6 +322,36 @@ class BoolLiteral(Expr):
         Node.__init__(self, lineno)
         self.value = value  # bool
 
+class ListLiteral(Expr):
+    """[e1, e2, ...] or [] (plan 1.9)"""
+    _attrs_ = ['elements']
+
+    def __init__(self, elements, lineno=0):
+        Node.__init__(self, lineno)
+        self.elements = elements  # list of Expr
+
+class Index(Expr):
+    """target[index] on a list (plan 1.9)"""
+    _attrs_ = ['target', 'index']
+
+    def __init__(self, target, index, lineno=0):
+        Node.__init__(self, lineno)
+        self.target = target  # Expr
+        self.index = index    # Expr
+
+class MethodCall(Expr):
+    """target.method(args) where target is an expression rather than a
+       name, such as self.entries.append(text); a name on the left
+       gives an OpCall instead, and the checker tells a list's append
+       from an operation by the name's type (plan 1.9)."""
+    _attrs_ = ['target', 'method', 'args']
+
+    def __init__(self, target, method, args, lineno=0):
+        Node.__init__(self, lineno)
+        self.target = target  # Expr
+        self.method = method  # str
+        self.args = args      # list of Expr
+
 class Name(Expr):
     """A variable reference."""
     _attrs_ = ['id']
@@ -332,7 +394,9 @@ class Call(Expr):
 class OpCall(Expr):
     """Effect.op(arg1, arg2): builds the effect payload (plan 1.3). The
        parser folds perform(Effect.op(...)) into a Perform, so an OpCall
-       survives only where it stands on its own."""
+       survives only where it stands on its own. The same shape is
+       xs.append(v) on a name holding a list, which the checker and
+       the interpreter tell apart by the name (plan 1.9)."""
     _attrs_ = ['effect', 'op', 'args']
 
     def __init__(self, effect, op, args, lineno=0):

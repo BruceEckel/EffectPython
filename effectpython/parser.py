@@ -5,9 +5,9 @@ classes with operation stubs, Handler[Effect] classes with field
 declarations and methods, exception classes, function definitions
 with typed parameters, a return type, and an optional effect row;
 return, raise, assignment, attribute assignment, expression, pass,
-if/else, while, try/except/finally, and handle statements; int, str, and
-bool literals, names,
-arithmetic, comparisons, calls, attribute reads, and attribute calls.
+if/else, while, for, try/except/finally, and handle statements; int,
+str, bool, and list literals, names, arithmetic, comparisons, calls,
+indexing, attribute reads, and attribute calls.
 
 perform and handle are names in Python, not keywords, so the grammar
 reads them as calls and the productions check them: perform(X) must
@@ -15,10 +15,21 @@ wrap an Effect.op(...) call and becomes a Perform node, with handle(...)
 must name handle, and a class must derive from Effect, Handler[...],
 or Exception.
 An attribute call name.resume(x) becomes a Resume node and
-name.throw(x) a Throw node; any other Effect.op(...) call is an
-OpCall. A handle(...) argument is a bare
+name.throw(x) a Throw node; any other name.op(...) call is an
+OpCall, whether the name is an effect or a list (plan 1.9). A
+handle(...) argument is a bare
 name or a constructor call Name(...); the checker decides whether a
 bare name is an effect or a handler instance (plan 1.5).
+
+Attribute reads, attribute calls, and indexing are postfix forms on
+an expression, as in Python's grammar, so self.entries.append(x)
+and collector.entries[0] parse; the action requires a name on the
+left of an attribute read and of an assignment target, where the
+dialect allows nothing else. One production reads every assignment,
+and the target's shape picks Assign, AttrAssign, or IndexAssign. A
+type is a name or list[name], a for whose iterable is a call to
+range becomes a ForRange, and a unary minus is folded into the
+literal it negates or into 0 - x (plan 1.9).
 
 One production reads every try statement, because separate ones for
 a handler installation and an ordinary try/except would conflict in
@@ -109,6 +120,14 @@ class _NameList(BaseBox):
     def __init__(self, items):
         self.items = items  # list of str
 
+class _Type(BaseBox):
+    """A type annotation as its name: int, str, bool, a class name, or
+    list[int], list[str], or list[bool]."""
+    _attrs_ = ['name']
+
+    def __init__(self, name):
+        self.name = name  # str
+
 class _ParamList(BaseBox):
     _attrs_ = ['names', 'types']
 
@@ -131,6 +150,10 @@ def _expr(box):
 def _stmts(box):
     assert isinstance(box, _StmtList)
     return box.items
+
+def _type(box):
+    assert isinstance(box, _Type)
+    return box.name
 
 pg = ParserGenerator(TOKENS)
 
@@ -243,20 +266,24 @@ def _add_handler_item(items, item):
         items.methods.append(item)
     return items
 
-@pg.production('handler_item : NAME COLON NAME NEWLINE')
+@pg.production('handler_item : NAME COLON type NEWLINE')
 def field_without_default(p):
-    return ast.FieldDef(_text(p[0]), _text(p[2]), None, _line(p[0]))
+    return ast.FieldDef(_text(p[0]), _type(p[2]), None, _line(p[0]))
 
-@pg.production('handler_item : NAME COLON NAME EQUALS expr NEWLINE')
+@pg.production('handler_item : NAME COLON type EQUALS expr NEWLINE')
 def field_with_default(p):
     default = _expr(p[4])
-    if not (isinstance(default, ast.IntLiteral)
-            or isinstance(default, ast.StrLiteral)):
-        raise _error(p[3], "a field default must be an int or str literal")
-    return ast.FieldDef(_text(p[0]), _text(p[2]), default, _line(p[0]))
+    if isinstance(default, ast.ListLiteral):
+        if len(default.elements) > 0:
+            raise _error(p[3], "a list field's default must be []")
+    elif not (isinstance(default, ast.IntLiteral)
+              or isinstance(default, ast.StrLiteral)):
+        raise _error(p[3], "a field default must be an int or str "
+                     "literal, or []")
+    return ast.FieldDef(_text(p[0]), _type(p[2]), default, _line(p[0]))
 
 @pg.production('handler_item : DEF NAME LPAREN method_params RPAREN ARROW'
-               ' NAME effect_row COLON suite')
+               ' type effect_row COLON suite')
 def methoddef(p):
     params = p[3]
     row = p[7]
@@ -266,7 +293,7 @@ def methoddef(p):
     if len(params.types) == 0 or params.types[0] != '':
         raise _error(p[2], SELF_ERROR)
     return ast.FunctionDef(_text(p[1]), params.names, params.types,
-                           _text(p[6]), row.items, _stmts(p[9]),
+                           _type(p[6]), row.items, _stmts(p[9]),
                            _line(p[0]))
 
 @pg.production('method_params : params')
@@ -307,7 +334,7 @@ def opdefs_more(p):
     ops.items.append(op)
     return ops
 
-@pg.production('opdef : DEF NAME LPAREN params RPAREN ARROW NAME'
+@pg.production('opdef : DEF NAME LPAREN params RPAREN ARROW type'
                ' effect_row COLON ELLIPSIS NEWLINE')
 def opdef(p):
     params = p[3]
@@ -315,9 +342,9 @@ def opdef(p):
     assert isinstance(params, _ParamList)
     assert isinstance(row, _NameList)
     return ast.OperationDef(_text(p[1]), params.names, params.types,
-                            _text(p[6]), row.items, _line(p[0]))
+                            _type(p[6]), row.items, _line(p[0]))
 
-@pg.production('funcdef : DEF NAME LPAREN params RPAREN ARROW NAME'
+@pg.production('funcdef : DEF NAME LPAREN params RPAREN ARROW type'
                ' effect_row COLON suite')
 def funcdef(p):
     params = p[3]
@@ -325,8 +352,28 @@ def funcdef(p):
     assert isinstance(params, _ParamList)
     assert isinstance(row, _NameList)
     return ast.FunctionDef(_text(p[1]), params.names, params.types,
-                           _text(p[6]), row.items, _stmts(p[9]),
+                           _type(p[6]), row.items, _stmts(p[9]),
                            _line(p[0]))
+
+@pg.production('type : NAME')
+def plain_type(p):
+    if _text(p[0]) == 'list':
+        raise _error(p[0], "list needs an element type: list[int], "
+                     "list[str], or list[bool]")
+    return _Type(_text(p[0]))
+
+@pg.production('type : NAME LBRACKET NAME RBRACKET')
+def list_type(p):
+    if _text(p[0]) != 'list':
+        raise _error(p[0], "'%s' takes no type parameter; list[...] does"
+                     % _text(p[0]))
+    element = _text(p[2])
+    if element not in LIST_ELEMENTS:
+        raise _error(p[2], "list[%s] is not a type; the element type is "
+                     "int, str, or bool" % element)
+    return _Type('list[%s]' % element)
+
+LIST_ELEMENTS = ['int', 'str', 'bool']
 
 @pg.production('params :')
 def params_empty(p):
@@ -342,16 +389,16 @@ def pass_through_list(p):
 def effect_row(p):
     return p[2]
 
-@pg.production('param_list : NAME COLON NAME')
+@pg.production('param_list : NAME COLON type')
 def param_list_one(p):
-    return _ParamList([_text(p[0])], [_text(p[2])])
+    return _ParamList([_text(p[0])], [_type(p[2])])
 
-@pg.production('param_list : param_list COMMA NAME COLON NAME')
+@pg.production('param_list : param_list COMMA NAME COLON type')
 def param_list_more(p):
     params = p[0]
     assert isinstance(params, _ParamList)
     params.names.append(_text(p[2]))
-    params.types.append(_text(p[4]))
+    params.types.append(_type(p[4]))
     return params
 
 @pg.production('effect_row :')
@@ -394,6 +441,7 @@ def stmts_more(p):
 @pg.production('stmt : simple_stmt NEWLINE')
 @pg.production('stmt : if_stmt')
 @pg.production('stmt : while_stmt')
+@pg.production('stmt : for_stmt')
 @pg.production('stmt : try_stmt')
 @pg.production('stmt : with_stmt')
 def stmt(p):
@@ -415,14 +463,19 @@ def return_value(p):
 def raise_stmt(p):
     return ast.Raise(_expr(p[1]), _line(p[0]))
 
-@pg.production('simple_stmt : NAME EQUALS expr')
+@pg.production('simple_stmt : postfix EQUALS expr')
 def assign(p):
-    return ast.Assign(_text(p[0]), _expr(p[2]), _line(p[0]))
-
-@pg.production('simple_stmt : NAME DOT NAME EQUALS expr')
-def attr_assign(p):
-    return ast.AttrAssign(_text(p[0]), _text(p[2]), _expr(p[4]),
-                          _line(p[0]))
+    target = _expr(p[0])
+    value = _expr(p[2])
+    if isinstance(target, ast.Name):
+        return ast.Assign(target.id, value, target.lineno)
+    if isinstance(target, ast.AttrRead):
+        return ast.AttrAssign(target.target, target.attr, value,
+                              target.lineno)
+    if isinstance(target, ast.Index):
+        return ast.IndexAssign(target.target, target.index, value,
+                               target.lineno)
+    raise _error(p[1], "cannot assign to this expression")
 
 @pg.production('simple_stmt : expr')
 def expr_stmt(p):
@@ -436,6 +489,14 @@ def if_stmt(p):
 @pg.production('if_stmt : IF expr COLON suite ELSE COLON suite')
 def if_else_stmt(p):
     return ast.If(_expr(p[1]), _stmts(p[3]), _stmts(p[6]), _line(p[0]))
+
+@pg.production('for_stmt : FOR NAME IN expr COLON suite')
+def for_stmt(p):
+    iterable = _expr(p[3])
+    if isinstance(iterable, ast.Call) and iterable.func == 'range':
+        return ast.ForRange(_text(p[1]), iterable.args, _stmts(p[5]),
+                            _line(p[0]))
+    return ast.For(_text(p[1]), iterable, _stmts(p[5]), _line(p[0]))
 
 @pg.production('while_stmt : WHILE expr COLON suite')
 def while_stmt(p):
@@ -558,7 +619,8 @@ def except_clause(p):
 
 @pg.production('expr : arith')
 @pg.production('arith : term')
-@pg.production('term : atom')
+@pg.production('term : postfix')
+@pg.production('postfix : atom')
 def pass_through_expr(p):
     return p[0]
 
@@ -567,8 +629,18 @@ def compare(p):
     left = _expr(p[0])
     return ast.Compare(_text(p[1]), left, _expr(p[2]), left.lineno)
 
+@pg.production('term : MINUS postfix')
+def negate(p):
+    """A unary minus folds into the literal it negates, and elsewhere
+    into 0 - x, so no node is added for it (plan 1.9)."""
+    operand = _expr(p[1])
+    if isinstance(operand, ast.IntLiteral):
+        return ast.IntLiteral(-operand.value, _line(p[0]))
+    return ast.BinOp('-', ast.IntLiteral(0, _line(p[0])), operand,
+                     _line(p[0]))
+
 @pg.production('arith : arith addop term')
-@pg.production('term : term mulop atom')
+@pg.production('term : term mulop postfix')
 def binop(p):
     left = _expr(p[0])
     return ast.BinOp(_text(p[1]), left, _expr(p[2]), left.lineno)
@@ -626,23 +698,42 @@ def _perform(tok, args):
                                _line(tok))
     raise _error(tok, "perform() takes one Effect.op(...) argument")
 
-@pg.production('atom : NAME DOT NAME')
+@pg.production('postfix : postfix DOT NAME')
 def attr_read(p):
-    return ast.AttrRead(_text(p[0]), _text(p[2]), _line(p[0]))
+    target = _expr(p[0])
+    if not isinstance(target, ast.Name):
+        raise _error(p[1], "an attribute read needs a name on the left "
+                     "of the dot")
+    return ast.AttrRead(target.id, _text(p[2]), target.lineno)
 
-@pg.production('atom : NAME DOT NAME LPAREN args RPAREN')
+@pg.production('postfix : postfix DOT NAME LPAREN args RPAREN')
 def attr_call(p):
+    target = _expr(p[0])
     args = p[4]
     assert isinstance(args, _ExprList)
-    if _text(p[2]) == 'resume':
+    method = _text(p[2])
+    if not isinstance(target, ast.Name):
+        return ast.MethodCall(target, method, args.items, target.lineno)
+    if method == 'resume':
         if len(args.items) != 1:
             raise _error(p[2], "resume() takes one argument")
-        return ast.Resume(_text(p[0]), args.items[0], _line(p[0]))
-    if _text(p[2]) == 'throw':
+        return ast.Resume(target.id, args.items[0], target.lineno)
+    if method == 'throw':
         if len(args.items) != 1:
             raise _error(p[2], "throw() takes one argument")
-        return ast.Throw(_text(p[0]), args.items[0], _line(p[0]))
-    return ast.OpCall(_text(p[0]), _text(p[2]), args.items, _line(p[0]))
+        return ast.Throw(target.id, args.items[0], target.lineno)
+    return ast.OpCall(target.id, method, args.items, target.lineno)
+
+@pg.production('postfix : postfix LBRACKET expr RBRACKET')
+def index(p):
+    target = _expr(p[0])
+    return ast.Index(target, _expr(p[2]), target.lineno)
+
+@pg.production('atom : LBRACKET args RBRACKET')
+def list_literal(p):
+    elements = p[1]
+    assert isinstance(elements, _ExprList)
+    return ast.ListLiteral(elements.items, _line(p[0]))
 
 @pg.production('atom : LPAREN expr RPAREN')
 def parenthesized(p):

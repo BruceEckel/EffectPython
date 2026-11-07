@@ -1,7 +1,8 @@
 """Milestone 2, first slice: the lexer and the parser read the
 Milestone 1 subset; from Milestone 5, handler classes too; from
 Milestone 6, exceptions; from Milestone 7, operation rows and throw;
-from Milestone 8, finally.
+from Milestone 8, finally; from Milestone 9, lists and the
+for loop.
 
 Run with:  pypy2 -m pytest
 """
@@ -393,7 +394,8 @@ def test_line_numbers_of_handler_nodes():
      '        pass\n',
      "line 2, column 14: a handler method's first parameter must be self"),
     ('class Fake(Handler[FileIO]):\n    writes: int = 1 + 2\n',
-     'line 2, column 17: a field default must be an int or str literal'),
+     'line 2, column 17: a field default must be an int or str literal, '
+     'or []'),
     ('def main() -> int:\n    with open(f):\n        pass\n',
      'line 2, column 10: a with statement must use handle(...)'),
     ('class Fake(Handler[FileIO]):\n    def read(self) -> str: ...\n',
@@ -705,3 +707,122 @@ def test_finally_syntax_errors(source, msg):
 def test_try_without_clauses_or_finally_is_a_syntax_error(source):
     with pytest.raises(InvalidSyntax):
         parse(source)
+
+# --- Lists and the for loop (Milestone 9) ------------------------------------
+
+def test_for_and_in_are_keywords():
+    assert kinds('for x in xs:') == [
+        'FOR', 'NAME', 'IN', 'NAME', 'COLON', 'NEWLINE']
+
+@pytest.mark.parametrize('element', ['int', 'str', 'bool'])
+def test_list_parameter_type(element):
+    fn = parse('def f(xs: list[%s]) -> int:\n    return 0\n' % element
+               ).functions[0]
+    assert fn.param_types == ['list[%s]' % element]
+
+def test_list_function_return_type():
+    fn = parse('def f() -> list[str]:\n    return []\n').functions[0]
+    assert fn.return_type == 'list[str]'
+
+def test_list_operation_return_type():
+    effect = parse('class Store(Effect):\n'
+                   '    def all() -> list[bool]: ...\n').effects[0]
+    assert effect.operations[0].return_type == 'list[bool]'
+
+def test_list_handler_field_type():
+    handler = parse('class Collector(Handler[Log]):\n'
+                    '    entries: list[str] = []\n').handlers[0]
+    assert shape(handler.fields) == [
+        ('FieldDef', 'entries', 'list[str]', ('ListLiteral', []))]
+
+@pytest.mark.parametrize('source, msg', [
+    ('def f(xs: set[int]) -> int:\n    return 0\n',
+     "line 1, column 11: 'set' takes no type parameter; list[...] does"),
+    ('def f(xs: list[Foo]) -> int:\n    return 0\n',
+     'line 1, column 16: list[Foo] is not a type; the element type is '
+     'int, str, or bool'),
+    ('def f(xs: list) -> int:\n    return 0\n',
+     'line 1, column 11: list needs an element type: list[int], '
+     'list[str], or list[bool]'),
+], ids=['other-generic', 'bad-element', 'bare-list'])
+def test_type_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('source, expected', [
+    ('self.entries.append(t)',
+     ('MethodCall', ('AttrRead', 'self', 'entries'), 'append',
+      [('Name', 't')])),
+    ('xs[i]', ('Index', ('Name', 'xs'), ('Name', 'i'))),
+    ('collector.entries[0]',
+     ('Index', ('AttrRead', 'collector', 'entries'), ('IntLiteral', 0))),
+    ('[1, 2][0]',
+     ('Index', ('ListLiteral', [('IntLiteral', 1), ('IntLiteral', 2)]),
+      ('IntLiteral', 0))),
+    ('xs[0][1]',
+     ('Index', ('Index', ('Name', 'xs'), ('IntLiteral', 0)),
+      ('IntLiteral', 1))),
+    ('xs.append(1)', ('OpCall', 'xs', 'append', [('IntLiteral', 1)])),
+    ('[]', ('ListLiteral', [])),
+    ('[1, 2]', ('ListLiteral', [('IntLiteral', 1), ('IntLiteral', 2)])),
+], ids=['method-call', 'index', 'index-attr', 'index-literal',
+        'nested-index', 'name-append', 'empty-list', 'list'])
+def test_postfix_and_list_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    statement = module.functions[0].body[0]
+    assert shape(statement) == ('ExprStmt', expected)
+
+@pytest.mark.parametrize('source, expected', [
+    ('x = 1', ('Assign', 'x', ('IntLiteral', 1))),
+    ('x.f = 1', ('AttrAssign', 'x', 'f', ('IntLiteral', 1))),
+    ('xs[i] = 1',
+     ('IndexAssign', ('Name', 'xs'), ('Name', 'i'), ('IntLiteral', 1))),
+], ids=['name', 'attribute', 'index'])
+def test_assignment_targets(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    assert shape(module.functions[0].body[0]) == expected
+
+@pytest.mark.parametrize('source, expected', [
+    ('for x in xs:',
+     ('For', 'x', ('Name', 'xs'), [('Pass',)])),
+    ('for i in range(3):',
+     ('ForRange', 'i', [('IntLiteral', 3)], [('Pass',)])),
+    ('for i in range(1, n):',
+     ('ForRange', 'i', [('IntLiteral', 1), ('Name', 'n')], [('Pass',)])),
+    ('for x in f():',
+     ('For', 'x', ('Call', 'f', []), [('Pass',)])),
+], ids=['list', 'range-one', 'range-two', 'other-call'])
+def test_for_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n        pass\n' % source)
+    assert shape(module.functions[0].body[0]) == expected
+
+@pytest.mark.parametrize('source, expected', [
+    ('-1', ('IntLiteral', -1)),
+    ('-x', ('BinOp', '-', ('IntLiteral', 0), ('Name', 'x'))),
+    ('3 - -1', ('BinOp', '-', ('IntLiteral', 3), ('IntLiteral', -1))),
+    ('-x * 2',
+     ('BinOp', '*', ('BinOp', '-', ('IntLiteral', 0), ('Name', 'x')),
+      ('IntLiteral', 2))),
+], ids=['literal', 'name', 'after-minus', 'before-star'])
+def test_unary_minus(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    statement = module.functions[0].body[0]
+    assert shape(statement) == ('ExprStmt', expected)
+
+@pytest.mark.parametrize('source, msg', [
+    ('def main() -> int:\n    f(1) = 2\n',
+     'line 2, column 10: cannot assign to this expression'),
+    ('def main() -> int:\n    xs[0].y\n',
+     'line 2, column 10: an attribute read needs a name on the left '
+     'of the dot'),
+    ('class Fake(Handler[Log]):\n    entries: list[int] = [1]\n',
+     "line 2, column 24: a list field's default must be []"),
+    ('class Fake(Handler[Log]):\n    count: int = True\n',
+     'line 2, column 16: a field default must be an int or str literal, '
+     'or []'),
+], ids=['assign-call', 'attr-on-index', 'list-default', 'bool-default'])
+def test_list_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
+    assert info.value.msg == msg
