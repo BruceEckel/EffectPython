@@ -1,0 +1,38 @@
+# Milestone 8: an abandoned body five hundred calls deep, each level
+# inside a try whose finally performs an effect handled outside. The
+# Unwind runs every finally on the way out, and the handler instance
+# counts them: one per level, plus one for the level that performed
+# Abort.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+class Count(Effect):
+    def tick() -> int: ...
+
+class Counter(Handler[Count]):
+    n: int = 0
+    def tick(self) -> int:
+        self.n = self.n + 1
+        return self.n
+
+def descend(depth: int) -> int / [Abort, Count]:
+    try:
+        if depth == 0:
+            return perform(Abort.stop("bottom"))
+        return descend(depth - 1)
+    finally:
+        perform(Count.tick())
+
+def main() -> int / []:
+    counter = Counter()
+    with handle(counter):
+        try:
+            with handle(Abort):
+                print(descend(500))
+        except Abort.stop as eff:
+            print("aborted at the", eff.reason)
+        print("finally ran", counter.n, "times")
+    return 0

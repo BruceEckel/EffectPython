@@ -1118,6 +1118,11 @@ EffectPython/
         and a scratch program confirmed three cases they leave out: a `finally` whose `return` ends the unwinding inside a called function,
         a `finally` whose perform is abandoned by an outer handler, and a handler method's undeclared exception unwinding the body before it propagates.
         `tests/test_interpreter.py` covers `exec_try`'s `finally` untranslated, and `NOT_YET` is empty.
+        The two stress programs added afterwards passed on their first run as well.
+        Writing them showed a limit that predates this milestone, confirmed against the binary of the Milestone 8 frontend commit:
+        a body that recurses past the interpreter's depth (about 1,500 calls, or 1,000 with a `try` at each level) segfaults,
+        where the same recursion outside a body ends in RPython's `Fatal RPython error: StackOverflow`,
+        so the stack check does not fire inside a stacklet. The stress program stays at 500 levels for that reason.
     *   Add the `finally` keyword and `Try.finalbody`, the `try`/`finally` forms of 2.1 including the desugared `finally` on a handler statement,
         the `finalbody` term in the checker's `Try` formula, `Unwind` in `errors.py`, the third resumption in `switch_into` and `perform`,
         the unwinding paths in `dispatch` and `answer_with_method`, and the `finally` in `exec_try`.
@@ -1133,5 +1138,9 @@ EffectPython/
         *   `finally_on_raise_in_clause.epy`: a clause raises `NotFound`; the body's `finally` runs, and the exception is caught outside the `handle` statement.
         *   `finally_raises.epy`: the body's `finally` raises during unwinding; the exception surfaces at the `handle` statement and is caught there, replacing the abandonment.
         *   `handle_with_finally.epy`: a `finally` on the handler statement runs after the block completes and, in a second block, after a clause abandons the body.
+        *   `unwind_deep_body.epy` (added 2026-11-07): a body five hundred calls deep, each level in a `try` whose `finally` performs `Count.tick` to a handler instance outside;
+            the clause for `Abort` does not resume, and the instance counts 501 ticks, one per level.
+        *   `unwind_through_clause.epy` (added 2026-11-07): the `Abort` perform sits in a clause of a nested `Ask` handler whose body is suspended;
+            the inner body's `finally` runs, then the outer body's, and the program continues after the outer `try`.
         *   Reject a function whose `finally` performs or raises without the name in its row, and a `try` with neither clauses nor `finally`.
         *   Accept `try`/`except`/`finally` and `try`/`finally` inside a body, inside a clause, and inside a handler method.

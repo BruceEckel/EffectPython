@@ -1,0 +1,41 @@
+# Milestone 8: the abandoned perform sits in a clause of a nested
+# handler whose own body is suspended. The outer Unwind reaches the
+# nested dispatch loop through its clause, so the loop unwinds the
+# inner body first, then re-raises the Unwind, which runs the outer
+# body's finally and ends at the frame that began it.
+
+from effectpython import Effect, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+class Ask(Effect):
+    def value() -> int: ...
+
+def inner() -> int / [Ask]:
+    try:
+        return perform(Ask.value())
+    finally:
+        print("inner close")
+
+def outer() -> int / [Abort]:
+    try:
+        try:
+            with handle(Ask):
+                print("got", inner())
+        except Ask.value as eff:
+            print("asking outside")
+            perform(Abort.stop("from the clause"))
+            eff.resume(1)
+    finally:
+        print("outer close")
+    return 0
+
+def main() -> int / []:
+    try:
+        with handle(Abort):
+            print(outer())
+    except Abort.stop as eff:
+        print("aborted:", eff.reason)
+    print("after")
+    return 0

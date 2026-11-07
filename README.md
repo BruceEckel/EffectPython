@@ -6,6 +6,11 @@ a static checker proves every effect is handled before the program runs,
 and `perform` suspends the running code until a handler resumes it.
 Handlers are delimited continuations built on RPython's `rstacklet`.
 
+This file is the short version.
+[TUTORIAL.md](TUTORIAL.md) walks through the dialect in ten sections with a working program for each step,
+from a first effect and handler through nested handlers, handler classes, exceptions, `eff.throw()`, and `finally`;
+every listing in it is a file under `tests/programs/` with its recorded output beside it, and a test holds the two to each other.
+
 ```python
 from effectpython import Effect, perform, handle
 
@@ -206,8 +211,7 @@ by `tests/test_runtime.py` against the `.expected` file beside each program.
 
 ## Reading further
 
-`TUTORIAL.md` walks the dialect from a program without effects to `eff.throw()`,
-with a tested program for each step.
+[TUTORIAL.md](TUTORIAL.md) is the long version, described at the top of this file.
 `effectpython_implementation_plan.md` holds the language design, the checker's three passes,
 how `rstacklet` is used, and the milestone log.
 The source lives in `effectpython/`: `lexer.py` and `parser.py` (rply), `checker.py`,
