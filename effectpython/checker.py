@@ -517,6 +517,8 @@ class Checker(object):
             return "int"
         elif isinstance(expr, ast.StrLiteral):
             return "str"
+        elif isinstance(expr, ast.BoolLiteral):
+            return "bool"
         elif isinstance(expr, ast.Name):
             self.require_bound(scope, expr.id, expr.lineno)
             return scope.types.get(expr.id, UNKNOWN)

@@ -556,6 +556,8 @@ class Interpreter(object):
             return W_Int(expr.value)
         elif isinstance(expr, ast.StrLiteral):
             return W_Str(expr.value)
+        elif isinstance(expr, ast.BoolLiteral):
+            return wrap_bool(expr.value)
         elif isinstance(expr, ast.Name):
             return env.lookup(expr.id)
         elif isinstance(expr, ast.BinOp):
@@ -665,6 +667,11 @@ class Interpreter(object):
             elif op == "!=":
                 return wrap_bool(a != b)
         elif isinstance(w_left, W_Str) and isinstance(w_right, W_Str):
+            if op == "==":
+                return wrap_bool(w_left.val == w_right.val)
+            elif op == "!=":
+                return wrap_bool(w_left.val != w_right.val)
+        elif isinstance(w_left, W_Bool) and isinstance(w_right, W_Bool):
             if op == "==":
                 return wrap_bool(w_left.val == w_right.val)
             elif op == "!=":

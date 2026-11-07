@@ -27,7 +27,7 @@ Each program file begins with a comment that the listings here leave out,
 so a line number in an error message counts from the file's first line, a few lines above the listing's.
 
 The dialect is a proof of concept, and you will notice what it lacks sooner than what it has.
-The values are `int`, `str`, and `bool`.
+The values are `int`, `str`, and `bool`, with `True` and `False` as the literals.
 There are no lists, dicts, or tuples, no `for` loop, no string methods, and no `else`, `finally`, or bare `except:` on a `try`.
 `print` is the one built-in; it takes any number of arguments and separates them with spaces, as Python does.
 Every parameter and return type is written out, and the checker reads them.
@@ -49,10 +49,15 @@ def parity(n: int) -> str:
     else:
         return "odd"
 
+def small(n: int) -> bool:
+    if n < 10:
+        return True
+    return False
+
 def main() -> int / []:
     print(repeat("hello", 3))
     print(parity(7), parity(10))
-    print(3 * 4 + 10 // 3, 7 == 7, 2 < 1)
+    print(3 * 4 + 10 // 3, 7 == 7, small(30))
     return 0
 ```
 
@@ -67,7 +72,7 @@ Two things differ from ordinary Python.
 The `/ []` after `main`'s return type is an *effect row*, the list of effects the function may perform;
 `main()` must have an empty one, and a function with no row written has an empty row too.
 And the annotations are required, not optional:
-every value has a type the checker knows, so the arithmetic here is `int`, the comparisons are `bool`, and `repeat` builds a `str`.
+every value has a type the checker knows, so the arithmetic here is `int`, a comparison and `small` are `bool`, and `repeat` builds a `str`.
 
 ## 2. An effect and a handler
 

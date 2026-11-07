@@ -5,7 +5,8 @@ classes with operation stubs, Handler[Effect] classes with field
 declarations and methods, exception classes, function definitions
 with typed parameters, a return type, and an optional effect row;
 return, raise, assignment, attribute assignment, expression, pass,
-if/else, while, try/except, and handle statements; literals, names,
+if/else, while, try/except, and handle statements; int, str, and
+bool literals, names,
 arithmetic, comparisons, calls, attribute reads, and attribute calls.
 
 perform and handle are names in Python, not keywords, so the grammar
@@ -573,6 +574,14 @@ def operator(p):
 @pg.production('atom : INT')
 def int_literal(p):
     return ast.IntLiteral(int(_text(p[0])), _line(p[0]))
+
+@pg.production('atom : TRUE')
+def true_literal(p):
+    return ast.BoolLiteral(True, _line(p[0]))
+
+@pg.production('atom : FALSE')
+def false_literal(p):
+    return ast.BoolLiteral(False, _line(p[0]))
 
 @pg.production('atom : STRING')
 def str_literal(p):

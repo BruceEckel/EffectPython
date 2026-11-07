@@ -156,6 +156,9 @@ MAIN = 'def main() -> int / []:\n    return 0\n'
     ('def g(a: int) -> int:\n    return a\n'
      'def f() -> int:\n    return g("s")\n' + MAIN,
      InvalidProgram, 'line 11: argument 1 of g() must be int, not str'),
+    ('def g(a: int) -> int:\n    return a\n'
+     'def f() -> int:\n    return g(True)\n' + MAIN,
+     InvalidProgram, 'line 11: argument 1 of g() must be int, not bool'),
     ('def main() -> int / []:\n    try:\n        with handle(FileIO):\n'
      '            pass\n    except DBQuery.execute as e:\n        pass\n'
      '    except FileIO.read as e:\n        pass\n'

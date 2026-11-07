@@ -276,6 +276,14 @@ class StrLiteral(Expr):
         Node.__init__(self, lineno)
         self.value = value  # str
 
+class BoolLiteral(Expr):
+    """True or False"""
+    _attrs_ = ['value']
+
+    def __init__(self, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.value = value  # bool
+
 class Name(Expr):
     """A variable reference."""
     _attrs_ = ['id']

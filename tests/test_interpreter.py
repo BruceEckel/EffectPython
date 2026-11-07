@@ -225,6 +225,15 @@ def test_unmatched_exception_propagates_out_of_main(raise_stmt, msg):
             '    return 0\n')
     assert info.value.msg == msg
 
+def test_bool_literals():
+    exit_code, lines = run_main_body(
+        '    flag = True\n'
+        '    print(flag, False, flag == True)\n'
+        '    if False:\n'
+        '        print("skipped")\n'
+        '    return 0\n')
+    assert lines == ["True False True"]
+
 def test_exception_without_message_prints_empty_message():
     exit_code, lines = run_main_body(
         '    try:\n'

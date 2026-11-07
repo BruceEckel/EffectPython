@@ -55,6 +55,10 @@ def test_raise_is_a_keyword():
     assert kinds('raise NotFound(x)') == [
         'RAISE', 'NAME', 'LPAREN', 'NAME', 'RPAREN', 'NEWLINE']
 
+def test_true_and_false_are_keywords():
+    assert kinds('x = True != False') == [
+        'NAME', 'EQUALS', 'TRUE', 'NE', 'FALSE', 'NEWLINE']
+
 def test_indentation_becomes_indent_and_dedent():
     source = 'def f() -> int:\n    if x:\n        return 1\n    return 2\n'
     assert kinds(source) == [
@@ -136,6 +140,8 @@ def test_empty_module():
                         ('Compare', '!=', ('IntLiteral', 1),
                          ('IntLiteral', 2))])),
     ('f()', ('Call', 'f', [])),
+    ('True == False',
+     ('Compare', '==', ('BoolLiteral', True), ('BoolLiteral', False))),
 ])
 def test_expression_shapes(source, expected):
     module = parse('def main() -> int:\n    %s\n' % source)

@@ -15,8 +15,13 @@ def parity(n: int) -> str:
     else:
         return "odd"
 
+def small(n: int) -> bool:
+    if n < 10:
+        return True
+    return False
+
 def main() -> int / []:
     print(repeat("hello", 3))
     print(parity(7), parity(10))
-    print(3 * 4 + 10 // 3, 7 == 7, 2 < 1)
+    print(3 * 4 + 10 // 3, 7 == 7, small(30))
     return 0
