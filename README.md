@@ -143,7 +143,8 @@ The class belongs in the `/ [...]` row beside the effects:
 and `main()` keeps its empty row because it catches the failure.
 A `try` whose clauses name a class is a Python `try`/`except`,
 and `except Exception` catches every class.
-A clause raises what it caught again with `raise e`, and the function then declares that class.
+A clause that names a class raises what it caught again with `raise e`, and the function then declares that class;
+a clause written `except Exception as e` cannot, since `e` has no class for the row.
 The checker rejects a function that raises a class missing from its row, or calls a function that does,
 so an exception nobody catches is a static error at `main()`.
 

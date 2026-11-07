@@ -7,7 +7,7 @@ output sits beside each program in <name>.expected: its first line
 is "exit <code>", and the rest is the program's stdout.
 
 Run with:  pypy2 -m pytest tests/test_runtime.py
-Translation takes about a minute, so the other test modules stay
+Translation takes about 40 seconds, so the other test modules stay
 separate for quick runs. Setting EFFECTPYTHON_BINARY to the path of a
 binary translated earlier skips the translation and runs the
 programs through that binary instead.

@@ -670,7 +670,14 @@ def test_accepts_a_name_bound_again_after_its_clause(body):
     'def main() -> int / []:\n    e = 7\n    try:\n        print(f())\n'
     '    except NotFound as e:\n        return 1\n'
     '    except Denied as e:\n        return 2\n    return e\n',
-], ids=['one-clause', 'every-clause'])
+    'def f() -> int / [NotFound]:\n    raise NotFound("a")\n'
+    'def main() -> int / []:\n    try:\n        with handle(FileIO):\n'
+    '            print(perform(FileIO.read("a")))\n'
+    '    except FileIO.read as eff:\n        try:\n            print(f())\n'
+    '        except NotFound as eff:\n            return 1\n'
+    '        eff.resume("x")\n'
+    '    except FileIO.write as eff:\n        eff.resume(0)\n    return 0\n',
+], ids=['one-clause', 'every-clause', 'eff-binding'])
 def test_a_clause_ending_in_return_leaves_its_name_bound(body):
     check_exceptions(body)
 

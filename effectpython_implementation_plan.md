@@ -185,7 +185,8 @@ A bare effect name needs inline clauses in the `try`/`except` form of 1.4.
 The three may mix in one `handle(...)`:
 `try: with handle(FakeFileIO(), DBQuery): ... except DBQuery.execute as eff: ...` fulfills `FileIO` through the class and `DBQuery` inline,
 and a `handle(...)` whose arguments are all handlers needs no `try`.
-Two arguments for the same effect are an error.
+Two handler instances for the same effect are an error, and so is an instance beside a bare name for the effect it fulfills;
+a bare name given twice is accepted.
 
 **Checker.**
 Pass 1 also collects handler classes and their fields, and checks each class against its effect:
@@ -202,14 +203,15 @@ The checker also rejects a bare effect name with no clause for one of its operat
 **Runtime.**
 A handler class adds no mechanism to 3.3 and 3.4.
 An instance is a `W_HandlerInstance` (3.1) holding its class's name, its field names, and one `W_Root` per field, in declaration order.
-The frame holds the instance and, per operation, either an `ast.Clause` or a handler method, and `clause_for` finds whichever the performed operation has.
+The frame maps each fulfilled effect to its instance (`instances_w`); `dispatch` answers a performed operation from the instance when its effect has one,
+and otherwise finds the clause with `clause_for`.
 For a method, `dispatch` calls it as a function with the instance as `self` and the payload's arguments, which gives it fresh locals,
 and passes the returned value to `switch_into`, the same path a tail resume takes, so sequential performs use constant stack.
 Effects a method performs resolve to outer handlers through the frame hiding of step 2, as a clause's do.
 
 **Grammar additions (2.1).**
 A class whose base is `Handler[<Name>]` becomes a `HandlerDef` node holding field declarations (`<name>: <Type> [= <literal>]`) and `FunctionDef` methods;
-a base of `Effect` still gives an `EffectDef`, and any other base is a syntax error.
+a base of `Effect` still gives an `EffectDef`, a base of `Exception` gives an `ExceptionDef` (1.6), and any other base is a syntax error.
 A `handle(...)` argument may be `<Name>(<args>)` or a bare `<Name>`, and a bare `with handle(<args>): <suite>` statement, outside `try`, becomes a `Handle` node with no clauses.
 Attribute assignment `<name>.<attr> = <expr>` joins the statements, and attribute reads extend from the `eff` binding to `self` and to a name holding a handler instance.
 
@@ -280,7 +282,7 @@ until an assignment or another clause binds the name again.
 The rule follows source order, as the checker's typing does, and does not ask whether the clause would run:
 a name assigned before the `try` is rejected too, since the clause deletes it whenever the exception is raised.
 A clause whose last statement is a `return` is the exception:
-no code after the `try` runs once that clause has, so the name keeps the type and the state it had before the clause.
+no code after the `try` runs once that clause has, so the name keeps the type, the binding, and the state it had before the clause.
 A clause that ends in `raise` still deletes the name for the checker, since an enclosing `try` in the same function can catch the exception and continue.
 A read that precedes the clause in the source but follows it in time, as in a loop body, stays a runtime error.
 Clauses are tried in order, and an exception no clause matches propagates.
@@ -308,13 +310,13 @@ If no clause has a dot, it is a `Try`.
 A mix is a syntax error ("a try statement cannot mix effect clauses and exception clauses"),
 and effect clauses around anything other than a single `with handle(...)` statement are a second one
 ("effect clauses need a with handle(...) statement"), which the action reports,
-where today the LALR tables reject that input with a generic "unexpected" message.
+where the LALR tables had rejected that input with a generic "unexpected" message.
 Separate productions for the two statements would conflict in the LALR tables,
 since both begin `TRY COLON NEWLINE INDENT` and `with handle(...)` is also an ordinary statement.
 
 **Checker.**
 Pass 1 collects exception classes beside effects and handler classes, with the same duplicate check,
-and its row validation accepts an exception class where today it accepts an effect alone.
+and its row validation accepts an exception class where it had accepted an effect alone.
 In Pass 2, a `raise` whose expression does not have a declared exception class as its type is rejected
 ("raise needs an exception, not int"), as is a constructor call with an argument that is not a `str`
 or with more than one argument.
@@ -502,22 +504,22 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `/`, `==`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from effectpython import <names>` (accepted and ignored)
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
     *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <literal>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; Milestone 5, 2026-10-31)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
-    *   `return <expr>`, `pass`, assignment `<name> = <expr>`, expression statements
+    *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
-    *   `if <expr>: <suite> else: <suite>`
+    *   `if <expr>: <suite>`, with an optional `else: <suite>`
     *   `while <expr>: <suite>` (added 2026-10-30 for `tests/programs/many_performs.epy`)
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
     *   `class <Name>(Exception): ...`, with `pass` allowed in place of `...` and either one allowed on an indented line, giving an `ExceptionDef` node (1.6; Milestone 6, 2026-11-06)
     *   `raise <expr>`, a `Raise` node (1.6; Milestone 6, 2026-11-06)
     *   `try: <suite> except <Name> [as <name>]: <suite>`, a `Try` node with one `ExceptClause` per clause; one production covers this and the `handle` form above, and the action tells them apart by the clauses (1.6; Milestone 6, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
-*   **Expressions:** Integer/string literals, variable references, binary arithmetic, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31).
+*   **Expressions:** Integer/string literals, variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31).
 
 Two constraints on the lexer, found when translating `experiments/rply_addition.py` (2026-10-28), which confirmed that `rply` 0.7.8 translates with this toolchain:
 
@@ -592,7 +594,7 @@ class W_EffBinding(W_Root):
     def __init__(self, payload, frame, h_body):
         self.payload = payload  # W_EffectPayload
         self.frame = frame      # HandlerFrame
-        self.h_body = h_body    # stacklet handle of the suspended body; consumed by resume()
+        self.h_body = h_body    # stacklet handle of the suspended body; consumed by switch_into()
 ```
 
 `eff.path` resolves through the operation's declared parameter names: the interpreter looks up `"Effect.op"` in an operations table it builds from the module's effect declarations and indexes `args_w` by the parameter's position. In `model.py` every class declares `_attrs_`, which this sketch omits, and the module also holds the prebuilt `w_None`, `w_True`, and `w_False`.
@@ -765,8 +767,10 @@ sequenceDiagram
     *   `StackletThread` has no `destroy` method.
         The `shadowstack` backend frees an abandoned stacklet from its GC destructor when the handle object becomes unreachable,
         so dropping the `W_EffBinding`, with the handle inside it, is the whole cleanup; nothing sets `eff.h_body` to null on this path.
-    *   A clause or handler method that raises an exception (1.6, Milestone 6) abandons the body the same way:
+    *   A clause that raises an exception (1.6, Milestone 6) abandons the body the same way,
+        as does a handler method whose exception the operation's row does not name (1.7):
         the exception propagates out of `dispatch` and `exec_handle`, the hidden frame is dropped, and the exception continues from the `handle` statement.
+        A method's exception whose class the row names is thrown into the body instead (step 3).
 
 ---
 
@@ -779,6 +783,7 @@ EffectPython/
 ├── conftest.py             # Present so pytest puts the repository root on sys.path
 ├── pytest.ini              # testpaths = tests, python_files = test_*.py
 ├── CLAUDE.md               # Project instructions: dialect rules, style, toolchain
+├── .gitignore
 ├── LICENSE
 ├── README.md
 ├── effectpython_implementation_plan.md
@@ -788,7 +793,7 @@ EffectPython/
 │   ├── parser.py           # rply Parser -> AST nodes
 │   ├── ast_nodes.py        # RPython-compatible AST node classes
 │   ├── checker.py          # Static effect row inference & exhaustiveness checker
-│   ├── model.py            # W_Root, W_None, W_Bool, W_Int, W_Str, W_EffectPayload, W_EffBinding
+│   ├── model.py            # W_Root, W_None, W_Bool, W_Int, W_Str, W_EffectPayload, W_EffBinding, W_HandlerInstance, W_Exception
 │   ├── interpreter.py      # AST evaluator, HandlerFrame, rstacklet integration
 │   ├── samples.py          # Hand-built Fibonacci AST, used by test_interpreter.py and test_parser.py
 │   └── errors.py           # EffectError and its subclasses: InvalidSyntax, InvalidProgram, UnhandledEffectError, EffectPythonRuntimeError, OneShotContinuationError, RaisedException
@@ -796,11 +801,11 @@ EffectPython/
 │   ├── rply_addition.py    # rply translates (2.1)
 │   └── stacklet_mailbox.py # The four rstacklet rules in a translated binary (3.2)
 └── tests/
-    ├── support.py          # read_program, shape, ListOutput
-    ├── test_interpreter.py # Milestone 1
-    ├── test_parser.py      # Milestone 2, lexer and parser
-    ├── test_checker.py     # Milestone 2, checker
-    ├── test_runtime.py     # Milestones 3 and 4: translate once, run every program in programs/
+    ├── support.py          # PROGRAMS, read_program, shape, ListOutput
+    ├── test_interpreter.py # Milestone 1, and the untranslated parts of Milestones 5, 6, and 7
+    ├── test_parser.py      # Lexer and parser, Milestone 2 and each later milestone's forms
+    ├── test_checker.py     # Checker, Milestone 2 and each later milestone's rules
+    ├── test_runtime.py     # Milestones 3 and 4 onward: translate once, run every program in programs/
     └── programs/           # <name>.epy with its <name>.expected beside it
 ```
 
@@ -911,7 +916,7 @@ EffectPython/
         `check_named_clause`, split out of `check_try`, now restores the type the name had before the clause,
         so an `int` assigned before the `try` is an `int` again after it and fails an argument check against `str`.
     *   *Acceptance test:*
-        *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; a second clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
+        *   `raise_caught.epy`: a function declaring `/ [NotFound]` raises `NotFound("settings.json")`, the caller catches it and prints `missing: settings.json`, and execution continues; an earlier clause for another class is skipped, and a message-less `raise NotFound()` prints an empty message.
         *   `rejected_uncaught.epy`: a `main()` that calls a function declaring `/ [NotFound]` without catching it is rejected by the signature check and exits 1, so no checked program reaches the runtime's `error: NotFound: settings.json` path; a unit test covers that message through `RaisedException` directly.
         *   `raise_in_body.epy`: the program in 1.6; the body raises after a resume, the `try` around the handle statement catches it, and a `print` after the outer `try` runs, showing the frame was popped.
         *   `raise_in_nested_clause.epy`: as `resume_then_error.epy`, but the body raises an exception the function catches outside the handle statement; the clause's statement after `eff.resume()` does not run.
@@ -934,8 +939,8 @@ EffectPython/
         and leaves an operation's classes out of what a handler's method rows add to the installing function.
         `check_raise` and the `Throw` check share `require_exception`, so the two report the same messages, prefixed `raise` or `eff.throw()`.
         `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
-        The six accepted programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime follows;
-        `rejected_undeclared_throw.epy` passes through the translated binary from the start.
+        The six accepted programs below parsed and passed the checker, and they were strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime followed the same day;
+        `rejected_undeclared_throw.epy` passed through the translated binary from the start.
     *   *Done 2026-11-06.*
         `HandlerFrame` has `resume_exception`, `switch_into` takes a value and an exception with one of them `None`,
         and `perform` raises a `RaisedException` for the exception after the switch returns, so the paths of 1.6 carry it from the perform site.

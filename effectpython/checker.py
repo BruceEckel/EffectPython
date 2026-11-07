@@ -410,7 +410,8 @@ class Checker(object):
         state it had before the clause."""
         name = clause.binding
         assert name is not None
-        if name in scope.bindings:
+        old_binding = scope.bindings.get(name, None)
+        if old_binding is not None:
             del scope.bindings[name]
         was_unbound = name in scope.unbound
         old_type = scope.types.get(name, None)
@@ -422,6 +423,8 @@ class Checker(object):
             scope.types[name] = old_type
         elif name in scope.types:
             del scope.types[name]
+        if returns and old_binding is not None:
+            scope.bindings[name] = old_binding
         if was_unbound or not returns:
             scope.unbound[name] = True
 
