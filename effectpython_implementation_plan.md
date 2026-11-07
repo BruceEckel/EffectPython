@@ -607,6 +607,121 @@ its `return` is caught by that function's call, so the function returns the valu
     The design allows it by desugaring, since a reader expects `try`/`except`/`finally` to accept it.
     Rejecting it would be a parser rule with a message pointing at a `try` around the statement.
 
+### 1.9 Lists and the `for` Loop (designed 2026-11-07)
+
+Every acceptance program so far counts with a `while` loop and an integer, and a handler that collects what it sees keeps a running `str`,
+because the dialect has no sequence type and no loop over one.
+This section adds a list type and a `for` statement over a list or over `range()`, the two forms the sample programs keep working around.
+It adds nothing to the effect system: a `for` body is a suite like any other, and a list is a value like any other.
+
+**The form.**
+
+```python
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Collector(Handler[Log]):
+    entries: list[str] = []
+    def note(self, text: str) -> int:
+        self.entries.append(text)
+        return len(self.entries)
+
+def squares(n: int) -> list[int] / [Log]:
+    result = []
+    for i in range(n):
+        result.append(i * i)
+        perform(Log.note("squared " + str(i)))
+    return result
+
+def main() -> int / []:
+    collector = Collector()
+    with handle(collector):
+        xs = squares(4)
+    print(xs, len(xs), xs[0], xs[-1])
+    for entry in collector.entries:
+        print(entry)
+    return 0
+```
+
+The program prints `[0, 1, 4, 9] 4 0 9` and then the four log entries.
+(It also uses `str(i)`, a conversion the dialect lacks today; see open question 6.)
+
+A list literal is `[<expr>, ...]` or `[]`, and its elements share one type: `int`, `str`, or `bool`.
+The type is written `list[int]`, `list[str]`, or `list[bool]` wherever a type is written: a parameter, a return type, a handler field.
+The operations are `len(xs)`, `xs[i]` with a negative index counting from the end as Python's does, `xs[i] = v`, `xs.append(v)`, and `xs == ys` with `!=`, element by element.
+`print(xs)` prints the list as Python prints it, `[1, 2]`, `['a', 'b']`, `[True]`.
+Nothing else: no slicing, no `in`, no `+` between lists, no `pop`, `sort`, or `insert`; and `len()` also accepts a `str`, since it is a built-in rather than a method.
+Lists are mutable and shared by reference, as Python's are: `ys = xs` aliases, a function that appends to a parameter appends to the caller's list,
+and a handler field that holds a list is the same list the installing function can read after the block, which is what `Collector` relies on.
+
+`for <name> in <expr>: <suite>` runs the suite once per element of a list, with the name bound to the element, or once per integer of `range(stop)` or `range(start, stop)`.
+The loop walks the list by index against its live length, as Python does, so an `append` inside the body lengthens the walk,
+and the name stays bound after the loop with the last element, or unbound after an empty list.
+There is no `else`, and no `break` or `continue` (open question 2).
+`range()` is not a value: the iterable of a `for` is the one place it may appear (open question 1).
+
+**Checker.**
+Types stay strings: `"list[int]"` is a type name as `"int"` is, and `list[T]` with `T` one of the three scalars is the whole family (open question 5).
+A list literal has the type of its elements, and elements of two known types are rejected: "list elements must share a type: int and str".
+`[]` has the element-less type `"list"`, which `check_args` and the assignment rules accept wherever a `list[T]` is expected,
+so `result = []` followed by `result.append(i * i)` and `return result` from a function declared `-> list[int]` checks;
+the price is that `[]` passed where a `list[str]` was declared is not caught, as an operand of unknown type is not caught today.
+`len(xs)` is `int` and requires a list or a `str`; `xs[i]` has the element type and requires `i` to be `int` when its type is known;
+`xs[i] = v` and `xs.append(v)` require `v` to match the element type when both are known;
+`==` and `!=` join the `OPERATORS` table for every list type, against the same type.
+Each of these is an error on a name that holds no list: "len() needs a list or str, not int", "x is not a list" for `x[0]`, `x[0] = 1`, and `x.append(1)`.
+A `for` needs an iterable: a list, which gives the name the element type, or `range()`, which gives it `int`;
+"for needs a list or range(), not str" otherwise.
+`range()` takes one or two `int` arguments, and outside a `for` it is "range() is allowed only as the iterable of a for statement".
+The name a `for` binds counts as an assignment for the source-order rule of 2.2, so a read after the loop checks,
+and a read of it inside the body before the loop in source order does not.
+The effects of a `for` are the effects of its iterable expression and its suite.
+A handler field may be declared `list[T]`, and its default, if any, must be `[]` (open question 3).
+The names `len` and `range` join `print` as built-ins: a function with one of those names is rejected, "len is a built-in".
+
+**Runtime.**
+`W_List(items_w)` holds a `list[W_Root]`, with `str()` producing the Python form, which quotes a `str` element with single quotes
+(the dialect's strings have no escapes, so no element needs any).
+`ListLiteral`, `Index`, `IndexAssign`, and a `Builtin` call for `len` are new nodes;
+`xs.append(v)` reuses the attribute-call node the parser builds for `NAME.NAME(args)` today, and the interpreter picks the list case by the target's value, as the checker picks it by type.
+`exec_for` evaluates the iterable once, then loops by index against the list's current length, defining the name in the environment before each run of the suite;
+the parser folds `for <name> in range(<args>)` into a `ForRange` node, as it folds `perform(...)`, so the runtime counts without building a list.
+An index out of range, or a non-integer index on a value the checker could not type, is an `EffectPythonRuntimeError`, "list index out of range", uncatchable like division by zero.
+`HandlerClass.construct` builds a fresh empty `W_List` for a `list[T]` field on every construction, so two instances do not share one;
+the class records the field's type rather than a `W_List` default, since `literal_value` would hand every instance the same object, the shared-default mistake Python's dataclasses refuse.
+
+**A `perform` inside a `for`.**
+Nothing new is needed, and that is the claim to verify.
+The loop's index is an RPython local of `exec_for`, on the body's stacklet, so a `perform` in the suite suspends the loop where it is and a `resume()` continues it;
+an `eff.throw()` raises the exception inside the suite, where a `try` in the suite or around the loop catches it;
+and an abandonment raises `Unwind` there, which leaves the loop as any exception does, running a `finally` inside the suite once, for the iteration in progress, and then any `finally` around the loop (1.8).
+A clause that holds the list being walked, through the installing function's environment or a handler field, may append to it while the body is suspended, and the walk sees the new length when it resumes;
+that is Python's behavior for the same program, and the acceptance program `perform_in_for.epy` checks it.
+The checker needs no rule for it.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether `range()` is a value or a `for`-only form.*
+    A materialized `range()` would be a `list[int]`, usable anywhere, and `print(range(3))` would print `[0, 1, 2]` where Python prints `range(0, 3)`.
+    *The design keeps `range()` to the `for`, so every accepted program means in Python what it means here, and the runtime counts without allocating.*
+2.  *Whether `break` and `continue` come with the loop.*
+    Each is a signal class caught at the loop, in `while` as well as `for`, plus a checker rule against either outside a loop.
+    *The design defers them: the programs have expressed early exits with `return` from a helper, and the milestone stays about iteration and lists.*
+3.  *Whether a handler field may hold a list.*
+    The collecting handler is the use case for lists in this dialect, and without it a handler can accumulate into a `str` alone.
+    *The design allows it, with `[]` as the sole default and a fresh list per construction, the dataclass `default_factory=list` behavior.*
+4.  *Whether lists compare with `==`.*
+    A list with no operators has `len()` and indexing as its whole interface, and tests that check a result compare element by element in a loop.
+    *The design adds `==` and `!=`, element-wise, and no other operator.*
+5.  *Whether lists nest.*
+    `list[list[int]]` needs a recursive type grammar and element printing that recurses, and no sample program asks for it.
+    *The design allows one level: the element is one of the three scalars.*
+6.  *Whether `str(i)` comes along.*
+    The program above builds a log entry from an integer, which no construct does today, and a loop that labels its iterations needs it.
+    *The design adds `str()` as a third built-in, accepting an `int`, a `str`, or a `bool` and giving what `print` would print; `W_Root.str()` has the conversion.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1151,3 +1266,20 @@ EffectPython/
             the inner body's `finally` runs, then the outer body's, and the program continues after the outer `try`.
         *   Reject a function whose `finally` performs or raises without the name in its row, and a `try` with neither clauses nor `finally`.
         *   Accept `try`/`except`/`finally` and `try`/`finally` inside a body, inside a clause, and inside a handler method.
+9.  **Milestone 9: Lists and the `for` Loop (1.9)**
+    *   *Designed 2026-11-07*, with six open questions and recommendations in 1.9.
+    *   Add the keywords `for` and `in`, the `list[T]` type form, the list literal, `len()`, `str()`, indexing and indexed assignment, `append`, list equality,
+        the `for` statement over a list and over `range()`, the checker rules of 1.9, `W_List`, `exec_for`, and list fields built fresh per construction.
+    *   Order of work, as in Milestones 5 to 8: parser with tests, checker with tests, then the runtime,
+        with the acceptance programs strict `xfail` until the runtime passes.
+        Sections 2.1, 2.2, and 3.1 are updated as each part goes in, and the tutorial's sentence on what the dialect lacks loses `for` and lists.
+    *   *Acceptance test:*
+        *   `for_range.epy`: `for i in range(n)` and `for i in range(a, b)` print their integers, and the name holds the last one after the loop.
+        *   `list_ops.epy`: a literal, `len()`, indexing from both ends, indexed assignment, `append`, `==`, and `print` of lists of each element type.
+        *   `for_list.epy`: a `for` over a list appends to the list it walks from inside the body, under a guard, and the walk sees the appended element.
+        *   `list_shared.epy`: a function appends to a parameter and the caller's list shows it, and `ys = xs` aliases.
+        *   `collector.epy`: the program in 1.9; a handler field holds a list, and two instances of the class hold two lists.
+        *   `perform_in_for.epy`: a `perform` inside a `for` over `range()`, resumed by a clause that appends to a list the body walks next; then a clause that abandons the body mid-loop, with a `finally` inside the suite that runs once and a `finally` around the loop that runs after it.
+        *   `list_index_error.epy`: `xs[3]` on a list of three is a runtime error with exit code 1.
+        *   Reject `[1, "a"]`; `xs = range(3)`; `for x in 5`; `len(5)`; `n[0]`, `n[0] = 1`, and `n.append(1)` on an `int`; `xs.append("a")` on a `list[int]`; `xs[0] = "a"` on a `list[int]`; a read of the loop name before the loop; and `def len(...)`.
+        *   Accept `result = []` then `result.append(1)` and `return result` from `-> list[int]`; a `list[bool]` field defaulting to `[]`; and `for` inside a clause, a handler method, and a `finally`.
