@@ -1,0 +1,41 @@
+# Milestone 8: an outer clause abandons a body with an inner handled
+# body suspended inside it. The Unwind runs the inner body's finally,
+# ends the inner block, runs the outer body's finally, and execution
+# continues after the outer try.
+
+from effectpython import Effect, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+class Ask(Effect):
+    def value() -> int: ...
+
+def inner() -> int / [Abort]:
+    try:
+        perform(Abort.stop("done early"))
+        return 1
+    finally:
+        print("inner close")
+
+def outer() -> int / [Abort]:
+    try:
+        try:
+            with handle(Ask):
+                n = perform(Ask.value())
+                print("got", n)
+                return inner()
+        except Ask.value as eff:
+            eff.resume(5)
+    finally:
+        print("outer close")
+    return 0
+
+def main() -> int / []:
+    try:
+        with handle(Abort):
+            print(outer())
+    except Abort.stop as eff:
+        print("aborted:", eff.reason)
+    print("after")
+    return 0

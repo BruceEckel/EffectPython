@@ -1,0 +1,9 @@
+exit 0
+body
+finally after the body
+1
+finally after a return
+2
+caught: x
+finally after a clause
+3

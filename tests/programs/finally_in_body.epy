@@ -1,0 +1,27 @@
+# Milestone 8: the program of plan 1.8. The clause does not resume,
+# so the body is unwound: its finally runs after the clause and before
+# the code after the try, and its statements after the perform do not
+# run. print(work()) prints nothing, since work() ends by unwinding.
+
+from effectpython import Effect, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+def work() -> int / [Abort]:
+    print("open")
+    try:
+        perform(Abort.stop("done early"))
+        print("never printed")
+        return 1
+    finally:
+        print("close")
+
+def main() -> int / []:
+    try:
+        with handle(Abort):
+            print(work())
+    except Abort.stop as eff:
+        print("aborted:", eff.reason)
+    print("after")
+    return 0

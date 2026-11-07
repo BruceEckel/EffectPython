@@ -25,7 +25,16 @@ from support import PROGRAMS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPYTHON = os.path.expanduser(
     '~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython')
-NOT_YET = {}
+NOT_YET = {
+    'try_finally.epy': 'Milestone 8 runtime',
+    'finally_in_body.epy': 'Milestone 8 runtime',
+    'finally_performs.epy': 'Milestone 8 runtime',
+    'finally_in_nested_body.epy': 'Milestone 8 runtime',
+    'finally_on_return_in_clause.epy': 'Milestone 8 runtime',
+    'finally_on_raise_in_clause.epy': 'Milestone 8 runtime',
+    'finally_raises.epy': 'Milestone 8 runtime',
+    'handle_with_finally.epy': 'Milestone 8 runtime',
+}
 
 @pytest.fixture(scope='session')
 def binary(tmp_path_factory):

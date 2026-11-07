@@ -1,0 +1,30 @@
+# Milestone 8: a finally that raises while its body is unwound. The
+# exception replaces the unwinding: it reaches the handler side as a
+# body exception does and surfaces at the handle statement, where the
+# try around it catches it.
+
+from effectpython import Effect, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+class Dirty(Exception): ...
+
+def work() -> int / [Abort, Dirty]:
+    try:
+        perform(Abort.stop("done early"))
+        return 1
+    finally:
+        raise Dirty("cleanup failed")
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(Abort):
+                print(work())
+        except Abort.stop as eff:
+            print("aborted:", eff.reason)
+    except Dirty as e:
+        print("dirty:", e)
+    print("after")
+    return 0

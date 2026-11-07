@@ -1,0 +1,24 @@
+# Milestone 8: a clause returns with the body suspended. The body is
+# unwound first, so its finally runs, and the function then returns
+# the clause's value.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value(label: str) -> int: ...
+
+def work() -> int / [Ask]:
+    try:
+        return perform(Ask.value("n"))
+    finally:
+        print("close")
+
+def main() -> int / []:
+    try:
+        with handle(Ask):
+            print(work())
+    except Ask.value as eff:
+        print("leaving from the clause")
+        return 3
+    print("not reached")
+    return 0

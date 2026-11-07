@@ -26,7 +26,7 @@ KEYWORDS = {
     'while': 'WHILE', 'raise': 'RAISE',
     'class': 'CLASS', 'pass': 'PASS', 'try': 'TRY', 'except': 'EXCEPT',
     'as': 'AS', 'with': 'WITH', 'from': 'FROM', 'import': 'IMPORT',
-    'True': 'TRUE', 'False': 'FALSE',
+    'True': 'TRUE', 'False': 'FALSE', 'finally': 'FINALLY',
 }
 
 # Order matters: a longer operator precedes any prefix of it

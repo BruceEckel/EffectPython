@@ -1,6 +1,7 @@
 """Milestone 2, first slice: the lexer and the parser read the
 Milestone 1 subset; from Milestone 5, handler classes too; from
-Milestone 6, exceptions.
+Milestone 6, exceptions; from Milestone 7, operation rows and throw;
+from Milestone 8, finally.
 
 Run with:  pypy2 -m pytest
 """
@@ -460,7 +461,8 @@ def test_try_except_around_a_handle_block():
           [], [])],
         [('ExceptClause', 'NotFound', 'e',
           [('ExprStmt', ('Call', 'print',
-                         [('StrLiteral', 'missing:'), ('Name', 'e')]))])])
+                         [('StrLiteral', 'missing:'), ('Name', 'e')]))])],
+        [])
 
 def test_except_without_as_has_no_binding():
     source = ('def main() -> int:\n'
@@ -599,5 +601,107 @@ def test_throw_syntax_errors(source, msg):
     'class FileIO(Effect):\n    def read() -> str / [NotFound: ...\n',
 ])
 def test_malformed_operation_row_is_a_syntax_error(source):
+    with pytest.raises(InvalidSyntax):
+        parse(source)
+
+# --- Finally (Milestone 8) ---------------------------------------------------
+
+FINALLY_EXAMPLE = '''\
+from effectpython import Effect, perform, handle
+
+class FileIO(Effect):
+    def read(path: str) -> str: ...
+
+class NotFound(Exception): ...
+
+def main() -> int / []:
+    try:
+        print("body")
+    finally:
+        print("cleanup")
+    try:
+        raise NotFound("x")
+    except NotFound as e:
+        print("caught")
+    finally:
+        print("after")
+    try:
+        with handle(FileIO):
+            print(perform(FileIO.read("a")))
+    except FileIO.read as eff:
+        eff.resume("")
+    finally:
+        print("closed")
+    return 0
+'''
+
+def test_finally_is_a_keyword():
+    assert kinds('finally:') == ['FINALLY', 'COLON', 'NEWLINE']
+
+def test_try_finally_without_clauses():
+    main = parse(FINALLY_EXAMPLE).functions[0]
+    assert shape(main.body[0]) == (
+        'Try',
+        [('ExprStmt', ('Call', 'print', [('StrLiteral', 'body')]))],
+        [],
+        [('ExprStmt', ('Call', 'print', [('StrLiteral', 'cleanup')]))])
+
+def test_try_except_finally():
+    main = parse(FINALLY_EXAMPLE).functions[0]
+    assert shape(main.body[1]) == (
+        'Try',
+        [('Raise', ('Call', 'NotFound', [('StrLiteral', 'x')]))],
+        [('ExceptClause', 'NotFound', 'e',
+          [('ExprStmt', ('Call', 'print', [('StrLiteral', 'caught')]))])],
+        [('ExprStmt', ('Call', 'print', [('StrLiteral', 'after')]))])
+
+def test_finally_wraps_a_handle_block_in_a_try():
+    main = parse(FINALLY_EXAMPLE).functions[0]
+    assert shape(main.body[2]) == (
+        'Try',
+        [('Handle', ['FileIO'],
+          [('ExprStmt', ('Call', 'print',
+                         [('Perform', 'FileIO', 'read',
+                           [('StrLiteral', 'a')])]))],
+          [('Clause', 'FileIO', 'read', 'eff',
+            [('ExprStmt', ('Resume', 'eff', ('StrLiteral', '')))])],
+          [], [])],
+        [],
+        [('ExprStmt', ('Call', 'print', [('StrLiteral', 'closed')]))])
+
+def test_try_except_without_finally_has_an_empty_finalbody():
+    source = ('def main() -> int:\n'
+              '    try:\n'
+              '        pass\n'
+              '    except NotFound as e:\n'
+              '        pass\n')
+    stmt = parse(source).functions[0].body[0]
+    assert stmt.finalbody == []
+
+def test_line_numbers_of_finally_nodes():
+    first = parse(FINALLY_EXAMPLE).functions[0].body[0]
+    assert (first.lineno, first.finalbody[0].lineno) == (9, 12)
+
+@pytest.mark.parametrize('source, msg', [
+    ('def main() -> int:\n    try:\n        pass\n'
+     '    except IO.read as e:\n        pass\n'
+     '    finally:\n        pass\n',
+     'line 2, column 5: effect clauses need a with handle(...) statement'),
+    ('def main() -> int:\n    try:\n        with handle(IO):\n'
+     '            pass\n    except IO.read as e:\n        pass\n'
+     '    except NotFound:\n        pass\n    finally:\n        pass\n',
+     'line 7, column 5: a try statement cannot mix effect clauses and '
+     'exception clauses'),
+])
+def test_finally_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('source', [
+    'def main() -> int:\n    try:\n        pass\n',
+    'def main() -> int:\n    try:\n        pass\n    return 0\n',
+])
+def test_try_without_clauses_or_finally_is_a_syntax_error(source):
     with pytest.raises(InvalidSyntax):
         parse(source)

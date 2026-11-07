@@ -1,0 +1,26 @@
+# Milestone 8: a finally on the handler statement. The parser places
+# it around the Handle, so it runs after the block completes and, in
+# the second block, after a clause abandons the body.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value(label: str) -> int: ...
+
+def main() -> int / []:
+    try:
+        with handle(Ask):
+            print(perform(Ask.value("a")))
+    except Ask.value as eff:
+        eff.resume(1)
+    finally:
+        print("block done")
+    try:
+        with handle(Ask):
+            print(perform(Ask.value("b")))
+            print("never printed")
+    except Ask.value as eff:
+        print("abandoning", eff.label)
+    finally:
+        print("block abandoned")
+    return 0

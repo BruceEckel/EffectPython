@@ -1,0 +1,27 @@
+# Milestone 8: a clause raises with the body suspended. The body is
+# unwound first, so its finally runs, and the exception then continues
+# out of the handle statement to the try around it.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def value(label: str) -> int: ...
+
+class Refused(Exception): ...
+
+def work() -> int / [Ask]:
+    try:
+        return perform(Ask.value("n"))
+    finally:
+        print("close")
+
+def main() -> int / []:
+    try:
+        try:
+            with handle(Ask):
+                print(work())
+        except Ask.value as eff:
+            raise Refused(eff.label)
+    except Refused as e:
+        print("refused:", e)
+    return 0

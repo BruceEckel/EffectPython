@@ -1,7 +1,7 @@
 """Milestone 2 acceptance: the static effect checker (plan 2.2, 4.2),
 from Milestone 5 the handler class rules (plan 1.5), from Milestone 6
-the exception rules (plan 1.6), and from Milestone 7 the throw rules
-(plan 1.7).
+the exception rules (plan 1.6), from Milestone 7 the throw rules
+(plan 1.7), and from Milestone 8 the finally rules (plan 1.8).
 
 Run with:  pypy2 -m pytest
 """
@@ -883,3 +883,79 @@ def test_rejects_the_undeclared_throw_program():
     assert info.value.msg == (
         'line 23: FileIO.read does not declare Denied, so eff.throw() '
         'cannot deliver it')
+
+# --- Finally (Milestone 8) ---------------------------------------------------
+
+HANDLED = ('    try:\n        with handle(FileIO):\n'
+           '            print(perform(FileIO.read("a")))\n'
+           '    except FileIO.read as eff:\n        eff.resume("x")\n'
+           '    except FileIO.write as eff:\n        eff.resume(0)\n'
+           '    finally:\n'
+           '        print(perform(DBQuery.execute("q")))\n'
+           '    return 0\n')
+
+@pytest.mark.parametrize('name', [
+    'try_finally.epy', 'finally_in_body.epy', 'finally_performs.epy',
+    'finally_in_nested_body.epy', 'finally_on_return_in_clause.epy',
+    'finally_on_raise_in_clause.epy', 'finally_raises.epy',
+    'handle_with_finally.epy',
+])
+def test_accepts_the_finally_programs(name):
+    check(parse(read_program(name)))
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    try:\n        with handle(DBQuery):\n'
+    '            try:\n'
+    '                print(perform(DBQuery.execute("q")))\n'
+    '            finally:\n                print("done")\n'
+    '    except DBQuery.execute as eff:\n        eff.resume(eff.sql)\n'
+    '    return 0\n',
+    'def main() -> int / []:\n    try:\n        with handle(DBQuery):\n'
+    '            print(perform(DBQuery.execute("q")))\n'
+    '    except DBQuery.execute as eff:\n        try:\n'
+    '            raise NotFound(eff.sql)\n'
+    '        except NotFound as e:\n            print(e)\n'
+    '        finally:\n            print("done")\n'
+    '        eff.resume(eff.sql)\n    return 0\n',
+    'class Tidy(Handler[FileIO]):\n'
+    '    def read(self, path: str) -> str:\n        try:\n'
+    '            print(path)\n        finally:\n'
+    '            print("read")\n        return path\n'
+    '    def write(self, path: str, content: str) -> int:\n'
+    '        return 0\n' + MAIN,
+    'def f() -> int / [DBQuery]:\n' + HANDLED + MAIN,
+], ids=['in-body', 'in-clause', 'in-method', 'on-handle-declared'])
+def test_accepts_a_finally_the_program_accounts_for(body):
+    check_exceptions(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> str:\n    try:\n        pass\n    finally:\n'
+     '        print(perform(FileIO.read("a")))\n    return ""\n' + MAIN,
+     "line 18: function 'f' performs FileIO (line 22) without "
+     "declaring it in its effect row"),
+    ('def f() -> int:\n    try:\n        pass\n    finally:\n'
+     '        raise NotFound()\n    return 0\n' + MAIN,
+     "line 18: function 'f' raises NotFound (line 22) without "
+     "declaring it in its effect row"),
+    ('def f() -> int:\n    try:\n        raise NotFound("a")\n'
+     '    except NotFound as e:\n        print(e)\n    finally:\n'
+     '        raise Denied()\n    return 0\n' + MAIN,
+     "line 18: function 'f' raises Denied (line 24) without "
+     "declaring it in its effect row"),
+    ('def f() -> int / []:\n' + HANDLED + MAIN,
+     "line 18: function 'f' performs DBQuery (line 27) without "
+     "declaring it in its effect row"),
+], ids=['performs', 'raises', 'not-caught-by-own-clauses', 'on-handle'])
+def test_unhandled_finally_effects(body, msg):
+    with pytest.raises(UnhandledEffectError) as info:
+        check_exceptions(body)
+    assert info.value.msg == msg
+
+def test_rejects_a_read_of_the_clause_name_in_its_finally():
+    with pytest.raises(InvalidProgram) as info:
+        check_exceptions('def main() -> int / []:\n' + CAUGHT +
+                         '    finally:\n        print(e)\n'
+                         '    return 0\n')
+    assert info.value.msg == (
+        "line 24: name 'e' is unbound after the except clause "
+        "that bound it")

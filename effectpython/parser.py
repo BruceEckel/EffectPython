@@ -5,7 +5,7 @@ classes with operation stubs, Handler[Effect] classes with field
 declarations and methods, exception classes, function definitions
 with typed parameters, a return type, and an optional effect row;
 return, raise, assignment, attribute assignment, expression, pass,
-if/else, while, try/except, and handle statements; int, str, and
+if/else, while, try/except/finally, and handle statements; int, str, and
 bool literals, names,
 arithmetic, comparisons, calls, attribute reads, and attribute calls.
 
@@ -443,18 +443,34 @@ def while_stmt(p):
 
 @pg.production('try_stmt : TRY COLON suite clauses')
 def try_stmt(p):
-    body = _stmts(p[2])
-    clauses = p[3]
+    return _try(p[0], _stmts(p[2]), p[3], [])
+
+@pg.production('try_stmt : TRY COLON suite clauses FINALLY COLON suite')
+def try_finally_stmt(p):
+    return _try(p[0], _stmts(p[2]), p[3], _stmts(p[6]))
+
+@pg.production('try_stmt : TRY COLON suite FINALLY COLON suite')
+def finally_stmt(p):
+    return ast.Try(_stmts(p[2]), [], _stmts(p[5]), _line(p[0]))
+
+def _try(token, body, clauses, finalbody):
+    """Exception clauses give a Try. Effect clauses around a single
+    clause-less with handle(...) give a Handle, which a finally wraps
+    in a Try with no clauses (plan 1.8)."""
     assert isinstance(clauses, _ClauseList)
     if len(clauses.except_clauses) > 0:
-        return ast.Try(body, clauses.except_clauses, _line(p[0]))
+        return ast.Try(body, clauses.except_clauses, finalbody,
+                       _line(token))
     if len(body) == 1:
         handle = body[0]
         if isinstance(handle, ast.Handle) and len(handle.clauses) == 0:
-            return ast.Handle(handle.effects, handle.body,
-                              clauses.effect_clauses,
-                              handle.constructions, _line(p[0]))
-    raise _error(p[0], "effect clauses need a with handle(...) statement")
+            handle = ast.Handle(handle.effects, handle.body,
+                                clauses.effect_clauses,
+                                handle.constructions, _line(token))
+            if len(finalbody) == 0:
+                return handle
+            return ast.Try([handle], [], finalbody, _line(token))
+    raise _error(token, "effect clauses need a with handle(...) statement")
 
 @pg.production('with_stmt : WITH NAME LPAREN handle_args RPAREN COLON suite')
 def with_stmt(p):

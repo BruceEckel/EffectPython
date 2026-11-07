@@ -1,0 +1,32 @@
+# Milestone 8: a finally that performs while its body is unwound. The
+# Log clause outside answers the perform and resumes, and the
+# unwinding then completes.
+
+from effectpython import Effect, perform, handle
+
+class Abort(Effect):
+    def stop(reason: str) -> int: ...
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def work() -> int / [Abort, Log]:
+    try:
+        perform(Abort.stop("done early"))
+        return 1
+    finally:
+        perform(Log.note("closing"))
+
+def main() -> int / []:
+    try:
+        with handle(Log):
+            try:
+                with handle(Abort):
+                    print(work())
+            except Abort.stop as eff:
+                print("aborted:", eff.reason)
+            print("after abort")
+    except Log.note as eff:
+        print("log:", eff.text)
+        eff.resume(0)
+    return 0

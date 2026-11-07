@@ -1,0 +1,33 @@
+# Milestone 8: try/finally without effects. The finally suite runs
+# after a suite that completes, after a return, and after an except
+# clause has handled an exception.
+
+class NotFound(Exception): ...
+
+def completes() -> int:
+    try:
+        print("body")
+    finally:
+        print("finally after the body")
+    return 1
+
+def returns() -> int:
+    try:
+        return 2
+    finally:
+        print("finally after a return")
+
+def catches() -> int / []:
+    try:
+        raise NotFound("x")
+    except NotFound as e:
+        print("caught:", e)
+    finally:
+        print("finally after a clause")
+    return 3
+
+def main() -> int / []:
+    print(completes())
+    print(returns())
+    print(catches())
+    return 0

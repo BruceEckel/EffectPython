@@ -236,15 +236,21 @@ class Try(Stmt):
        except NotFound as e:
            clause body
        ...
-       An ordinary try/except (plan 1.6). The parser reads every try
-       through one production and builds a Handle when the clauses
-       name Effect.op, a Try when they name an exception class."""
-    _attrs_ = ['body', 'clauses']
+       finally:
+           finalbody
+       An ordinary try/except/finally (plan 1.6, 1.8). The parser
+       reads every try through one set of productions and builds a
+       Handle when the clauses name Effect.op, a Try when they name an
+       exception class; a finally on effect clauses gives a Try with
+       no clauses around the Handle. Either part may be empty, not
+       both; finalbody is [] without a finally."""
+    _attrs_ = ['body', 'clauses', 'finalbody']
 
-    def __init__(self, body, clauses, lineno=0):
+    def __init__(self, body, clauses, finalbody, lineno=0):
         Node.__init__(self, lineno)
-        self.body = body        # list of Stmt
-        self.clauses = clauses  # list of ExceptClause
+        self.body = body            # list of Stmt
+        self.clauses = clauses      # list of ExceptClause
+        self.finalbody = finalbody  # list of Stmt
 
 class ExceptClause(Node):
     """except Name [as binding]: body   (one clause of a Try). Name is

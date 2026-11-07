@@ -390,7 +390,8 @@ class Checker(object):
     def check_try(self, stmt, scope, effects):
         """The suite's effects, less the classes the clauses catch, plus
         whatever the clauses perform or raise: the formula of a handle
-        block with exception classes in place of handled effects."""
+        block with exception classes in place of handled effects. The
+        finally suite's effects join unconditionally (plan 1.8)."""
         body_effects = EffectSet()
         self.check_block(stmt.body, scope, body_effects)
         caught = {}
@@ -410,6 +411,7 @@ class Checker(object):
                                             or EXCEPTION in caught):
                 continue
             effects.add(name, body_effects.linenos[name])
+        self.check_block(stmt.finalbody, scope, effects)
 
     def check_named_clause(self, clause, scope, effects):
         """Check a clause with its name typed as the class it catches.

@@ -496,7 +496,7 @@ and `OperationDef` gains the row.
     The design says yes, since the row is checked per operation and not per installed handler.
     A `handle` block could subtract the classes its clauses provably do not throw, at the cost of a rule that reads the clauses to type the body.
 
-### 1.8 `finally` and Abandonment (designed 2026-11-06, open questions at the end)
+### 1.8 `finally` and Abandonment (designed 2026-11-06, open questions settled 2026-11-06)
 
 A clause that ends without resuming abandons the suspended body (3.4, step 5), and so do a `return` in a clause and an exception raised in a clause or a handler method (1.6).
 Today abandonment drops the body's stacklet: no statement of the body runs again, and the stacklet is freed when its handle becomes unreachable.
@@ -590,7 +590,7 @@ When the loop ends with `pending_error` an `Unwind` of this frame, it clears it 
 The clause body and the handler method call run under a `try` that, on `ReturnSignal` or `EffectError` with the body still suspended, unwinds first and re-raises after.
 A body's stacklet now always runs to completion, so nothing depends on the GC destructor freeing an abandoned stacklet (3.4, step 5), though it still would.
 
-**Open questions.**
+**Open questions (settled 2026-11-06 as the design recommends).**
 
 1.  *Unwind, or document that `finally` is skipped.*
     Skipping is what dropping the stacklet does today, and it is simpler.
@@ -613,7 +613,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True` and `False`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from effectpython import <names>` (accepted and ignored)
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
@@ -627,6 +627,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `class <Name>(Exception): ...`, with `pass` allowed in place of `...` and either one allowed on an indented line, giving an `ExceptionDef` node (1.6; Milestone 6, 2026-11-06)
     *   `raise <expr>`, a `Raise` node (1.6; Milestone 6, 2026-11-06)
     *   `try: <suite> except <Name> [as <name>]: <suite>`, a `Try` node with one `ExceptClause` per clause; one production covers this and the `handle` form above, and the action tells them apart by the clauses (1.6; Milestone 6, 2026-11-06)
+    *   `finally: <suite>` after the clauses of either `try` form, or after a `try` suite with no clauses, filling `Try.finalbody`; on effect clauses the `Handle` is wrapped in a clause-less `Try` (1.8; Milestone 8, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
 *   **Expressions:** Integer/string literals, `True` and `False` (a `BoolLiteral`, added 2026-11-06, which `==` and `!=` compare), variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31).
 
@@ -654,7 +655,7 @@ The static analyzer runs in three passes over the AST before execution:
             2. Types `eff.<param>` inside each clause from `E.op`'s parameter names and types, and verifies that `eff.resume(val)` is called with a `val` matching `E.op`'s return type.
             3. Computes the net effect of the `HandleNode` as:
                $$\text{Effects}(\text{HandleNode}) = (\text{Effects}(\text{body}) \setminus \text{handled\_effects}) \cup \bigcup_{c \in \text{clauses}} \text{Effects}(c)$$
-        *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, 2026-11-06).
+        *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, 2026-11-06); a `finalbody` unions its effects unconditionally (1.8; Milestone 8, 2026-11-06).
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
 3.  **Pass 3 — Entrypoint Verification:**
     *   Verifies that `main()` exists and its `declared_effect_row` is empty (`[]`).
@@ -1083,7 +1084,13 @@ EffectPython/
         *   Accept a body that catches the operation's class at the `perform`, a `try` around the `handle` statement that catches it,
             and an installing function with an empty row whose handler method raises the operation's class and whose body catches it.
 8.  **Milestone 8: `finally` and Abandonment (1.8)**
-    *   *Designed 2026-11-06; not started.* The open questions of 1.8 come first.
+    *   *Designed 2026-11-06*, and the open questions of 1.8 were settled the same day as the design recommends.
+    *   *Frontend done 2026-11-06.*
+        `lexer.py` has the `finally` keyword, `ast_nodes.py` gives `Try` a `finalbody`,
+        and `parser.py` reads the three `try` forms through one action, `_try`, which wraps a `Handle` in a clause-less `Try` when effect clauses carry a `finally`.
+        `check_try` adds the `finalbody`'s effects after the subtraction.
+        `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
+        The eight programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime follows.
     *   Add the `finally` keyword and `Try.finalbody`, the `try`/`finally` forms of 2.1 including the desugared `finally` on a handler statement,
         the `finalbody` term in the checker's `Try` formula, `Unwind` in `errors.py`, `HandlerFrame.unwinding`,
         the third resumption in `switch_into` and `perform`, the unwinding paths in `dispatch` and `answer_with_method`, and the `finally` in `exec_try`.

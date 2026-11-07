@@ -1,0 +1,6 @@
+exit 0
+got 5
+aborted: done early
+inner close
+outer close
+after
