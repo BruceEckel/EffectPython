@@ -27,9 +27,9 @@ Each program file begins with a comment that the listings here leave out,
 so a line number in an error message counts from the file's first line, a few lines above the listing's.
 
 The dialect is a proof of concept, and you will notice what it lacks sooner than what it has.
-The values are `int`, `str`, and `bool`, with `True` and `False` as the literals.
-There are no lists, dicts, or tuples, no `for` loop, no string methods, and no `else` or bare `except:` on a `try`.
-`print` is the one built-in; it takes any number of arguments and separates them with spaces, as Python does.
+The values are `int`, `str`, and `bool`, with `True` and `False` as the literals, and a `list` of one of those three.
+There are no dicts or tuples, no string methods, no slicing, no `break` or `continue`, and no `else` or bare `except:` on a `try`.
+The built-ins are `print`, which takes any number of arguments and separates them with spaces, as Python does, `len`, and `str`.
 Every parameter and return type is written out, and the checker reads them.
 Those limits are the size of the project, not design choices, and they do not get in the way of the effects.
 
@@ -468,7 +468,7 @@ def main() -> int / []:
 2
 ```
 
-A field is declared like a dataclass field, `int` or `str` with an optional default,
+A field is declared like a dataclass field, `int` or `str` with an optional default, or a list as section 9 shows,
 and the constructor takes the fields positionally.
 The instance outlives the block, so `main()` reads `fake.writes` after it.
 A `handle()` may mix handler instances with bare effect names, which still need their clauses:
@@ -737,7 +737,71 @@ A throw counts as the binding's one resumption, so a `resume()` or a second `thr
 If the body does not catch the thrown exception, it ends the body and surfaces at the `with handle` statement, as a `raise` in the body does;
 `tests/programs/throw_through_body.epy` shows that path.
 
-## 9. What the checker catches
+## 9. Lists and the `for` loop
+
+A list holds values of one type, written `list[int]`, `list[str]`, or `list[bool]` wherever a type is written,
+and a `for` walks a list or a `range()`.
+The handler below collects what it is told into a list field,
+and the function it serves builds a list to return:
+
+```python tests/programs/collector.epy
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Collector(Handler[Log]):
+    entries: list[str] = []
+    def note(self, text: str) -> int:
+        self.entries.append(text)
+        return len(self.entries)
+
+def squares(n: int) -> list[int] / [Log]:
+    result = []
+    for i in range(n):
+        result.append(i * i)
+        perform(Log.note("squared " + str(i)))
+    return result
+
+def main() -> int / []:
+    collector = Collector()
+    with handle(collector):
+        xs = squares(4)
+    print(xs, len(xs), xs[0], xs[-1])
+    for entry in collector.entries:
+        print(entry)
+    other = Collector()
+    print(len(other.entries), len(collector.entries))
+    return 0
+```
+
+```text tests/programs/collector.expected
+[0, 1, 4, 9] 4 0 9
+squared 0
+squared 1
+squared 2
+squared 3
+0 4
+```
+
+The list operations are the literal `[1, 2]` or `[]`, `len(xs)`, `xs[i]` with a negative index counting from the end, `xs[i] = v`, `xs.append(v)`, and `==` and `!=` element by element.
+`print(xs)` shows the list as Python does, so a list of strings prints as `['a', 'b']`.
+Lists are shared by reference, as Python's are:
+`collector.entries` is the same list `note` appended to, and a function that appends to a parameter appends to the caller's list.
+A list field's default is `[]`, and each instance gets a list of its own, which is why `other.entries` is empty.
+`result = []` starts a list of no type yet; the first `append` settles it, and the checker holds the rest of the function to that type.
+
+`for <name> in <list>:` binds the name to each element in turn, by index against the list's current length,
+so an `append` inside the body lengthens the walk, as in Python,
+and the name keeps the last element after the loop.
+`for i in range(n):` and `range(start, stop)` count integers; `range()` is allowed there and nowhere else, so the checker rejects `xs = range(3)`.
+`str(i)` turns an `int` or a `bool` into what `print` would show for it, which is how `squares` labels its log entries.
+
+A `perform` inside a loop suspends the loop where it is, and a clause that abandons the body leaves the loop as an exception would,
+running a `finally` inside the suite once, for the pass in progress, and then any `finally` around the loop;
+`tests/programs/perform_in_for.epy` shows both.
+
+## 10. What the checker catches
 
 Everything in this list is rejected before the program runs, with a line number:
 
@@ -749,10 +813,11 @@ Everything in this list is rejected before the program runs, with a line number:
 - `eff.<name>` that is not a parameter of the operation;
 - a `raise` or `eff.throw()` of a value that is not a declared exception class, and a throw of a class the operation does not declare;
 - a read of a name nothing has bound earlier in the function, and a read of an `except` clause's `as` name after the clause, which Python 3 leaves unbound;
+- a list literal whose elements differ in type, an index or `append` on a value that is not a list, an `append` or an indexed assignment of the wrong element type, a `for` over a value that is neither a list nor `range()`, and `range()` anywhere else;
 - `Exception` in a row, since a row names the classes that can reach a caller.
 
 What remains for runtime is what the checker does not settle:
-integer division or modulo by zero, an operator whose operand types the checker could not both see, a name assigned in one branch of an `if` and read after it, resuming twice, and a recursion that outgrows the stack (`maximum recursion depth exceeded`, from `tests/programs/deep_recursion.epy`).
+integer division or modulo by zero, a list index past either end, an operator whose operand types the checker could not both see, a name assigned in one branch of an `if` and read after it, resuming twice, and a recursion that outgrows the stack (`maximum recursion depth exceeded`, from `tests/programs/deep_recursion.epy`).
 Those stop the program with an `error:` line and exit code 1, and no `try` catches them:
 
 ```python tests/programs/body_error.epy
@@ -783,7 +848,7 @@ error: integer division by zero
 A runtime error reports a program the checker could not reject, not a failure the program planned for,
 which is why it stays outside the exception system.
 
-## 10. Reading further
+## 11. Reading further
 
 `README.md` is the short version of this tutorial.
 `effectpython_implementation_plan.md` has the language design (Phase 1), the checker's three passes (2.2),

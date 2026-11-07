@@ -470,3 +470,94 @@ def test_as_name_is_unbound_in_the_finally():
             '    finally:\n'
             '        print(e)\n')
     assert info.value.msg == "name 'e' is not defined"
+
+# --- Lists and for (Milestone 9), without a handle statement -----------------
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print([3, 1, 2], ["a", "b"], [True, False], [])',
+     ["[3, 1, 2] ['a', 'b'] [True, False] []"]),
+    ('print(len([1, 2, 3]), len("abcd"), len([]))', ["3 4 0"]),
+    ('xs = [3, 1, 2]\n'
+     '    print(xs[0], xs[2], xs[-1], xs[-3])',
+     ["3 2 2 3"]),
+    ('xs = [1, 2, 3]\n'
+     '    xs[1] = 9\n'
+     '    xs[-1] = 8\n'
+     '    print(xs)',
+     ["[1, 9, 8]"]),
+    ('xs = []\n'
+     '    xs.append(1)\n'
+     '    xs.append(2)\n'
+     '    print(xs, len(xs))',
+     ["[1, 2] 2"]),
+    ('print([1, 2] == [1, 2], [1, 2] != [1, 2], [1] == [1, 2],'
+     ' [] == [], ["a"] == ["a"])',
+     ["True False False True True"]),
+    ('print(str(7) + str(True) + str("s"))', ["7Trues"]),
+], ids=['print', 'len', 'index from both ends', 'indexed assignment',
+        'append', 'equality', 'str'])
+def test_list_operations(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n')
+    assert (exit_code, lines) == (0, printed)
+
+def test_names_bound_to_one_list_share_it():
+    exit_code, lines = run_main_body(
+        '    xs = [1]\n'
+        '    ys = xs\n'
+        '    print(add(xs, 2), add(ys, 3))\n'
+        '    print(xs, ys)\n'
+        '    return 0\n',
+        'def add(xs: list[int], n: int) -> int:\n'
+        '    xs.append(n)\n'
+        '    return len(xs)\n')
+    assert lines == ["2 3", "[1, 2, 3] [1, 2, 3]"]
+
+@pytest.mark.parametrize('body, printed', [
+    ('    for x in [1, 2, 3]:\n'
+     '        print(x)\n'
+     '    print(x)\n',
+     ["1", "2", "3", "3"]),
+    ('    xs = [1, 2]\n'
+     '    for x in xs:\n'
+     '        if x == 1:\n'
+     '            xs.append(3)\n'
+     '        print(x)\n',
+     ["1", "2", "3"]),
+    ('    for x in []:\n'
+     '        print("never")\n'
+     '    print("done")\n',
+     ["done"]),
+    ('    for i in range(3):\n'
+     '        print(i)\n',
+     ["0", "1", "2"]),
+    ('    for i in range(2, 5):\n'
+     '        print(i)\n',
+     ["2", "3", "4"]),
+    ('    for i in range(3, 1):\n'
+     '        print(i)\n',
+     []),
+    ('    for i in range(3):\n'
+     '        pass\n'
+     '    print(i)\n',
+     ["2"]),
+], ids=['list keeps the last element', 'list walks the live length',
+        'empty list', 'range(3)', 'range(2, 5)', 'empty range',
+        'range keeps the last value'])
+def test_for_loop(body, printed):
+    exit_code, lines = run_main_body(body + '    return 0\n')
+    assert (exit_code, lines) == (0, printed)
+
+@pytest.mark.parametrize('body, msg', [
+    ('    xs = [1, 2]\n    print(xs[2])\n', 'list index out of range'),
+    ('    xs = [1, 2]\n    print(xs[-3])\n', 'list index out of range'),
+    ('    xs = [1, 2]\n    xs[-3] = 1\n', 'list index out of range'),
+    ('    xs = []\n    print(xs[0])\n', 'list index out of range'),
+    ('    n = 3\n    print(n[0])\n', 'int is not a list'),
+    ('    print(len(3))\n', 'len() needs a list or str, not int'),
+], ids=['past the end', 'before the start', 'assignment before the start',
+        'empty list', 'index an int', 'len of an int'])
+def test_list_runtime_errors(body, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(body + '    return 0\n')
+    assert info.value.msg == msg

@@ -7,8 +7,8 @@ and `perform` suspends the running code until a handler resumes it.
 Handlers are delimited continuations built on RPython's `rstacklet`.
 
 This file is the short version.
-[TUTORIAL.md](TUTORIAL.md) walks through the dialect in ten sections with a working program for each step,
-from a first effect and handler through nested handlers, handler classes, exceptions, `eff.throw()`, and `finally`;
+[TUTORIAL.md](TUTORIAL.md) walks through the dialect in eleven sections with a working program for each step,
+from a first effect and handler through nested handlers, handler classes, exceptions, `eff.throw()`, `finally`, and lists with the `for` loop;
 every listing in it is a file under `tests/programs/` with its recorded output beside it, and a test holds the two to each other.
 
 ```python
@@ -94,10 +94,11 @@ A method abandons the body by raising an exception, as the next section describe
 A method that performs effects of its own declares them in a `/ [...]` row,
 and those effects resolve to the handlers outside the `with` block.
 
-Fields are declared like dataclass fields, as `int` or `str` with an optional literal default,
+Fields are declared like dataclass fields, as `int` or `str` with an optional literal default, or as a `list[int]`, `list[str]`, or `list[bool]` defaulting to `[]`,
 and the constructor takes them positionally in declaration order.
 The instance lives for the whole block, so a field keeps its value from one operation to the next,
 and the code after the block can read it, as `fake.writes` does above.
+A handler that collects into a list field is `tests/programs/collector.epy`, which the tutorial's section 9 walks through along with the list operations and the `for` loop over a list or a `range()`.
 
 `handle()` accepts a handler instance or a constructor call such as `handle(CountingFileIO())`
 alongside bare effect names.
@@ -106,7 +107,7 @@ a bare effect name still needs its `except` clauses.
 The checker rejects a handler class missing a method for one of the effect's operations,
 a method that is not an operation or whose signature differs from the operation's,
 a method that performs an effect missing from its row,
-a field of a type other than `int` or `str`,
+a field of a type other than `int`, `str`, or a list,
 a constructor call with the wrong arguments,
 a `self.<name>` that names no field,
 and a clause for an effect that a handler class in the same `handle()` fulfills.

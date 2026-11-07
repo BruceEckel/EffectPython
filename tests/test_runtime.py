@@ -25,15 +25,7 @@ from support import PROGRAMS
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RPYTHON = os.path.expanduser(
     '~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython')
-NOT_YET = {
-    'for_range.epy': 'Milestone 9 runtime',
-    'list_ops.epy': 'Milestone 9 runtime',
-    'for_list.epy': 'Milestone 9 runtime',
-    'list_shared.epy': 'Milestone 9 runtime',
-    'collector.epy': 'Milestone 9 runtime',
-    'perform_in_for.epy': 'Milestone 9 runtime',
-    'list_index_error.epy': 'Milestone 9 runtime',
-}
+NOT_YET = {}
 
 @pytest.fixture(scope='session')
 def binary(tmp_path_factory):

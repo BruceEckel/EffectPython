@@ -691,7 +691,7 @@ while `self.entries.append(v)` on a field is a `MethodCall` whose target is an e
 the parser folds `for <name> in range(<args>)` into a `ForRange` node, as it folds `perform(...)`, so the runtime counts without building a list.
 An index out of range, or a non-integer index on a value the checker could not type, is an `EffectPythonRuntimeError`, "list index out of range", uncatchable like division by zero.
 `HandlerClass.construct` builds a fresh empty `W_List` for a `list[T]` field on every construction, so two instances do not share one;
-the class records the field's type rather than a `W_List` default, since `literal_value` would hand every instance the same object, the shared-default mistake Python's dataclasses refuse.
+the class records each field's default expression and evaluates it per construction (`default_value`), rather than a `W_List` built once, which would hand every instance the same object, the shared-default mistake Python's dataclasses refuse (runtime, 2026-11-07).
 
 **A `perform` inside a `for`.**
 Nothing new is needed, and that is the claim to verify.
@@ -811,6 +811,10 @@ class W_Int(W_Root):
 class W_Str(W_Root):
     def __init__(self, val): self.val = val  # rpython str
 
+class W_List(W_Root):
+    """A list (1.9; Milestone 9): mutable and shared by reference; str() gives Python's form"""
+    def __init__(self, items_w): self.items_w = items_w  # list[W_Root]
+
 class W_EffectPayload(W_Root):
     def __init__(self, effect_name, op_name, args_w):
         self.effect_name = effect_name
@@ -839,6 +843,7 @@ class W_EffBinding(W_Root):
 ```
 
 `eff.path` resolves through the operation's declared parameter names: the interpreter looks up `"Effect.op"` in an operations table it builds from the module's effect declarations and indexes `args_w` by the parameter's position. In `model.py` every class declares `_attrs_`, which this sketch omits, and the module also holds the prebuilt `w_None`, `w_True`, and `w_False`.
+A `W_List` is the one mutable value: `xs.append(v)` and `xs[i] = v` change the list every holder sees, and `print(xs)` writes each element's `repr()`, so a `str` element comes out single-quoted as Python prints it.
 
 ### 3.2 How `rlib.rstacklet` Works
 `rpython.rlib.rstacklet` is the RPython-level primitive under PyPy's app-level `continulet`; there is no `continulet` class at the RPython level. The module exposes one class, `StackletThread`, with four methods:
@@ -1287,6 +1292,12 @@ EffectPython/
         `tests/test_parser.py` and `tests/test_checker.py` cover each form and rejection.
         The seven programs below parse and pass the checker, and they are strict `xfail` under `NOT_YET` in `tests/test_runtime.py` until the runtime follows;
         `rejected_range_value.epy` passes through the translated binary from the start.
+    *   *Runtime done 2026-11-07.*
+        `model.py` has `W_List`; `interpreter.py` has `exec_for` and `exec_for_range`, the `ListLiteral`, `Index`, `IndexAssign`, and `MethodCall` branches,
+        the list case of `OpCall` chosen by the name being bound, `len()` and `str()` in `builtin`, `range()` outside a `for` as a runtime error with the checker's message,
+        list equality in `compare` through `lists_equal`, and a field default evaluated per construction (`default_value`), so a list field gives each instance a list of its own.
+        `tests/test_interpreter.py` covers lists and `for` without effects; `NOT_YET` is empty and the eight programs pass through the binary.
+        The claim of 1.9's last paragraph held: `perform_in_for.epy` ran as written, with no change to the handler runtime.
     *   Add the keywords `for` and `in`, the `list[T]` type form, the list literal, `len()`, `str()`, indexing and indexed assignment, `append`, list equality,
         the `for` statement over a list and over `range()`, the checker rules of 1.9, `W_List`, `exec_for`, and list fields built fresh per construction.
     *   Order of work, as in Milestones 5 to 8: parser with tests, checker with tests, then the runtime,

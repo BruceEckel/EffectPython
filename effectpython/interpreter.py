@@ -75,6 +75,18 @@ mailbox it swallows it, and another frame's Unwind it re-raises,
 which carries an outer abandonment through every body nested inside
 the abandoned one.
 
+Lists and the for loop (plan 1.9) add values, not mechanism. A W_List
+is shared by reference, so exec_for walks the one the iterable
+evaluates to by index against its live length, and a clause that
+appends to that list while the body is suspended lengthens the walk.
+A for over range() is a ForRange the parser folds, and counts in an
+RPython local. xs.append(v) on a name is the OpCall the parser builds
+for Effect.op(...), told apart by the name being bound, since an
+effect is never a value; on any other expression it is a MethodCall.
+len(), str(), and range() are Call nodes recognized by name, as
+print is. A field default is evaluated per construction, so the [] a
+list field declares gives each instance a list of its own.
+
 rstacklet runs only translated, so the import below is guarded: the
 unit tests import this module without RPython on the path and never
 execute a handle statement. Every runtime error that depends on it
@@ -99,19 +111,23 @@ constructor call with more than a str message
 RaisedException that reaches entry_point, since main()'s empty row
 makes the checker reject an exception nobody catches; and an operator
 on operands of the wrong types where the checker knows both types
-(check_operands, in binop and compare). They stay
-because the unit tests
-build modules by hand and run them without the checker. The cases the
-checker does not
-see remain runtime-only: a read of a name whose assignment comes later
-in the source, as in a loop body, or sits in one branch of an if, and a
-read of a name an except clause deleted where the read comes earlier in
-the source (require_bound follows source order), an operator applied to operands of
-the wrong types where one operand's type is unknown (the checker infers
-types only as far as argument checks need), integer division or
-modulo by zero, and a recursion that outgrows the C stack, which
-RPython's stack check stops and run_body_callback or the entry point
-reports as "maximum recursion depth exceeded".
+(check_operands, in binop and compare); and the list errors on a
+value the checker typed: a subscript, an append, or a for on a value
+that is not a list (list_value), a non-integer index (list_index), a
+method other than append (list_method), and a built-in with the
+wrong argument (builtin), plus range() outside a for (call). They
+stay because the unit tests build modules by hand and run them
+without the checker. The cases the checker does not see remain
+runtime-only: a read of a name whose assignment comes later in the
+source, as in a loop body, or sits in one branch of an if, and a
+read of a name an except clause deleted where the read comes earlier
+in the source (require_bound follows source order), an operator
+applied to operands of the wrong types where one operand's type is
+unknown (the checker infers types only as far as argument checks
+need), integer division or modulo by zero, a list index out of
+range, and a recursion that outgrows the C stack, which RPython's
+stack check stops and run_body_callback or the entry point reports
+as "maximum recursion depth exceeded".
 """
 import os
 try:
@@ -123,7 +139,7 @@ from effectpython import ast_nodes as ast
 from effectpython.errors import (EffectError, EffectPythonRuntimeError,
                                  OneShotContinuationError, RaisedException,
                                  Unwind)
-from effectpython.model import (W_Root, W_Int, W_Str, W_Bool,
+from effectpython.model import (W_Root, W_Int, W_Str, W_Bool, W_List,
                                 W_EffectPayload, W_EffBinding,
                                 W_Exception, W_HandlerInstance, w_None,
                                 wrap_bool)
@@ -135,13 +151,20 @@ class Environment(object):
         self.vars = {}
         self.parent = parent
 
-    def lookup(self, name):
+    def find(self, name):
         env = self
         while env is not None:
             if name in env.vars:
                 return env.vars[name]
             env = env.parent
-        raise EffectPythonRuntimeError("name '%s' is not defined" % name)
+        return None
+
+    def lookup(self, name):
+        w_value = self.find(name)
+        if w_value is None:
+            raise EffectPythonRuntimeError(
+                "name '%s' is not defined" % name)
+        return w_value
 
     def define(self, name, w_value):
         self.vars[name] = w_value
@@ -171,21 +194,23 @@ class HandlerClass(object):
         self.name = node.name
         self.effect = node.effect
         self.field_names = []
-        self.defaults_w = []  # W_Root or None, parallel to field_names
+        self.defaults = []  # the default Expr or None, parallel to it
         for field in node.fields:
             self.field_names.append(field.name)
-            self.defaults_w.append(literal_value(field.default))
+            self.defaults.append(field.default)
         self.methods = {}
         for method in node.methods:
             self.methods[method.name] = method
 
     def construct(self, args_w):
+        """Each default is evaluated afresh per construction, so two
+        instances with a list field hold two lists (plan 1.9)."""
         fields_w = []
         for i in range(len(self.field_names)):
             if i < len(args_w):
                 fields_w.append(args_w[i])
-            elif self.defaults_w[i] is not None:
-                fields_w.append(self.defaults_w[i])
+            elif self.defaults[i] is not None:
+                fields_w.append(default_value(self.defaults[i]))
             else:
                 raise EffectPythonRuntimeError(
                     "%s() needs a value for field '%s'" %
@@ -196,12 +221,15 @@ class HandlerClass(object):
                 (self.name, len(self.field_names), len(args_w)))
         return W_HandlerInstance(self.name, self.field_names, fields_w)
 
-def literal_value(expr):
+def default_value(expr):
+    """The value of a field default: an int or str literal, or the []
+    the parser allows for a list field."""
     if isinstance(expr, ast.IntLiteral):
         return W_Int(expr.value)
     elif isinstance(expr, ast.StrLiteral):
         return W_Str(expr.value)
-    return None
+    assert isinstance(expr, ast.ListLiteral)
+    return W_List([])
 
 class HandlerFrame(object):
     """One active handle statement: what it handles, where its clauses
@@ -339,6 +367,15 @@ class Interpreter(object):
             w_target = self.instance(env, stmt.target)
             i = self.field_index(w_target, stmt.attr)
             w_target.fields_w[i] = self.eval_expr(stmt.value, env)
+        elif isinstance(stmt, ast.IndexAssign):
+            w_value = self.eval_expr(stmt.value, env)
+            w_list = list_value(self.eval_expr(stmt.target, env))
+            i = list_index(w_list, self.eval_expr(stmt.index, env))
+            w_list.items_w[i] = w_value
+        elif isinstance(stmt, ast.For):
+            self.exec_for(stmt, env)
+        elif isinstance(stmt, ast.ForRange):
+            self.exec_for_range(stmt, env)
         elif isinstance(stmt, ast.ExprStmt):
             self.eval_expr(stmt.expr, env)
         elif isinstance(stmt, ast.Handle):
@@ -352,6 +389,33 @@ class Interpreter(object):
             pass
         else:
             raise EffectPythonRuntimeError("unknown statement node")
+
+    def exec_for(self, stmt, env):
+        """Walk the list by index against its live length, as Python
+        does, so an append in the suite lengthens the walk; the name
+        keeps the last element afterwards (plan 1.9). The index is a
+        local of this call, so a perform in the suite suspends the
+        loop where it is."""
+        w_list = list_value(self.eval_expr(stmt.iterable, env))
+        i = 0
+        while i < len(w_list.items_w):
+            env.define(stmt.name, w_list.items_w[i])
+            self.exec_block(stmt.body, env)
+            i += 1
+
+    def exec_for_range(self, stmt, env):
+        """Count from start, or 0, up to stop without building a list."""
+        args_w = []
+        for arg in stmt.args:
+            args_w.append(self.eval_expr(arg, env))
+        stop = int_value(args_w[len(args_w) - 1], "range()")
+        i = 0
+        if len(args_w) == 2:
+            i = int_value(args_w[0], "range()")
+        while i < stop:
+            env.define(stmt.name, W_Int(i))
+            self.exec_block(stmt.body, env)
+            i += 1
 
     def exec_try(self, stmt, env):
         """Run the suite and the clause that catches what it raises,
@@ -667,7 +731,25 @@ class Interpreter(object):
             args_w = []
             for arg in expr.args:
                 args_w.append(self.eval_expr(arg, env))
+            w_target = env.find(expr.effect)
+            if w_target is not None:
+                return list_method(w_target, expr.op, args_w)
             return W_EffectPayload(expr.effect, expr.op, args_w)
+        elif isinstance(expr, ast.MethodCall):
+            w_target = self.eval_expr(expr.target, env)
+            args_w = []
+            for arg in expr.args:
+                args_w.append(self.eval_expr(arg, env))
+            return list_method(w_target, expr.method, args_w)
+        elif isinstance(expr, ast.ListLiteral):
+            items_w = []
+            for element in expr.elements:
+                items_w.append(self.eval_expr(element, env))
+            return W_List(items_w)
+        elif isinstance(expr, ast.Index):
+            w_list = list_value(self.eval_expr(expr.target, env))
+            return w_list.items_w[
+                list_index(w_list, self.eval_expr(expr.index, env))]
         elif isinstance(expr, ast.AttrRead):
             w_target = env.lookup(expr.target)
             if isinstance(w_target, W_HandlerInstance):
@@ -691,6 +773,11 @@ class Interpreter(object):
                 parts.append(w.str())
             self.output.write_line(" ".join(parts))
             return w_None
+        if name == "len" or name == "str":
+            return builtin(name, args_w)
+        if name == "range":
+            raise EffectPythonRuntimeError(
+                "range() is allowed only as the iterable of a for statement")
         if name in self.functions:
             return self.call_function(self.functions[name], args_w)
         if name in self.handlers:
@@ -761,9 +848,91 @@ class Interpreter(object):
                 return wrap_bool(w_left.val == w_right.val)
             elif op == "!=":
                 return wrap_bool(w_left.val != w_right.val)
+        elif isinstance(w_left, W_List) and isinstance(w_right, W_List):
+            if op == "==":
+                return wrap_bool(lists_equal(w_left, w_right))
+            elif op == "!=":
+                return wrap_bool(not lists_equal(w_left, w_right))
         raise EffectPythonRuntimeError(
             "unsupported operand types for %s: %s and %s" %
             (op, type_name(w_left), type_name(w_right)))
+
+# --- lists (plan 1.9) --------------------------------------------------------
+
+def list_value(w_value):
+    if isinstance(w_value, W_List):
+        return w_value
+    raise EffectPythonRuntimeError(
+        "%s is not a list" % type_name(w_value))
+
+def int_value(w_value, what):
+    if isinstance(w_value, W_Int):
+        return w_value.val
+    raise EffectPythonRuntimeError(
+        "%s needs an int, not %s" % (what, type_name(w_value)))
+
+def list_index(w_list, w_index):
+    """The position a subscript names, with a negative one counting
+    from the end as Python's does."""
+    i = int_value(w_index, "a list index")
+    count = len(w_list.items_w)
+    if i < 0:
+        i += count
+    if i < 0 or i >= count:
+        raise EffectPythonRuntimeError("list index out of range")
+    return i
+
+def list_method(w_target, method, args_w):
+    """xs.append(v), the one method a list has."""
+    w_list = list_value(w_target)
+    if method != "append":
+        raise EffectPythonRuntimeError(
+            "a list has no method '%s'" % method)
+    if len(args_w) != 1:
+        raise EffectPythonRuntimeError(
+            "append() takes 1 arguments (%d given)" % len(args_w))
+    w_list.items_w.append(args_w[0])
+    return w_None
+
+def builtin(name, args_w):
+    """len(xs) or len(s), and str(x) for a scalar: what print would
+    show for it."""
+    if len(args_w) != 1:
+        raise EffectPythonRuntimeError(
+            "%s() takes 1 arguments (%d given)" % (name, len(args_w)))
+    w_arg = args_w[0]
+    if name == "len":
+        if isinstance(w_arg, W_List):
+            return W_Int(len(w_arg.items_w))
+        if isinstance(w_arg, W_Str):
+            return W_Int(len(w_arg.val))
+        raise EffectPythonRuntimeError(
+            "len() needs a list or str, not %s" % type_name(w_arg))
+    if (isinstance(w_arg, W_Int) or isinstance(w_arg, W_Str)
+            or isinstance(w_arg, W_Bool)):
+        return W_Str(w_arg.str())
+    raise EffectPythonRuntimeError(
+        "str() needs an int, str, or bool, not %s" % type_name(w_arg))
+
+def lists_equal(w_left, w_right):
+    """Element by element; elements of two types are unequal, as 1 and
+    "1" are, so a list of unknown element type compares without an
+    operator error."""
+    if len(w_left.items_w) != len(w_right.items_w):
+        return False
+    for i in range(len(w_left.items_w)):
+        if not scalars_equal(w_left.items_w[i], w_right.items_w[i]):
+            return False
+    return True
+
+def scalars_equal(w_a, w_b):
+    if isinstance(w_a, W_Int) and isinstance(w_b, W_Int):
+        return w_a.val == w_b.val
+    if isinstance(w_a, W_Str) and isinstance(w_b, W_Str):
+        return w_a.val == w_b.val
+    if isinstance(w_a, W_Bool) and isinstance(w_b, W_Bool):
+        return w_a.val == w_b.val
+    return False
 
 def tail_switch(clause):
     """The Resume or Throw node when the clause's last statement is
@@ -813,4 +982,6 @@ def type_name(w):
         return "bool"
     elif isinstance(w, W_Exception):
         return w.class_name
+    elif isinstance(w, W_List):
+        return "list"
     return "object"

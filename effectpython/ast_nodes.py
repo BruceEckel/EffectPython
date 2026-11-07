@@ -88,7 +88,7 @@ class FieldDef(Node):
         Node.__init__(self, lineno)
         self.name = name        # str
         self.type = type        # str
-        self.default = default  # IntLiteral, StrLiteral, or None
+        self.default = default  # IntLiteral, StrLiteral, [], or None
 
 class ExceptionDef(Node):
     """class Name(Exception): ...   (plan 1.6). The body is ... or pass;

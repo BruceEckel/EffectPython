@@ -70,6 +70,26 @@ class W_Str(W_Root):
     def is_true(self):
         return len(self.val) > 0
 
+class W_List(W_Root):
+    """A list (plan 1.9): mutable and shared by reference, as Python's
+    is, so two names or a parameter and an argument may hold one list.
+    str() gives Python's form, which quotes a str element with single
+    quotes; the dialect's strings have no escapes, so that is the
+    whole rule."""
+    _attrs_ = ['items_w']
+
+    def __init__(self, items_w):
+        self.items_w = items_w  # list of W_Root
+
+    def str(self):
+        parts = []
+        for w in self.items_w:
+            parts.append(w.repr())
+        return "[" + ", ".join(parts) + "]"
+
+    def is_true(self):
+        return len(self.items_w) > 0
+
 class W_EffectPayload(W_Root):
     """What evaluating FileIO.read(path) produces: the effect, the
     operation, and the evaluated arguments, ready for perform() (plan 1.3).
