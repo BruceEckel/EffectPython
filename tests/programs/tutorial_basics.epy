@@ -1,0 +1,22 @@
+# Tutorial: the dialect without effects. Functions take typed
+# parameters and declare a return type; a function with no / [...]
+# has an empty effect row. The values are int, str, and bool.
+
+def repeat(word: str, times: int) -> str:
+    text = word
+    while times > 1:
+        text = text + " " + word
+        times = times - 1
+    return text
+
+def parity(n: int) -> str:
+    if n % 2 == 0:
+        return "even"
+    else:
+        return "odd"
+
+def main() -> int / []:
+    print(repeat("hello", 3))
+    print(parity(7), parity(10))
+    print(3 * 4 + 10 // 3, 7 == 7, 2 < 1)
+    return 0

@@ -203,6 +203,8 @@ by `tests/test_runtime.py` against the `.expected` file beside each program.
 
 ## Reading further
 
+`TUTORIAL.md` walks the dialect from a program without effects to `eff.throw()`,
+with a tested program for each step.
 `effectpython_implementation_plan.md` holds the language design, the checker's three passes,
 how `rstacklet` is used, and the milestone log.
 The source lives in `effectpython/`: `lexer.py` and `parser.py` (rply), `checker.py`,

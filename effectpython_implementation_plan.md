@@ -786,6 +786,7 @@ EffectPython/
 ├── .gitignore
 ├── LICENSE
 ├── README.md
+├── TUTORIAL.md             # Walks the dialect program by program; every listing is a file in tests/programs/
 ├── effectpython_implementation_plan.md
 ├── effectpython/
 │   ├── __init__.py
@@ -806,6 +807,7 @@ EffectPython/
     ├── test_parser.py      # Lexer and parser, Milestone 2 and each later milestone's forms
     ├── test_checker.py     # Checker, Milestone 2 and each later milestone's rules
     ├── test_runtime.py     # Milestones 3 and 4 onward: translate once, run every program in programs/
+    ├── test_tutorial.py    # Each listing and output block in TUTORIAL.md matches its file in programs/
     └── programs/           # <name>.epy with its <name>.expected beside it
 ```
 
