@@ -88,10 +88,10 @@ on operands of the wrong types where the checker knows both types
 because the unit tests
 build modules by hand and run them without the checker. The cases the
 checker does not
-see remain runtime-only: a variable that was never assigned (the checker
-types an unbound name as UNKNOWN), a read of a name an except clause
-deleted where the read comes earlier in the source, as in a loop body
-(require_bound follows source order), an operator applied to operands of
+see remain runtime-only: a read of a name whose assignment comes later
+in the source, as in a loop body, or sits in one branch of an if, and a
+read of a name an except clause deleted where the read comes earlier in
+the source (require_bound follows source order), an operator applied to operands of
 the wrong types where one operand's type is unknown (the checker infers
 types only as far as argument checks need), and integer division or
 modulo by zero.

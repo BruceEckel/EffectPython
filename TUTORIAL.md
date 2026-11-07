@@ -695,11 +695,11 @@ Everything in this list is rejected before the program runs, with a line number:
 - a `perform()`, `resume()`, `throw()`, call, or constructor with the wrong number or types of arguments, as far as the checker can type them;
 - `eff.<name>` that is not a parameter of the operation;
 - a `raise` or `eff.throw()` of a value that is not a declared exception class, and a throw of a class the operation does not declare;
-- a read of an `except` clause's `as` name after the clause, which Python 3 leaves unbound;
+- a read of a name nothing has bound earlier in the function, and a read of an `except` clause's `as` name after the clause, which Python 3 leaves unbound;
 - `Exception` in a row, since a row names the classes that can reach a caller.
 
 What remains for runtime is what the checker does not settle:
-integer division or modulo by zero, an operator whose operand types the checker could not both see, a name assigned on no path, and resuming twice.
+integer division or modulo by zero, an operator whose operand types the checker could not both see, a name assigned in one branch of an `if` and read after it, and resuming twice.
 Those stop the program with an `error:` line and exit code 1, and no `try` catches them:
 
 ```python tests/programs/body_error.epy

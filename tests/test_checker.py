@@ -183,12 +183,13 @@ MAIN = 'def main() -> int / []:\n    return 0\n'
      '    except FileIO.write as e:\n        pass\n    return 0\n',
      InvalidProgram,
      'line 13: e.resume() for FileIO.read must pass str, not int'),
-    ('def f() -> int:\n    return x.resume(1)\n' + MAIN,
+    ('def f() -> int:\n    x = 1\n    return x.resume(1)\n' + MAIN,
      InvalidProgram,
-     "line 9: 'x' is not an except binding or a handler instance"),
+     "line 10: 'x' is not an except binding or a handler instance"),
     ('def f() -> int:\n    return x.path\n' + MAIN,
-     InvalidProgram,
-     "line 9: 'x' is not an except binding or a handler instance"),
+     InvalidProgram, "line 9: name 'x' is not defined"),
+    ('def f() -> int:\n    return x + 1\n' + MAIN,
+     InvalidProgram, "line 9: name 'x' is not defined"),
     ('def f() -> int:\n    return 0\ndef f() -> int:\n    return 1\n'
      + MAIN, InvalidProgram, "line 10: function 'f' is defined twice"),
     ('class FileIO(Effect):\n    def read(path: str) -> str: ...\n' + MAIN,
@@ -217,11 +218,40 @@ def test_rejects_operands_of_the_wrong_types(expr, msg):
 
 @pytest.mark.parametrize('expr', [
     '1 + 2 * 3 // 4 % 5', '1 < 2', '7 == 7', '"a" + "b"', '"a" != "b"',
-    'True == False', 'unknown + 1', '"a" + unknown',
+    'True == False',
 ])
 def test_accepts_operands_of_matching_types(expr):
     check_source('def f() -> int:\n    x = %s\n    return 0\n'
                  % expr + MAIN)
+
+def test_accepts_a_name_bound_each_way():
+    check_exceptions(
+        'class Fake(Handler[FileIO]):\n    n: int = 0\n'
+        '    def read(self, path: str) -> str:\n'
+        '        return path\n'
+        '    def write(self, path: str, content: str) -> int:\n'
+        '        return self.n\n'
+        'def f(a: int) -> int / []:\n    b = a + 1\n'
+        '    fake = Fake()\n    with handle(fake):\n        pass\n'
+        '    try:\n        with handle(DBQuery):\n            pass\n'
+        '    except DBQuery.execute as eff:\n        print(eff.sql)\n'
+        '    try:\n        raise NotFound("x")\n'
+        '    except NotFound as e:\n        print(e)\n'
+        '    return b + fake.n\n' + MAIN)
+
+def test_rejects_a_read_before_the_assignment_in_source_order():
+    with pytest.raises(InvalidProgram) as info:
+        check_source('def f() -> int:\n    i = 0\n    while i < 2:\n'
+                     '        print(x)\n        x = i\n'
+                     '        i = i + 1\n    return 0\n' + MAIN)
+    assert info.value.msg == "line 11: name 'x' is not defined"
+
+@pytest.mark.parametrize('expr', ['eff + 1', '"a" + eff', 'eff < eff'])
+def test_accepts_an_operand_of_unknown_type(expr):
+    check_source('def main() -> int / []:\n    try:\n'
+                 '        with handle(DBQuery):\n            pass\n'
+                 '    except DBQuery.execute as eff:\n        x = %s\n'
+                 '    return 0\n' % expr)
 
 # --- Handler classes (Milestone 5) -------------------------------------------
 
@@ -391,8 +421,10 @@ FAKE = ('class Fake(Handler[FileIO]):\n'
      '        return 0\n' + MAIN, InvalidProgram,
      "line 11: field 'a' of handler class 'Fake' is int; cannot assign "
      "str"),
+    ('def f() -> int:\n    x = 1\n    x.a = 1\n    return 0\n' + MAIN,
+     InvalidProgram, "line 10: 'x' is not a handler instance"),
     ('def f() -> int:\n    x.a = 1\n    return 0\n' + MAIN,
-     InvalidProgram, "line 9: 'x' is not a handler instance"),
+     InvalidProgram, "line 9: name 'x' is not defined"),
     ('def main() -> int / []:\n    with handle(FileIO):\n'
      '        pass\n    return 0\n', InvalidProgram,
      'line 9: with handle(FileIO) outside try needs except clauses for '
@@ -411,9 +443,12 @@ FAKE = ('class Fake(Handler[FileIO]):\n'
      '    except FileIO.write as e:\n        pass\n    return 0\n',
      InvalidProgram,
      'line 14: handle() names FileIO and a handler class for it'),
+    ('def main() -> int / []:\n    nope = 1\n    with handle(nope):\n'
+     '        pass\n    return 0\n', InvalidProgram,
+     "line 10: 'nope' is not an effect or a handler instance"),
     ('def main() -> int / []:\n    with handle(nope):\n'
      '        pass\n    return 0\n', InvalidProgram,
-     "line 9: 'nope' is not an effect or a handler instance"),
+     "line 9: name 'nope' is not defined"),
     ('def f() -> int:\n    return 0\n'
      'def main() -> int / []:\n    with handle(f()):\n'
      '        pass\n    return 0\n', InvalidProgram,
@@ -579,7 +614,7 @@ def test_unhandled_exceptions(body, msg):
      InvalidProgram,
      'line 22: raise needs a declared exception class, not Exception'),
     ('def f() -> int:\n    raise x\n' + MAIN, InvalidProgram,
-     'line 19: raise needs an exception, not a value of unknown type'),
+     "line 19: name 'x' is not defined"),
     ('def f() -> int / [NotFound]:\n    raise NotFound(1)\n' + MAIN,
      InvalidProgram,
      'line 19: argument 1 of NotFound() must be str, not int'),
@@ -810,8 +845,9 @@ def test_rejected_operation_rows(row, msg):
      '    return 0\n',
      'line 20: Plain.get does not declare NotFound, so eff.throw() '
      'cannot deliver it'),
-    (CATCHING + '        x.throw(NotFound())\n    return 0\n',
-     "line 23: 'x' is not an except binding or a handler instance"),
+    (CATCHING + '        x = 1\n        x.throw(NotFound())\n'
+     '    return 0\n',
+     "line 24: 'x' is not an except binding or a handler instance"),
     (CATCHING + '        try:\n            raise NotFound("a")\n'
      '        except Exception as e:\n            eff.throw(e)\n'
      '    return 0\n',

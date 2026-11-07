@@ -42,9 +42,10 @@ types must have a pair the interpreter supports (OPERATORS), so the
 runtime's "unsupported operand types" error is reached only through
 an operand of unknown type.
 
-The name an except clause binds is deleted when the clause ends, so
-the checker rejects a read of it after the clause until something
-binds it again (require_bound). The walk follows source order, as
+A read of a name that nothing has bound earlier in the function's
+source is rejected, and so is a read of the name an except clause
+bound, after the clause, until something binds it again, since the
+clause deletes its name when it ends (require_bound). The walk follows source order, as
 the typing does, and does not ask whether the clause would run. A
 clause that ends in a return is the exception: the code after the
 try cannot follow it, so the name keeps the type and the state it
@@ -678,16 +679,23 @@ class Checker(object):
             del scope.unbound[name]
 
     def require_bound(self, scope, name, lineno):
-        """Python 3 deletes the name of an except clause when the clause
-        ends, and exec_try does the same. A read after the clause in
-        source order is an error until an assignment or another clause
-        binds the name again, whether or not the clause would run.
-        check_named_clause leaves out a clause that ends in a
-        return."""
+        """A read needs a parameter, an assignment, or a clause that
+        bound the name earlier in the function's source: every one of
+        those puts the name in scope.types. Python 3 deletes the name
+        of an except clause when the clause ends, and exec_try does the
+        same, so a read after the clause is an error too, until
+        something binds the name again, whether or not the clause would
+        run. check_named_clause leaves out a clause that ends in a
+        return. The walk is in source order, so a read that an
+        assignment later in a loop body would satisfy at runtime is
+        rejected."""
         if name in scope.unbound:
             raise InvalidProgram(
                 lineno, "name '%s' is unbound after the except clause "
                 "that bound it" % name)
+        if name not in scope.types:
+            raise InvalidProgram(
+                lineno, "name '%s' is not defined" % name)
 
     def require_binding(self, scope, name, lineno):
         self.require_bound(scope, name, lineno)
