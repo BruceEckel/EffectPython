@@ -1,0 +1,2 @@
+exit 1
+error: Boom() takes an optional str message

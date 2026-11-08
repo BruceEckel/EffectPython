@@ -1,0 +1,11 @@
+# Runtime-only: an if leaves i with two types, so the checker cannot
+# hold the index to an int; list_index does.
+
+def main() -> int:
+    xs = [1, 2]
+    if 1 == 1:
+        i = "a"
+    else:
+        i = 0
+    print(xs[i])
+    return 0

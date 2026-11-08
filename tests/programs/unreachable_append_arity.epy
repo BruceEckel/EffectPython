@@ -1,0 +1,7 @@
+# The runtime's "append() takes 1 arguments" (list_method) is
+# unreachable: check_append checks the count through check_args.
+
+def main() -> int:
+    xs = [1]
+    xs.append(2, 3)
+    return 0

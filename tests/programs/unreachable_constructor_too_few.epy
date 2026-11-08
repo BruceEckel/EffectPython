@@ -1,0 +1,19 @@
+# The runtime's "needs a value for field" (HandlerClass.construct) is
+# unreachable: check_construction rejects a call short of a field
+# without a default.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Prefixed(Handler[Log]):
+    prefix: str
+    def note(self, text: str) -> int:
+        print(self.prefix + text)
+        return 0
+
+def main() -> int:
+    with handle(Prefixed()):
+        perform(Log.note("hi"))
+    return 0

@@ -1,0 +1,22 @@
+# Runtime-only: the clause assigns x a str before it resumes the body
+# and an int after, so the body runs on with the str. The checker
+# widens the body's entry with the types at every boundary of the
+# clause, so x is unknown on its second pass and the operator passes;
+# the runtime finds the str.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def get() -> int: ...
+
+def main() -> int:
+    x = 1
+    try:
+        with handle(Ask):
+            perform(Ask.get())
+            print(x + 1)
+    except Ask.get as eff:
+        x = "s"
+        eff.resume(1)
+        x = 1
+    return 0

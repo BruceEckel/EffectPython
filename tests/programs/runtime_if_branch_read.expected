@@ -1,0 +1,2 @@
+exit 1
+error: name 'y' is not defined

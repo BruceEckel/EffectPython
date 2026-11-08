@@ -1,0 +1,16 @@
+# Runtime-only: an if leaves msg with two types, so the checker cannot
+# hold the exception constructor to a str; construct_exception does.
+
+class Boom(Exception):
+    pass
+
+def main() -> int:
+    if 1 == 1:
+        msg = 5
+    else:
+        msg = "five"
+    try:
+        raise Boom(msg)
+    except Boom:
+        print("caught")
+    return 0

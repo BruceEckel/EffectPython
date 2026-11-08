@@ -83,17 +83,24 @@ unknown, while a [] that one path refined to list[T] keeps the
 refinement (merged). A name one path bound still counts as bound,
 since the source-order rule reads bindings, not paths. The branches
 of an if are two such paths (check_if). A loop body is checked from
-the types before the loop, what it leaves is merged with them, and
-it is checked again from the merged types until nothing changes
-(check_loop_body), so the body is held to the types a name can have
-on any iteration and the code after the loop sees a name the body
-reassigns as unknown. A try's clauses start from the types before
-its suite merged with the types after it, and the code after the
-try sees the suite's end merged with the end of every clause that
-does not return (check_try). A handle statement's clauses start the
-same way, and since the body runs on from what a clause assigned,
-the body and clauses are checked again from the widened entry until
-it is stable (check_handle_suites).
+the types before the loop, what it leaves at its end and at each
+break or continue is merged with them, and it is checked again from
+the merged types until nothing changes (check_loop_body), so the
+code after the loop sees a name the body gives another type as
+unknown, and a type the body can carry into a later iteration is
+unknown on the next pass over the body. A try's clauses start from
+the types at every statement boundary of its suite, the first
+included, since the exception may arrive after any statement
+(check_suite), and the code after the try sees the suite's end
+merged with the end of every clause that does not return
+(check_try). A handle statement's clauses start from every boundary
+of its body, where a perform() may suspend it, and since the body
+runs on from any boundary of a clause where resume() may stand, the
+body and clauses are checked again from the entry widened with those
+until it is stable (check_handle, check_handle_suites). The first
+pass over a loop or a handled body uses the types before it, so a
+statement there that is right only through a later reassignment,
+or through a clause's, is rejected on that pass.
 
 Lists (plan 1.9) are types like the others: "list[int]", "list[str]",
 and "list[bool]" are type names. "list" is the type of a literal
@@ -172,6 +179,18 @@ def merge_types(a, b):
         if name not in a:
             result[name] = UNKNOWN
     return result
+
+def absorb(acc, types):
+    """Merge the types into the accumulator in place: the types at one
+    more point a path may leave from."""
+    for name in types:
+        if name in acc:
+            acc[name] = merged(acc[name], types[name])
+        else:
+            acc[name] = UNKNOWN
+    for name in acc:
+        if name not in types:
+            acc[name] = UNKNOWN
 
 def same_types(a, b):
     if len(a) != len(b):
@@ -288,6 +307,8 @@ class Checker(object):
         self.handlers = {}    # handler class name -> HandlerInfo
         self.functions = {}   # function name -> FunctionDef
         self.loop_depth = 0   # loops around the statement being checked
+        self.boundaries = []  # types at each statement boundary, per suite
+        self.loop_exits = []  # types at each break or continue, per loop
         self.fn = None        # the FunctionDef being checked
         self.what = ""        # "function" or "method"
 
@@ -472,6 +493,8 @@ class Checker(object):
             scope.types[fn.params[i]] = fn.param_types[i]
         effects = EffectSet()
         self.loop_depth = 0
+        self.boundaries = []
+        self.loop_exits = []
         self.fn = fn
         self.what = what
         self.check_block(fn.body, scope, effects)
@@ -503,6 +526,15 @@ class Checker(object):
             self.check_stmt(stmt, scope, effects)
 
     def check_stmt(self, stmt, scope, effects):
+        """Check one statement, then record the types it leaves in every
+        accumulator around it: a try suite's exception may arrive, and
+        a clause's resume() may return to the body, after any
+        statement."""
+        self.dispatch_stmt(stmt, scope, effects)
+        for acc in self.boundaries:
+            absorb(acc, scope.types)
+
+    def dispatch_stmt(self, stmt, scope, effects):
         if isinstance(stmt, ast.Return):
             self.check_return(stmt, scope, effects)
         elif isinstance(stmt, ast.If):
@@ -512,8 +544,10 @@ class Checker(object):
             self.check_loop_body(stmt.test, stmt.body, scope, effects)
         elif isinstance(stmt, ast.Break):
             self.require_loop(stmt, "'break' outside loop")
+            absorb(self.loop_exits[-1], scope.types)
         elif isinstance(stmt, ast.Continue):
             self.require_loop(stmt, "'continue' not properly in loop")
+            absorb(self.loop_exits[-1], scope.types)
         elif isinstance(stmt, ast.For):
             iterable = self.type_of(stmt.iterable, scope, effects)
             if iterable == UNKNOWN or iterable == LIST:
@@ -614,15 +648,18 @@ class Checker(object):
         (plan 1.10); a method is its own function."""
         self.loop_depth += 1
         before = scope.types.copy()
+        exits = before.copy()
+        self.loop_exits.append(exits)
         while True:
             if test is not None:
                 self.type_of(test, scope, effects)
             self.check_block(body, scope, effects)
-            after = merge_types(before, scope.types)
+            after = merge_types(merge_types(before, scope.types), exits)
             if same_types(after, before):
                 break
             before = after
             scope.types = after.copy()
+        self.loop_exits.pop()
         scope.types = after
         self.loop_depth -= 1
 
@@ -732,10 +769,8 @@ class Checker(object):
         any clause that does not end in a return, so it sees those
         paths merged."""
         body_effects = EffectSet()
-        before = scope.types.copy()
-        self.check_block(stmt.body, scope, body_effects)
+        entry = self.check_suite(stmt.body, scope, body_effects)
         after = scope.types
-        entry = merge_types(before, after)
         caught = {}
         for clause in stmt.clauses:
             if (clause.name != EXCEPTION
@@ -784,6 +819,28 @@ class Checker(object):
             scope.bindings[name] = old_binding
         if was_unbound or not returns:
             scope.unbound[name] = True
+
+    def check_suite(self, stmts, scope, effects, binding=None, clause=None):
+        """Check a suite and give the types at every statement boundary
+        in it, the first included: where a try suite's exception may
+        arrive, where a handle body's perform() may suspend it, or
+        where a clause's resume() may return to the body. With a
+        binding the suite is an effect clause's, checked through
+        check_effect_clause, and its name is left as that leaves it."""
+        acc = scope.types.copy()
+        self.boundaries.append(acc)
+        if binding is None:
+            self.check_block(stmts, scope, effects)
+        else:
+            self.check_effect_clause(clause, binding, scope, effects)
+        self.boundaries.pop()
+        if clause is not None:
+            name = clause.binding
+            if name in scope.types:
+                acc[name] = scope.types[name]
+            elif name in acc:
+                del acc[name]
+        return acc
 
     def check_effect_clause(self, clause, binding, scope, effects):
         """Check the clause with its name bound to the operation, then
@@ -873,9 +930,8 @@ class Checker(object):
         The statement ends after the body, or after a clause that does
         not resume or return, so those paths are merged."""
         scope.types = entry.copy()
-        self.check_block(stmt.body, scope, body_effects)
+        clause_entry = self.check_suite(stmt.body, scope, body_effects)
         after = scope.types
-        clause_entry = merge_types(entry, after)
         covered = {}
         for clause in stmt.clauses:
             if clause.effect in fulfilled:
@@ -895,10 +951,11 @@ class Checker(object):
                     clause.lineno, "duplicate clause for %s" % key)
             covered[key] = True
             scope.types = clause_entry.copy()
-            self.check_effect_clause(clause, Binding(clause.effect, op),
-                                     scope, effects)
+            resumed = self.check_suite(clause.body, scope, effects,
+                                       Binding(clause.effect, op), clause)
             if not ends_in_return(clause.body):
                 after = merge_types(after, scope.types)
+            after = merge_types(after, resumed)
         missing = []
         for name in stmt.effects:
             for op in self.effects[name].keys():

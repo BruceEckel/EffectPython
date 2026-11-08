@@ -1,0 +1,6 @@
+# The runtime's "unsupported operand types" (compare) is unreachable
+# where the checker knows both types: check_operands rejects it.
+
+def main() -> int:
+    print(1 < "a")
+    return 0

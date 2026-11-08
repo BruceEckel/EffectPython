@@ -1,0 +1,2 @@
+exit 1
+error: range() needs an int, not str

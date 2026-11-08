@@ -1,0 +1,2 @@
+exit 1
+error: line 15: eff.throw() needs an exception, not int

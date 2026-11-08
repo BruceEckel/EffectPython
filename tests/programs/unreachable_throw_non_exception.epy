@@ -1,0 +1,16 @@
+# The runtime's "throw() needs an exception" (require_exception_value)
+# is unreachable where the checker knows the type: require_exception
+# rejects it.
+
+from effectpython import Effect, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def main() -> int:
+    try:
+        with handle(Log):
+            perform(Log.note("hi"))
+    except Log.note as eff:
+        eff.throw(5)
+    return 0

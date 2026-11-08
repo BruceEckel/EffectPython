@@ -1,0 +1,2 @@
+exit 1
+error: line 5: range() is allowed only as the iterable of a for statement

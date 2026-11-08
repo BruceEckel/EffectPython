@@ -1,0 +1,9 @@
+# Runtime-only: the name bound in the loop body counts as bound after
+# the loop, with an unknown type, so the append passes the checker;
+# the OpCall branch of eval_expr finds the name unbound.
+
+def main() -> int:
+    for i in range(0):
+        xs = [i]
+    xs.append(1)
+    return 0

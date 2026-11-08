@@ -1356,3 +1356,46 @@ def test_an_empty_list_assigned_to_another_name_loses_its_type():
 def test_accepts_an_append_to_a_name_of_unknown_type():
     check_source('def main() -> int / []:\n    if True:\n'
                  '        xs = [1]\n    xs.append(2)\n    return 0\n')
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    x = 1\n    for i in range(3):\n'
+    '        x = "s"\n        if i == 0:\n            break\n'
+    '        x = 1\n    print(x + 1)\n    return 0\n',
+    'def main() -> int / []:\n    x = 1\n    for i in range(3):\n'
+    '        x = "s"\n        if i == 0:\n            break\n'
+    '        x = 1\n    print(x + "a")\n    return 0\n',
+    'def main() -> int / []:\n    x = 1\n    for i in range(3):\n'
+    '        x = "s"\n        if i == 0:\n            continue\n'
+    '        x = 1\n    print(x + "a")\n    return 0\n',
+    'class E(Exception): ...\ndef main() -> int / []:\n    x = 1\n'
+    '    try:\n        x = "s"\n        raise E()\n        x = 1\n'
+    '    except E:\n        print(x + "a")\n    return 0\n',
+    ASK + '    x = 1\n    try:\n        with handle(Ask):\n'
+    '            print(perform(Ask.ask(1)))\n            print(x + 1)\n'
+    '    except Ask.ask as eff:\n        x = "s"\n'
+    '        eff.resume(1)\n        x = 1\n    return 0\n',
+    ASK + '    x = 1\n    try:\n        with handle(Ask):\n'
+    '            x = "s"\n            print(perform(Ask.ask(1)))\n'
+    '            x = 1\n    except Ask.ask as eff:\n'
+    '        print(x + "a")\n        eff.resume(1)\n    return 0\n',
+    'def main() -> int / []:\n    x = 1\n    for i in range(3):\n'
+    '        x = "s"\n        print(x)\n        x = 2\n'
+    '    print(x + 1)\n    return 0\n',
+], ids=['break', 'break-str-read', 'continue', 'try-midsuite',
+        'clause-before-resume', 'body-before-perform', 'loop-restores'])
+def test_accepts_a_name_unknown_at_a_statement_boundary(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def main() -> int / []:\n    x = 1\n    for i in range(3):\n'
+     '        x = 2\n    print(x + "a")\n    return 0\n',
+     'line 12: unsupported operand types for +: int and str'),
+    ('def main() -> int / []:\n    x = 1\n    for i in range(3):\n'
+     '        x = "s"\n        print(x)\n        x = 2\n'
+     '    print(x + "a")\n    return 0\n',
+     'line 14: unsupported operand types for +: int and str'),
+], ids=['loop-same-type', 'loop-restores'])
+def test_rejects_a_name_whose_type_survives_every_boundary(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg

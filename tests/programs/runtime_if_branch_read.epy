@@ -1,0 +1,9 @@
+# Runtime-only: an assignment in one branch of an if counts as a
+# binding for the source-order rule, so the read passes the checker.
+# The branch did not run.
+
+def main() -> int:
+    if 1 == 2:
+        y = 1
+    print(y)
+    return 0

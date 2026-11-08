@@ -1,0 +1,18 @@
+# The runtime's "break or continue outside a loop" (call_function) is
+# unreachable: require_loop rejects the statement, and a handler
+# method does not inherit the loop of the function that installs it.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Quitter(Handler[Log]):
+    def note(self, text: str) -> int:
+        break
+
+def main() -> int:
+    for i in range(3):
+        with handle(Quitter()):
+            perform(Log.note("hi"))
+    return 0

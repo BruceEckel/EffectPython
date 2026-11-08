@@ -1,0 +1,14 @@
+# Runtime-only: a break leaves the loop with x a str, where the end of
+# the body would have left it an int. The checker records the types
+# at each break and merges them, so x is unknown after the loop and
+# the operator passes; the runtime finds the str.
+
+def main() -> int:
+    x = 1
+    for i in range(3):
+        x = "s"
+        if i == 0:
+            break
+        x = 1
+    print(x + 1)
+    return 0

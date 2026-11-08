@@ -1,0 +1,6 @@
+# The runtime's "range() is allowed only as the iterable of a for
+# statement" (call) is unreachable: check_call rejects the same call.
+
+def main() -> int:
+    n = range(3)
+    return 0
