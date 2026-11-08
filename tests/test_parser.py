@@ -2,7 +2,7 @@
 Milestone 1 subset; from Milestone 5, handler classes too; from
 Milestone 6, exceptions; from Milestone 7, operation rows and throw;
 from Milestone 8, finally; from Milestone 9, lists and the
-for loop.
+for loop; from Milestone 10, break and continue.
 
 Run with:  pypy2 -m pytest
 """
@@ -825,4 +825,25 @@ def test_unary_minus(source, expected):
 def test_list_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
+    assert info.value.msg == msg
+
+# --- break and continue (Milestone 10) ---------------------------------------
+
+@pytest.mark.parametrize('keyword, node', [
+    ('break', ast.Break),
+    ('continue', ast.Continue),
+], ids=['break', 'continue'])
+def test_loop_exit_statement(keyword, node):
+    source = 'def main() -> int:\n    while True:\n        %s\n' % keyword
+    loop = parse(source).functions[0].body[0]
+    statement = loop.body[0]
+    assert (type(statement), statement.lineno) == (node, 3)
+
+@pytest.mark.parametrize('keyword, msg', [
+    ('break', "line 2, column 11: unexpected '='"),
+    ('continue', "line 2, column 14: unexpected '='"),
+], ids=['break', 'continue'])
+def test_loop_exit_keyword_cannot_be_assigned(keyword, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    %s = 1\n' % keyword)
     assert info.value.msg == msg

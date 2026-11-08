@@ -156,6 +156,7 @@ class Checker(object):
         self.exceptions = {}  # exception class name -> ExceptionDef
         self.handlers = {}    # handler class name -> HandlerInfo
         self.functions = {}   # function name -> FunctionDef
+        self.loop_depth = 0   # loops around the statement being checked
 
     def check(self):
         self.collect_declarations()
@@ -337,6 +338,7 @@ class Checker(object):
         for i in range(len(fn.params)):
             scope.types[fn.params[i]] = fn.param_types[i]
         effects = EffectSet()
+        self.loop_depth = 0
         self.check_block(fn.body, scope, effects)
         performed = []
         raised = []
@@ -371,7 +373,11 @@ class Checker(object):
             self.check_block(stmt.orelse, scope, effects)
         elif isinstance(stmt, ast.While):
             self.type_of(stmt.test, scope, effects)
-            self.check_block(stmt.body, scope, effects)
+            self.check_loop_body(stmt.body, scope, effects)
+        elif isinstance(stmt, ast.Break):
+            self.require_loop(stmt, "'break' outside loop")
+        elif isinstance(stmt, ast.Continue):
+            self.require_loop(stmt, "'continue' not properly in loop")
         elif isinstance(stmt, ast.For):
             iterable = self.type_of(stmt.iterable, scope, effects)
             if iterable == UNKNOWN or iterable == LIST:
@@ -424,7 +430,20 @@ class Checker(object):
         rule: it stays bound after the loop."""
         scope.types[name] = element
         self.rebind(scope, name)
+        self.check_loop_body(body, scope, effects)
+
+    def check_loop_body(self, body, scope, effects):
+        """A break or continue may stand anywhere under a loop in the
+        same function, a handle body or a clause included, since the
+        runtime carries it out of a stacklet as it carries a return
+        (plan 1.10); a method is its own function."""
+        self.loop_depth += 1
         self.check_block(body, scope, effects)
+        self.loop_depth -= 1
+
+    def require_loop(self, stmt, msg):
+        if self.loop_depth == 0:
+            raise InvalidProgram(stmt.lineno, msg)
 
     def check_range(self, args, lineno, scope, effects):
         if len(args) < 1 or len(args) > 2:

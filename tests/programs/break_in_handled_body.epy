@@ -1,0 +1,38 @@
+# Milestone 10: a break crosses a handle statement. In the first loop
+# the break is in the handled body, so it leaves the body's stacklet
+# and ends the loop around the handle statement. In the second loop
+# the break is in a clause, which abandons the suspended body: the
+# finally inside the body runs, and then the loop ends.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def next() -> int: ...
+
+def main() -> int / []:
+    for i in range(5):
+        try:
+            with handle(Ask):
+                n = perform(Ask.next())
+                print("got", n)
+                if n == 2:
+                    break
+        except Ask.next as eff:
+            eff.resume(i)
+        print("after block", i)
+    print("first loop ended at", i)
+    for j in range(3):
+        try:
+            with handle(Ask):
+                try:
+                    perform(Ask.next())
+                    print("resumed", j)
+                finally:
+                    print("body finally", j)
+        except Ask.next as eff:
+            if j == 1:
+                break
+            eff.resume(j)
+        print("after block", j)
+    print("second loop ended at", j)
+    return 0

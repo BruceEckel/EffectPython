@@ -561,3 +561,76 @@ def test_list_runtime_errors(body, msg):
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_main_body(body + '    return 0\n')
     assert info.value.msg == msg
+
+# --- break and continue (Milestone 10), without a handle statement -----------
+
+@pytest.mark.parametrize('body, printed', [
+    ('    n = 0\n'
+     '    while True:\n'
+     '        n = n + 1\n'
+     '        if n == 3:\n'
+     '            break\n'
+     '    print(n)\n',
+     ["3"]),
+    ('    n = 0\n'
+     '    while n < 5:\n'
+     '        n = n + 1\n'
+     '        if n % 2 == 0:\n'
+     '            continue\n'
+     '        print(n)\n',
+     ["1", "3", "5"]),
+    ('    for x in [1, 2, 3, 4]:\n'
+     '        if x == 3:\n'
+     '            break\n'
+     '    print(x)\n',
+     ["3"]),
+    ('    for i in range(5):\n'
+     '        if i % 2 == 1:\n'
+     '            continue\n'
+     '        print(i)\n',
+     ["0", "2", "4"]),
+    ('    for i in range(2):\n'
+     '        for j in range(3):\n'
+     '            if j == 1:\n'
+     '                break\n'
+     '            print(i, j)\n',
+     ["0 0", "1 0"]),
+    ('    for i in range(3):\n'
+     '        try:\n'
+     '            if i == 1:\n'
+     '                break\n'
+     '            print("body", i)\n'
+     '        finally:\n'
+     '            print("finally", i)\n',
+     ["body 0", "finally 0", "finally 1"]),
+    ('    for i in range(3):\n'
+     '        try:\n'
+     '            if i == 1:\n'
+     '                continue\n'
+     '            print("body", i)\n'
+     '        finally:\n'
+     '            print("finally", i)\n',
+     ["body 0", "finally 0", "finally 1", "body 2", "finally 2"]),
+], ids=['while break', 'while continue', 'for break keeps the element',
+        'range continue', 'break leaves the innermost loop',
+        'break runs finally', 'continue runs finally'])
+def test_break_and_continue(body, printed):
+    exit_code, lines = run_main_body(body + '    return 0\n')
+    assert (exit_code, lines) == (0, printed)
+
+def test_break_in_a_callee_leaves_the_caller_loop_alone():
+    exit_code, lines = run_main_body(
+        '    for i in range(2):\n'
+        '        print(first_over(4))\n'
+        '    return 0\n',
+        'def first_over(limit: int) -> int:\n'
+        '    for x in [1, 5, 9]:\n'
+        '        if x > limit:\n'
+        '            break\n'
+        '    return x\n')
+    assert (exit_code, lines) == (0, ["5", "5"])
+
+def test_break_outside_a_loop_is_a_runtime_error():
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    break\n    return 0\n')
+    assert info.value.msg == 'break or continue outside a loop'

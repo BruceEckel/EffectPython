@@ -1,8 +1,9 @@
 """Milestone 2 acceptance: the static effect checker (plan 2.2, 4.2),
 from Milestone 5 the handler class rules (plan 1.5), from Milestone 6
 the exception rules (plan 1.6), from Milestone 7 the throw rules
-(plan 1.7), from Milestone 8 the finally rules (plan 1.8), and from
-Milestone 9 the list and for rules (plan 1.9).
+(plan 1.7), from Milestone 8 the finally rules (plan 1.8), from
+Milestone 9 the list and for rules (plan 1.9), and from Milestone 10
+the loop rule for break and continue (plan 1.10).
 
 Run with:  pypy2 -m pytest
 """
@@ -1107,3 +1108,47 @@ def test_a_function_cannot_take_a_built_in_name(name):
     with pytest.raises(InvalidProgram) as info:
         check_source('def %s(x: int) -> int:\n    return x\n' % name + MAIN)
     assert info.value.msg == "line 8: '%s' is a built-in" % name
+
+# --- break and continue (Milestone 10) ---------------------------------------
+
+ONE_OP = 'class E(Effect):\n    def op() -> int: ...\n'
+
+@pytest.mark.parametrize('body, msg', [
+    ('def main() -> int / []:\n    break\n    return 0\n',
+     "line 9: 'break' outside loop"),
+    ('def main() -> int / []:\n    if True:\n        continue\n'
+     '    return 0\n',
+     "line 10: 'continue' not properly in loop"),
+    (ONE_OP + 'class H(Handler[E]):\n    def op(self) -> int:\n'
+     '        break\n        return 0\n'
+     'def main() -> int / []:\n    while True:\n'
+     '        with handle(H()):\n            perform(E.op())\n'
+     '    return 0\n',
+     "line 12: 'break' outside loop"),
+], ids=['break-in-main', 'continue-in-if', 'break-in-method'])
+def test_rejects_a_loop_exit_outside_a_loop(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    while True:\n        break\n'
+    '    return 0\n',
+    'def main() -> int / []:\n    for x in [1, 2]:\n        continue\n'
+    '    return 0\n',
+    'def main() -> int / []:\n    if True:\n'
+    '        for i in range(3):\n            break\n    return 0\n',
+    'def main() -> int / []:\n    while True:\n        try:\n'
+    '            break\n        finally:\n            print("x")\n'
+    '    return 0\n',
+    'def main() -> int / []:\n    for i in range(2):\n'
+    '        for j in range(2):\n            continue\n    return 0\n',
+    ONE_OP + 'def main() -> int / []:\n    for i in range(2):\n'
+    '        try:\n            with handle(E):\n'
+    '                perform(E.op())\n'
+    '        except E.op as eff:\n            if True:\n'
+    '                break\n            eff.resume(1)\n    return 0\n',
+], ids=['while', 'for-list', 'for-in-if', 'in-try-finally',
+        'inner-loop', 'in-effect-clause'])
+def test_accepts_a_loop_exit_inside_a_loop(body):
+    check_source(body)

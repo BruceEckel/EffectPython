@@ -1,0 +1,12 @@
+exit 0
+got 0
+after block 0
+got 1
+after block 1
+got 2
+first loop ended at 2
+resumed 0
+body finally 0
+after block 0
+body finally 1
+second loop ended at 1

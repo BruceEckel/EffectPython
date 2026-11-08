@@ -212,6 +212,14 @@ class Pass(Stmt):
     """pass"""
     _attrs_ = []
 
+class Break(Stmt):
+    """break, inside a while or a for (plan 1.10)"""
+    _attrs_ = []
+
+class Continue(Stmt):
+    """continue, inside a while or a for (plan 1.10)"""
+    _attrs_ = []
+
 class Handle(Stmt):
     """try:
            with handle(Effect1, FakeEffect2(), fake3):

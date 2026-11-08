@@ -2,7 +2,10 @@
 
 eval_expr returns a W_Root for every expression; exec_stmt runs one
 statement. A return statement unwinds to the enclosing call through
-ReturnSignal, an RPython exception. Each call gets a fresh Environment, so
+ReturnSignal, an RPython exception, and break and continue unwind to
+the enclosing loop's exec_pass through BreakSignal and ContinueSignal
+(plan 1.10); the three share the base ControlSignal, which is what
+the handler runtime looks for. Each call gets a fresh Environment, so
 locals are lexically scoped to the call that created them.
 
 Dispatch is by isinstance over the node classes in ast_nodes. The checker
@@ -61,9 +64,9 @@ tail eff.throw(...) switches from the dispatch loop as a tail resume
 does, and any other eff.throw(...) nests through throw().
 
 Abandoning a body (plan 1.8) is the third way to switch into it. A
-clause that ends without resuming, a return that leaves a clause, and
-an exception that leaves a clause or a method with the body still
-suspended all unwind it: the dispatch loop switches in with an
+clause that ends without resuming, a return, break, or continue that
+leaves a clause, and an exception that leaves a clause or a method
+with the body still suspended all unwind it: the dispatch loop switches in with an
 Unwind, an EffectError the dialect cannot name, and perform() raises
 it, so it runs every finally suite on the way out of the body's
 stacklet while no except clause can catch it. exec_try runs its
@@ -177,9 +180,21 @@ class Output(object):
     def write_line(self, text):
         os.write(1, text + "\n")
 
-class ReturnSignal(Exception):
+class ControlSignal(Exception):
+    """A statement that leaves the block it is in: return, break, or
+    continue. The handler runtime carries one out of a body's
+    stacklet and treats one leaving a clause as an abandonment, with
+    no regard for which of the three it is."""
+
+class ReturnSignal(ControlSignal):
     def __init__(self, w_value):
         self.w_value = w_value
+
+class BreakSignal(ControlSignal):
+    pass
+
+class ContinueSignal(ControlSignal):
+    pass
 
 STATUS_RUNNING = 0
 STATUS_SUSPENDED = 1
@@ -247,7 +262,7 @@ class HandlerFrame(object):
         self.resume_exception = None # W_Exception set by eff.throw()
         self.resume_unwind = None    # Unwind set when the body is abandoned
         self.pending_error = None    # EffectError the body raised
-        self.pending_return = None   # ReturnSignal the body raised
+        self.pending_return = None   # ControlSignal the body raised
         self.saved_frames = []       # hidden while a clause runs
 
     def handles(self, effect_name):
@@ -287,7 +302,7 @@ def run_body_callback(h, arg):
         interp.exec_block(frame.stmt.body, frame.env)
     except EffectError as e:
         frame.pending_error = e
-    except ReturnSignal as sig:
+    except ControlSignal as sig:
         frame.pending_return = sig
     except rstackovf.StackOverflow:
         rstackovf.check_stack_overflow()
@@ -340,6 +355,8 @@ class Interpreter(object):
             self.exec_block(fn.body, env)
         except ReturnSignal as sig:
             return sig.w_value
+        except ControlSignal:
+            raise EffectPythonRuntimeError("break or continue outside a loop")
         return w_None
 
     # --- statements --------------------------------------------------------
@@ -360,7 +377,12 @@ class Interpreter(object):
                 self.exec_block(stmt.orelse, env)
         elif isinstance(stmt, ast.While):
             while self.eval_expr(stmt.test, env).is_true():
-                self.exec_block(stmt.body, env)
+                if self.exec_pass(stmt.body, env):
+                    break
+        elif isinstance(stmt, ast.Break):
+            raise BreakSignal()
+        elif isinstance(stmt, ast.Continue):
+            raise ContinueSignal()
         elif isinstance(stmt, ast.Assign):
             env.define(stmt.name, self.eval_expr(stmt.value, env))
         elif isinstance(stmt, ast.AttrAssign):
@@ -400,7 +422,8 @@ class Interpreter(object):
         i = 0
         while i < len(w_list.items_w):
             env.define(stmt.name, w_list.items_w[i])
-            self.exec_block(stmt.body, env)
+            if self.exec_pass(stmt.body, env):
+                break
             i += 1
 
     def exec_for_range(self, stmt, env):
@@ -414,13 +437,27 @@ class Interpreter(object):
             i = int_value(args_w[0], "range()")
         while i < stop:
             env.define(stmt.name, W_Int(i))
-            self.exec_block(stmt.body, env)
+            if self.exec_pass(stmt.body, env):
+                break
             i += 1
+
+    def exec_pass(self, body, env):
+        """One pass of a loop's suite: True when a break ended it, so
+        the loop stops; a continue ends the pass and the loop goes on
+        (plan 1.10). Either signal crosses a try through exec_try's
+        finally, and a handle statement through its frame."""
+        try:
+            self.exec_block(body, env)
+        except BreakSignal:
+            return True
+        except ContinueSignal:
+            pass
+        return False
 
     def exec_try(self, stmt, env):
         """Run the suite and the clause that catches what it raises,
         then the finally suite however the first part ended: a
-        ReturnSignal, a runtime error, an uncaught RaisedException,
+        ControlSignal, a runtime error, an uncaught RaisedException,
         and an Unwind all pass through it with the finally run, and a
         return or an exception in the finally replaces them (plan 1.8).
         """
@@ -500,9 +537,10 @@ class Interpreter(object):
         switches into the body from this loop, so sequential performs
         handled that way do not nest on the C stack. A resume()
         anywhere else runs nested through resume(). A clause that ends
-        without switching abandons the body, and so does a return or
-        an exception leaving a clause or a method: the body is unwound
-        before the loop goes on or the signal continues (plan 1.8)."""
+        without switching abandons the body, and so does a control
+        signal or an exception leaving a clause or a method: the body
+        is unwound before the loop goes on or the signal continues
+        (plan 1.8)."""
         while not self.sthread.is_empty_handle(h):
             payload = frame.pending_payload
             w_eff = W_EffBinding(payload, frame, h)
@@ -511,7 +549,7 @@ class Interpreter(object):
                     h = self.answer_with_method(w_eff, payload)
                 else:
                     h = self.answer_with_clause(w_eff, payload)
-            except (ReturnSignal, EffectError):
+            except (ControlSignal, EffectError):
                 self.unwind(w_eff)
                 raise
         error = frame.pending_error

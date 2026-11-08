@@ -1,0 +1,15 @@
+exit 0
+odd 1
+odd 3
+odd 5
+odd 7
+1 0
+2 0
+2 1
+a
+done with a
+done with skip
+b
+done with b
+done with stop
+9 stop

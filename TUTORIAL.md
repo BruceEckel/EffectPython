@@ -28,7 +28,7 @@ so a line number in an error message counts from the file's first line, a few li
 
 The dialect is a proof of concept, and you will notice what it lacks sooner than what it has.
 The values are `int`, `str`, and `bool`, with `True` and `False` as the literals, and a `list` of one of those three.
-There are no dicts or tuples, no string methods, no slicing, no `break` or `continue`, and no `else` or bare `except:` on a `try`.
+There are no dicts or tuples, no string methods, no slicing, no `else` on a loop, and no `else` or bare `except:` on a `try`.
 The built-ins are `print`, which takes any number of arguments and separates them with spaces, as Python does, `len`, and `str`.
 Every parameter and return type is written out, and the checker reads them.
 Those limits are the size of the project, not design choices, and they do not get in the way of the effects.
@@ -796,10 +796,14 @@ so an `append` inside the body lengthens the walk, as in Python,
 and the name keeps the last element after the loop.
 `for i in range(n):` and `range(start, stop)` count integers; `range()` is allowed there and nowhere else, so the checker rejects `xs = range(3)`.
 `str(i)` turns an `int` or a `bool` into what `print` would show for it, which is how `squares` labels its log entries.
+`break` and `continue` work in both loops as they do in Python, and the checker rejects either outside a loop;
+`tests/programs/loop_exits.epy` runs through the cases.
 
 A `perform` inside a loop suspends the loop where it is, and a clause that abandons the body leaves the loop as an exception would,
 running a `finally` inside the suite once, for the pass in progress, and then any `finally` around the loop;
 `tests/programs/perform_in_for.epy` shows both.
+A `break` in a handled body ends the loop around the `handle` statement, and a `break` in a clause abandons the suspended body before it ends the loop,
+which `tests/programs/break_in_handled_body.epy` shows.
 
 ## 10. What the checker catches
 

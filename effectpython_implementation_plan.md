@@ -659,7 +659,7 @@ and a handler field that holds a list is the same list the installing function c
 `for <name> in <expr>: <suite>` runs the suite once per element of a list, with the name bound to the element, or once per integer of `range(stop)` or `range(start, stop)`.
 The loop walks the list by index against its live length, as Python does, so an `append` inside the body lengthens the walk,
 and the name stays bound after the loop with the last element, or unbound after an empty list.
-There is no `else`, and no `break` or `continue` (open question 2).
+There is no `else`; `break` and `continue` were deferred (open question 2) and came in 1.10.
 `range()` is not a value: the iterable of a `for` is the one place it may appear (open question 1).
 
 **Checker.**
@@ -730,6 +730,28 @@ A unary minus, which the grammar lacked, folds into the literal it negates or in
 A bare `list` annotation is a syntax error, since the checker spells the element-less type of `[]` that way and the two must not meet.
 A name holding `[]` takes the element type of the first value appended to it, so a later `append` of another type is rejected, which goes a little past the design's "not caught".
 
+### 1.10 `break` and `continue` (designed and implemented 2026-11-07)
+
+1.9's second open question deferred the two loop exits, and every early exit in the programs had been a `return` from a helper.
+This section adds them as Python has them: `break` leaves the innermost enclosing `while` or `for`, and `continue` ends the pass in progress and goes to the next.
+There is no `else` on a loop, so the two need no third rule.
+
+**Checker.**
+A `break` or `continue` must sit under a loop in the same function; outside one it is rejected with Python's words, "'break' outside loop" and "'continue' not properly in loop".
+`Checker.loop_depth` counts the loops around the statement being checked: `check_loop_body` raises it around every `while` and `for` suite, and `check_function` resets it, since a handler method is its own function and a loop in the installing function does not reach it.
+A handle body and an effect clause count as inside the loop around them, because the runtime carries the signal across the stacklet, as the next paragraph says.
+Neither statement has effects.
+
+**Runtime.**
+`BreakSignal` and `ContinueSignal` are RPython exceptions beside `ReturnSignal`, and the three now derive from `ControlSignal`.
+Each loop runs its suite through `exec_pass`, which catches both: a `break` ends the loop and a `continue` ends the pass.
+A `try`/`finally` inside the loop runs its `finally` on either, through `exec_try`'s RPython `try`/`finally`, as it does for a `return`.
+The handler runtime looks for `ControlSignal` where it looked for `ReturnSignal`:
+`run_body_callback` stores one in `frame.pending_return` and `dispatch` re-raises it after the body's stacklet finishes, so a `break` in a handled body ends the loop around the `handle` statement;
+and `dispatch`'s `try` around a clause or a method unwinds the suspended body before a `break` or `continue` leaves the clause, as it does for a `return`, so a clause that breaks out of the installing function's loop abandons the body and its `finally` suites run first.
+`call_function` turns a signal that reaches it into the runtime error "break or continue outside a loop", which the checker makes unreachable from the binary.
+`tests/programs/break_in_handled_body.epy` exercises both crossings.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -738,7 +760,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for` and `in`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from effectpython import <names>` (accepted and ignored)
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
@@ -748,6 +770,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
     *   `if <expr>: <suite>`, with an optional `else: <suite>`
     *   `while <expr>: <suite>` (added 2026-10-30 for `tests/programs/many_performs.epy`)
+    *   `break` and `continue`, a `Break` and a `Continue` node, anywhere under a `while` or `for` in the same function (1.10; Milestone 10, 2026-11-07)
     *   `for <name> in <expr>: <suite>`, a `For` node, or a `ForRange` node when the expression is a call to `range` (1.9; Milestone 9, 2026-11-07)
     *   indexed assignment `<expr>[<expr>] = <expr>`, an `IndexAssign` node; one production reads every assignment and sorts the target into `Assign`, `AttrAssign`, or `IndexAssign` (1.9; Milestone 9, 2026-11-07)
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
@@ -784,6 +807,7 @@ The static analyzer runs in three passes over the AST before execution:
             3. Computes the net effect of the `HandleNode` as:
                $$\text{Effects}(\text{HandleNode}) = (\text{Effects}(\text{body}) \setminus \text{handled\_effects}) \cup \bigcup_{c \in \text{clauses}} \text{Effects}(c)$$
         *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, 2026-11-06); a `finalbody` unions its effects unconditionally (1.8; Milestone 8, 2026-11-06).
+        *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   Lists (1.9; Milestone 9, 2026-11-07): a `ListLiteral` has the type `list[T]` of its elements, which must share one type, or the element-less `list` when it is empty, which `matches` accepts for any list type; `Index` has the element type and needs an `int` index; `IndexAssign` and `append` need a value of the element type, and a name holding `[]` takes the element type of its first `append`; `len()` of a list or `str` is `int`, `str()` of a scalar is `str`, and `range()` outside a `for` is rejected; `For` binds its name to the iterable's element type and `ForRange` to `int`, each an assignment for the `Name` rule, and both union the suite's effects; `==` and `!=` are the operators of a list type; and `len`, `str`, and `range` join `print` as names a function cannot take.
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
 3.  **Pass 3 — Entrypoint Verification:**
@@ -893,7 +917,7 @@ class HandlerFrame(object):
         self.resume_exception = None  # W_Exception set by eff.throw(exc); perform() clears it and raises it (1.7)
         self.resume_unwind = None     # Unwind set by unwind_into() when the body is abandoned; perform() clears it and raises it (1.8)
         self.pending_error = None     # EffectError the body raised, re-raised on the handler side
-        self.pending_return = None    # ReturnSignal from a return statement in the body, re-raised the same way
+        self.pending_return = None    # ControlSignal from a return, break, or continue in the body (1.10), re-raised the same way
         self.saved_frames = []        # list[HandlerFrame]: this frame and the inner frames, hidden while a clause runs
 ```
 
@@ -944,7 +968,7 @@ sequenceDiagram
         `run_body_callback(h, arg)` reads the interpreter and the frame from `global_state`, stores `frame.h_handler = h`,
         and runs the `with` body through `exec_block` inside a `try` that stores an `EffectError` in `frame.pending_error`
         (from Milestone 6 this includes a `RaisedException`, so a `raise` in the body follows the same path, 1.6)
-        and a `ReturnSignal` (a `return` statement in the body) in `frame.pending_return`,
+        and a `ControlSignal` (a `return`, or since 1.10 a `break` or `continue`, in the body) in `frame.pending_return`,
         and a `StackOverflow` from RPython's stack check, for a body that recurses past the C stack limit, as an `EffectPythonRuntimeError` in `frame.pending_error` (added 2026-11-07).
         An RPython exception that escaped the callback would hand `stacklet_new` a garbage handle and segfault the binary, so no other kind may escape it.
         It then sets `frame.status = STATUS_COMPLETED` and returns `frame.h_handler`, which finishes the stacklet.
@@ -987,7 +1011,7 @@ sequenceDiagram
         and after the `finally` call `h = switch_into(eff, value, None)` or `h = switch_into(eff, None, exception)` (step 4) and return to the top of the loop.
         Otherwise the clause has abandoned the body: `h = unwind_into(eff)` (step 5) and back to the top of the loop,
         unless the body has finished through a `resume()` inside the clause, in which case `h` is the empty handle.
-    *   The method call and the clause run under a `try` that catches `ReturnSignal` and `EffectError`:
+    *   The method call and the clause run under a `try` that catches `ControlSignal` (a `return`, `break`, or `continue`; 1.10) and `EffectError`:
         if the body is still suspended (`eff.h_body` is not empty), `unwind(eff)` runs a nested `dispatch` from `unwind_into(eff)` until the body finishes, and the signal is then re-raised (step 5).
     *   When `h` is empty, the body finished:
         take and clear `frame.pending_error` and re-raise it, unless it is an `Unwind` that names this frame, which the loop swallows;
@@ -1314,3 +1338,13 @@ EffectPython/
         *   `rejected_range_value.epy`: `xs = range(3)` is rejected and exits 1.
         *   Reject `[1, "a"]`; `xs = range(3)`; `for x in 5`; `len(5)`; `n[0]`, `n[0] = 1`, and `n.append(1)` on an `int`; `xs.append("a")` on a `list[int]`; `xs[0] = "a"` on a `list[int]`; a read of the loop name before the loop; and `def len(...)`.
         *   Accept `result = []` then `result.append(1)` and `return result` from `-> list[int]`; a `list[bool]` field defaulting to `[]`; and `for` inside a clause, a handler method, and a `finally`.
+10. **Milestone 10: `break` and `continue` (1.10)**
+    *   *Done 2026-11-07*, designed and implemented in one step from 1.9's open question 2.
+        `lexer.py` has the two keywords; `ast_nodes.py` has `Break` and `Continue`; `parser.py` reads each as a simple statement;
+        `checker.py` has `loop_depth`, `check_loop_body`, and `require_loop`;
+        `interpreter.py` has `ControlSignal` over `ReturnSignal`, `BreakSignal`, and `ContinueSignal`, `exec_pass` under each loop, and `ControlSignal` where the handler runtime caught `ReturnSignal`.
+        `tests/test_parser.py`, `tests/test_checker.py`, and `tests/test_interpreter.py` each have a section.
+    *   *Acceptance test:*
+        *   `loop_exits.epy`: `break` and `continue` in a `while`, a `for` over a list, and a `for` over `range()`; a `break` leaves the innermost loop alone; a `finally` inside the loop runs on either; the loop name keeps the element the `break` saw; a `break` in a called function's loop leaves the caller's loop alone.
+        *   `break_in_handled_body.epy`: a `break` in a handled body ends the loop around the `handle` statement; a `break` in a clause abandons the suspended body, whose `finally` runs, and then ends the loop.
+        *   Reject `break` and `continue` outside a loop, including in a handler method whose installing function loops. Accept them in a `while`, a `for`, an `if` under a loop, a `try`/`finally` under a loop, an inner loop, and an effect clause under a loop.

@@ -451,6 +451,14 @@ def stmt(p):
 def pass_stmt(p):
     return ast.Pass(_line(p[0]))
 
+@pg.production('simple_stmt : BREAK')
+def break_stmt(p):
+    return ast.Break(_line(p[0]))
+
+@pg.production('simple_stmt : CONTINUE')
+def continue_stmt(p):
+    return ast.Continue(_line(p[0]))
+
 @pg.production('simple_stmt : RETURN')
 def return_bare(p):
     return ast.Return(None, _line(p[0]))

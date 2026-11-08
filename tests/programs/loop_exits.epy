@@ -1,0 +1,36 @@
+# Milestone 10: break and continue in a while, a for over a list, and
+# a for over range(); a break leaves the innermost loop alone, a
+# finally inside the loop runs on the way out, and the loop name
+# keeps the element the break saw.
+
+def first_over(xs: list[int], limit: int) -> int:
+    for x in xs:
+        if x > limit:
+            break
+    return x
+
+def main() -> int:
+    n = 0
+    while True:
+        n = n + 1
+        if n % 2 == 0:
+            continue
+        if n > 7:
+            break
+        print("odd", n)
+    for i in range(3):
+        for j in range(3):
+            if j == i:
+                break
+            print(i, j)
+    for s in ["a", "skip", "b", "stop", "c"]:
+        try:
+            if s == "skip":
+                continue
+            if s == "stop":
+                break
+            print(s)
+        finally:
+            print("done with", s)
+    print(first_over([1, 5, 9, 12], 6), s)
+    return 0
