@@ -752,6 +752,82 @@ and `dispatch`'s `try` around a clause or a method unwinds the suspended body be
 `call_function` turns a signal that reaches it into the runtime error "break or continue outside a loop", which the checker makes unreachable from the binary.
 `tests/programs/break_in_handled_body.epy` exercises both crossings.
 
+### 1.11 `and`, `or`, `not`, and `elif` (designed 2026-11-08)
+
+Every condition in the 117 sample programs is a single comparison or a literal, and a branch that needs a third arm nests an `if` in the `else`,
+because the grammar has no boolean operators and no `elif`.
+This section adds the four as Python has them, with one restriction: the operands of `and`, `or`, and `not` are `bool`.
+
+**Syntax.**
+`and`, `or`, `not`, and `elif` become keywords (`lexer.py`, `KEYWORDS`).
+The expression grammar gains Python's three layers above a comparison, in Python's precedence, lowest first:
+
+```
+expr     : or_test
+or_test  : and_test | or_test OR and_test
+and_test : not_test | and_test AND not_test
+not_test : NOT not_test | comparison
+comparison : arith | arith cmpop arith
+```
+
+so `not a == b` reads as `not (a == b)`, `a and not b or c` as `(a and (not b)) or c`, and parentheses override as they do today.
+A comparison still does not chain (`a < b < c` stays a syntax error), and `not` applies to a comparison, not to an `arith`, so `not n + 1` is a syntax error where Python parses it as `not (n + 1)`; the same program with parentheses means the same in both.
+`elif` extends `if_stmt`:
+
+```
+if_stmt   : IF expr COLON suite
+          | IF expr COLON suite ELSE COLON suite
+          | IF expr COLON suite elif_part
+elif_part : ELIF expr COLON suite
+          | ELIF expr COLON suite ELSE COLON suite
+          | ELIF expr COLON suite elif_part
+```
+
+Each `elif_part` builds an `If` node and the production above it puts that node alone in its `orelse`, which is how CPython's own AST represents `elif`, so the checker and the evaluator see nested `if`/`else` and need no `Elif` node.
+The nested `If` carries the `elif` keyword's line.
+
+**AST.**
+Two nodes: `BoolOp(op, left, right)` with `op` in `"and"` and `"or"`, and `Not(operand)`.
+Each is an `Expr`.
+
+**Checker.**
+`and` and `or` require both operands to be `bool` where their types are known and give `bool`;
+`not` requires a `bool` operand and gives `bool`;
+a known operand of another type is "and needs a bool, not int" (and "or needs", "not needs"), the runtime's words moved to the checker as the operator messages are, and an operand of unknown type passes, as it does for every operator (2.2).
+Both operands of `and` and `or` are typed and their effects counted, even though the runtime may skip the right one, since the row must cover whatever the operand would perform.
+The result type is always known, which matters now that a typed slot refuses an unknown value (`require_known`): a condition built from comparisons and these three operators is a `bool` the checker can pass anywhere.
+`elif` needs no rule: `check_if` merges the paths of each nested `If` in turn, so a name the arms leave with two types is unknown after the chain as it is after an `if`/`else`.
+
+**Runtime.**
+`BoolOp` evaluates the left operand and, as Python does, stops there when it decides the result: `False and x` and `True or x` leave `x` unevaluated, so an effect or an exception in `x` does not occur.
+The value is the operand that decided, which under the `bool` rule is always a `W_Bool`, so the result is Python's.
+A non-`bool` operand, reachable through an unknown type alone, is the runtime error "and needs a bool, not int", raised for the left operand before the right one is evaluated and for the right one after.
+`Not` evaluates its operand and gives the other `W_Bool`, with "not needs a bool, not str" for a non-`bool`.
+Neither needs the handler runtime: a `perform()` inside an operand suspends the body in the middle of the expression's evaluation, on the body's stacklet, as a `perform()` inside a function argument does today, and resumes there.
+
+**What the programs gain.**
+A condition such as `if i > 0 and xs[i - 1] == xs[i]:` where the right operand is safe only when the left holds, which no nesting expresses as one statement;
+an `elif` chain in a fake handler that answers several paths, in place of a staircase of `else:` and `if`;
+and `not done` for a flag.
+The acceptance program `conditions.epy` has an effect `Log.note` performed inside a right operand, and the handler prints each note, so the output shows which operands ran: a visible check that the short circuit holds across the stacklet boundary.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether `and`, `or`, and `not` take any value, with Python's truthiness, or `bool` alone.*
+    Python's `a or b` evaluates to an operand, so its type is the operands' common type or nothing the checker can name, and `not xs` tests a list for emptiness.
+    *The design takes `bool` alone: the result type is then always `bool`, which the checker can hand to any typed slot, and the program means in Python what it means here, since a `bool` operand gives the same `bool` under Python's rules.*
+    *Emptiness is written `len(xs) == 0`, as the programs write it today.*
+2.  *Whether an `if` or `while` test must be `bool` too.*
+    Today `type_of` types the test and requires nothing of it, so `if n:` is accepted and `is_true` on a `W_Int` or a `W_List` decides it, Python's truthiness, which no sample program uses.
+    *The design requires `bool` where the type is known, so the four operators and the two statements follow one rule, and adds the runtime error "if needs a bool, not int" for a test of unknown type;*
+    *the alternative, truthiness in tests and `bool` in operators, makes `if xs:` legal and `if xs and flag:` an error, which is hard to explain.*
+3.  *Whether `elif` is parser sugar or a node of its own.*
+    A dedicated `Elif` node would give the checker and the evaluator a chain to walk and the error messages an `elif` to name.
+    *The design folds it into nested `If` nodes, as CPython does, so nothing below the parser changes; a message about a condition names the line, which is the `elif`'s.*
+4.  *Whether `not` applies to an `arith` or to a comparison.*
+    Python's `not` sits above the comparison, so `not a == b` is `not (a == b)` either way; the difference is `not n + 1`, legal in Python and meaningless under the `bool` rule.
+    *The design puts `not` above the comparison and lets `not n + 1` be a syntax error, which the checker would reject anyway.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1388,3 +1464,12 @@ EffectPython/
         `check_loop_body`, `check_try`, and `check_handle` merge the types the paths leave, at a loop body's end and its `break` and `continue` statements and at every statement boundary of a `try` suite, a handled body, and an effect clause (`check_suite`), and check a loop body or a handled body again from the merged types;
         `hand_over` types a `[]` by the `list[T]` it is handed to and drops the type of one handed to another name.
         `tests/programs/unreachable_*.epy` holds a program per runtime error branch the checker makes unreachable, and `runtime_*.epy` one per runtime-only error, so a branch the checker stops rejecting fails in `test_runtime.py`; a branch without a program would not, so the list in `interpreter.py`'s docstring is checked by reading.
+
+11. **Milestone 11: `and`, `or`, `not`, and `elif` (1.11)**
+    *   *Designed 2026-11-08*, with four open questions and recommendations in 1.11.
+    *   *Implementation:* `lexer.py` gains the four keywords; `ast_nodes.py` gains `BoolOp` and `Not`; `parser.py` gains the `or_test`, `and_test`, and `not_test` layers and the `elif_part` production, with the conflict check `pypy2 -W error::rply.errors.ParserGeneratorWarning -c "from effectpython.parser import parse"` still clean; `checker.py` types the two nodes, requiring `bool` operands where known, and requires a `bool` test for `if` and `while` where the type is known; `interpreter.py` evaluates `BoolOp` with a short circuit and `Not`, and reports a non-`bool` operand or test as a runtime error with the checker's words.
+        `tests/test_parser.py`, `tests/test_checker.py`, and `tests/test_interpreter.py` each get a section, and `TUTORIAL.md` section 1 shows the operators and section 6 an `elif` chain in a fake handler.
+    *   *Acceptance test:*
+        *   `conditions.epy`: `and`, `or`, and `not` in `if` and `while` tests and in a `return`; an `elif` chain of three arms plus `else`; a `perform(Log.note(...))` in the right operand of an `and` whose left operand is `False` and of an `or` whose left operand is `True`, with the handler printing each note, so the output shows the skipped operands were not performed; and a `return` of `a and b` from a function declared `-> bool`.
+        *   Reject `1 and True` and `not "s"` with "and needs a bool, not int" and "not needs a bool, not str"; reject `if n:` with `n` an `int` with "if needs a bool, not int"; reject `a < b < c` and `not n + 1` as syntax errors; accept `not a == b`, `a and not b or c`, a `perform()` in either operand with the effect in the row, and an `elif` chain whose arms assign one name two types followed by a `print` of the name.
+        *   `runtime_bool_operand.epy`: an `and` whose left operand has an unknown type and holds an `int`, reaching the runtime's "and needs a bool, not int".
