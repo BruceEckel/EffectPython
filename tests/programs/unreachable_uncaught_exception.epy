@@ -1,0 +1,8 @@
+# A RaisedException reaching entry_point is unreachable: main()'s
+# empty row makes an exception nobody catches a static error.
+
+class Boom(Exception):
+    pass
+
+def main() -> int:
+    raise Boom("loose")

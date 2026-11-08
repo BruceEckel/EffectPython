@@ -1,0 +1,2 @@
+exit 1
+error: line 7: a list index must be int, not str

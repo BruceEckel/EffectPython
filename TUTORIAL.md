@@ -818,10 +818,14 @@ Everything in this list is rejected before the program runs, with a line number:
 - a `raise` or `eff.throw()` of a value that is not a declared exception class, and a throw of a class the operation does not declare;
 - a read of a name nothing has bound earlier in the function, and a read of an `except` clause's `as` name after the clause, which Python 3 leaves unbound;
 - a list literal whose elements differ in type, an index or `append` on a value that is not a list, an `append` or an indexed assignment of the wrong element type, a `for` over a value that is neither a list nor `range()`, and `range()` anywhere else;
+- a `return` whose value is not the declared return type, and a function that can reach its end without returning one;
 - `Exception` in a row, since a row names the classes that can reach a caller.
 
+A name that an `if`, a loop, a `try`, or a handled body can leave with two types has no type the checker can hold it to,
+so an operator or a call on it passes the checker and meets the runtime's check instead.
 What remains for runtime is what the checker does not settle:
-integer division or modulo by zero, a list index past either end, an operator whose operand types the checker could not both see, a name assigned in one branch of an `if` and read after it, resuming twice, and a recursion that outgrows the stack (`maximum recursion depth exceeded`, from `tests/programs/deep_recursion.epy`).
+integer division or modulo by zero, a list index past either end, an operator whose operand types the checker could not both see, a name assigned in one branch of an `if` or in a loop that ran zero times and read after it, resuming twice, and a recursion that outgrows the stack (`maximum recursion depth exceeded`, from `tests/programs/deep_recursion.epy`).
+Under `tests/programs/`, `runtime_*.epy` reaches each of these, and `unreachable_*.epy` shows the checker stopping each error it makes unreachable.
 Those stop the program with an `error:` line and exit code 1, and no `try` catches them:
 
 ```python tests/programs/body_error.epy

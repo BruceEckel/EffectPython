@@ -1,0 +1,2 @@
+exit 1
+error: line 6: 'c' is not a handler instance

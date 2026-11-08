@@ -1,0 +1,11 @@
+# A [] appended to late in a loop body holds that element type on the
+# next iteration: check_loop_body checks the body again from the merged
+# types and rejects the read.
+
+def main() -> int:
+    xs = []
+    for i in range(2):
+        if i > 0:
+            print(xs[0] + 1)
+        xs.append("a")
+    return 0

@@ -1,0 +1,2 @@
+exit 1
+error: line 16: handler class 'Counter' has no field 'total'

@@ -1,0 +1,2 @@
+exit 1
+error: line 8: double() takes 1 arguments (2 given)

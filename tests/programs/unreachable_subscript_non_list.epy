@@ -1,0 +1,8 @@
+# The runtime's "is not a list" for a subscript (list_value) is
+# unreachable where the checker knows the type: check_index rejects
+# it.
+
+def main() -> int:
+    n = 5
+    print(n[0])
+    return 0

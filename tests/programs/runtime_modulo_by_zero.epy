@@ -1,0 +1,5 @@
+# Runtime-only: the checker does not evaluate operands.
+
+def main() -> int:
+    print(7 % 0)
+    return 0

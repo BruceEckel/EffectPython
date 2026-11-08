@@ -1,0 +1,2 @@
+exit 1
+error: line 14: operation Log.note has no parameter 'level'

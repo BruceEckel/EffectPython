@@ -1,0 +1,2 @@
+exit 1
+error: line 17: Counter() takes 0 to 1 arguments (2 given)

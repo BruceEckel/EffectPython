@@ -1,0 +1,11 @@
+# Runtime-only: a [] assigned to a second name loses its type for both
+# names, so the appends through either name and the operator on the
+# elements all pass the checker; the runtime finds an int and a str.
+
+def main() -> int:
+    xs = []
+    ys = xs
+    ys.append(1)
+    xs.append("a")
+    print(ys[0] + ys[1])
+    return 0

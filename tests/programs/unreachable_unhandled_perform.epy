@@ -1,0 +1,12 @@
+# The runtime's "no handler for Log.note" (perform) is unreachable: a
+# perform with no handler in scope is an effect main() would have to
+# declare, and main()'s row must be empty.
+
+from effectpython import Effect, perform
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def main() -> int:
+    perform(Log.note("nobody listens"))
+    return 0

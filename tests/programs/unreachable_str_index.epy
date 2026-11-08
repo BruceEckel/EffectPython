@@ -1,0 +1,8 @@
+# The runtime's "needs an int" for a list index (list_index) is
+# unreachable where the checker knows the type: check_index rejects
+# it.
+
+def main() -> int:
+    xs = [1, 2]
+    print(xs["a"])
+    return 0

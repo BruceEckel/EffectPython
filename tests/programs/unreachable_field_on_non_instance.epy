@@ -1,0 +1,7 @@
+# The runtime's "is not a handler instance" for a field assignment
+# (Interpreter.instance) is unreachable: require_instance rejects it.
+
+def main() -> int:
+    c = 1
+    c.n = 2
+    return 0

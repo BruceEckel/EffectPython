@@ -1,0 +1,2 @@
+exit 1
+error: line 11: argument 1 of append() must be str, not int

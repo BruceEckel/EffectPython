@@ -1,0 +1,2 @@
+exit 1
+error: line 6: function 'label' must return int, not str

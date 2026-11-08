@@ -1,0 +1,12 @@
+# The runtime's "takes an optional str message" (construct_exception)
+# is unreachable: check_exception_call rejects a second argument.
+
+class Boom(Exception):
+    pass
+
+def main() -> int:
+    try:
+        raise Boom("one", "two")
+    except Boom:
+        print("caught")
+    return 0

@@ -125,30 +125,34 @@ a value the checker typed: a subscript, an append, or a for on a
 value that is not a list (list_value), a non-integer index
 (list_index), a method other than append (list_method), and a
 built-in with the wrong argument (builtin), plus range() outside a
-for (call). The claims hold where the type the checker holds for the
-value is the type it has at runtime. A name an if leaves with two
-types has the unknown type (check_if, 2026-11-07), and so has an
-element read from a [] the checker never refined; either reaches
-these branches as any untyped value does. The checker also holds a
-known type that can be wrong, in ways a verification pass listed on
-2026-11-07: it does not check a return value against the declared
-return type, it does not merge the types a loop body or a try suite
-assigns with the types before them, and it refines a [] by the name
-appended to and not by other names holding the same list. A program
-that exploits one of those reaches any of the branches above. The
-branches stay because the unit tests build modules by hand and run
-them without the checker. The cases the checker does not see remain
-runtime-only: a read of a name whose assignment comes earlier in the
-source but did not run, because it sits in a loop body that ran zero
-times or in one branch of an if, and a read of a name an except
-clause deleted where the read comes earlier in the source
-(require_bound follows source order), an operator applied to operands
-of the wrong types where one operand's type is unknown (the checker
-infers types only as far as argument checks need), integer division
-or modulo by zero, a list index out of range, and a recursion that
+for (call). The claims hold where the checker holds a type for the
+value, and a type it holds is the type the value has at runtime: a
+return value has the declared return type (check_return,
+always_returns), a name that two paths leave with two types is
+unknown (merge_types, for an if, a loop body, a try, and a handle
+statement, each of the last three checked again from the merged
+types), and a [] handed to another name loses its type while one
+handed to a list[T] parameter, field, return, or resume() takes it
+(hand_over). An unknown type reaches these branches as any untyped
+value does: an element read from a [] the checker never refined, or
+a name an if or a loop left with two types. The branches stay because
+the unit tests build modules by hand and run them without the
+checker. tests/programs/unreachable_*.epy holds a program per branch
+that the checker rejects, so test_runtime.py keeps this list true.
+The cases the checker does not see are runtime-only, and
+tests/programs/runtime_*.epy reaches each: a read of a name whose
+assignment comes earlier in the source but did not run, because it
+sits in a loop body that ran zero times or in one branch of an if,
+an operator applied to operands of the wrong types where one
+operand's type is unknown, integer division or modulo by zero, a
+list index out of range (list_index_error.epy), and a recursion that
 outgrows the C stack, which RPython's stack check stops and
 run_body_callback or the entry point reports as "maximum recursion
-depth exceeded".
+depth exceeded" (deep_recursion.epy). A read of a name an except
+clause deleted, where the read comes earlier in the source, needs a
+loop or a resumed body to run after the clause, and the second pass
+over either finds the name unbound
+(unreachable_clause_deleted_read.epy).
 """
 import os
 try:

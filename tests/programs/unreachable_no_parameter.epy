@@ -1,0 +1,16 @@
+# The runtime's "operation has no parameter" (eff.<attr> in a clause)
+# is unreachable: the AttrRead branch of type_of rejects it.
+
+from effectpython import Effect, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def main() -> int:
+    try:
+        with handle(Log):
+            perform(Log.note("hi"))
+    except Log.note as eff:
+        print(eff.level)
+        eff.resume(0)
+    return 0

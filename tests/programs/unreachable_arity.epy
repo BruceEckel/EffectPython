@@ -1,0 +1,9 @@
+# The runtime's "takes N arguments" for a function call (call_function)
+# is unreachable: check_args rejects the call.
+
+def double(n: int) -> int:
+    return n * 2
+
+def main() -> int:
+    print(double(1, 2))
+    return 0

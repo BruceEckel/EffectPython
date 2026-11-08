@@ -3,7 +3,8 @@ from Milestone 5 the handler class rules (plan 1.5), from Milestone 6
 the exception rules (plan 1.6), from Milestone 7 the throw rules
 (plan 1.7), from Milestone 8 the finally rules (plan 1.8), from
 Milestone 9 the list and for rules (plan 1.9), and from Milestone 10
-the loop rule for break and continue (plan 1.10).
+the loop rule for break and continue (plan 1.10) and the type rules
+for return values, loop and try merging, and [] aliasing.
 
 Run with:  pypy2 -m pytest
 """
@@ -1227,3 +1228,131 @@ def test_rejects_an_effect_clause_name_as_the_runtime_leaves_it(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(body)
     assert info.value.msg == msg
+
+# --- return types and merged paths (Milestone 10) ----------------------------
+
+HY = ('class Y(Effect):\n    def b() -> int: ...\n'
+      'class HY(Handler[Y]):\n    def b(self) -> int:\n        return 2\n')
+
+@pytest.mark.parametrize('body', [
+    'def f() -> int:\n    return 1\n' + MAIN,
+    'def f() -> str:\n    return "a"\n' + MAIN,
+    HX + 'def f() -> HX:\n    return HX()\n' + MAIN,
+    'class E(Exception): ...\ndef f() -> E:\n    return E()\n' + MAIN,
+    'def f() -> None:\n    return\n' + MAIN,
+    'def f() -> list[int]:\n    return []\n' + MAIN,
+], ids=['int', 'str', 'handler-class', 'exception-class', 'bare-none',
+        'empty-list'])
+def test_accepts_a_return_of_the_declared_type(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n    return "a"\n' + MAIN,
+     "line 9: function 'f' must return int, not str"),
+    (HX + HY + 'def f() -> HX:\n    return HY()\n' + MAIN,
+     "line 19: function 'f' must return HX, not HY"),
+    ('def f() -> int:\n    return\n' + MAIN,
+     "line 9: function 'f' must return int, not None"),
+    ('class X(Effect):\n    def a() -> int: ...\n'
+     'class HX(Handler[X]):\n    def a(self) -> int:\n'
+     '        return "a"\n' + MAIN,
+     "line 12: method 'a' must return int, not str"),
+], ids=['str-for-int', 'other-handler', 'bare-for-int', 'method'])
+def test_rejects_a_return_of_another_type(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('body', [
+    'def f(n: int) -> int:\n    if n == 0:\n        return 1\n'
+    '    else:\n        return 2\n' + MAIN,
+    'class E(Exception): ...\ndef f() -> int:\n    try:\n'
+    '        return 1\n    except E:\n        return 2\n' + MAIN,
+    'def f() -> int:\n    try:\n        print(1)\n    finally:\n'
+    '        return 0\n' + MAIN,
+    ONE_OP + 'def f() -> int:\n    try:\n        with handle(E):\n'
+    '            return perform(E.op())\n    except E.op as eff:\n'
+    '        eff.resume(1)\n' + MAIN,
+    'class E(Exception): ...\ndef f() -> int / [E]:\n    raise E()\n'
+    + MAIN,
+    'def f() -> None:\n    print(1)\n' + MAIN,
+], ids=['if-else', 'try-except', 'try-finally', 'handle-resumes',
+        'raise', 'none-falls-off'])
+def test_accepts_a_body_that_always_returns(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f(n: int) -> int:\n    if n == 0:\n        return 1\n' + MAIN,
+     "line 8: function 'f' can reach its end without returning int"),
+    ('def f() -> int:\n    for i in range(3):\n        return i\n' + MAIN,
+     "line 8: function 'f' can reach its end without returning int"),
+    (ONE_OP + 'def f() -> int:\n    try:\n        with handle(E):\n'
+     '            return perform(E.op())\n    except E.op as eff:\n'
+     '        print(1)\n' + MAIN,
+     "line 10: function 'f' can reach its end without returning int"),
+], ids=['if-without-else', 'for', 'handle-abandons'])
+def test_rejects_a_body_that_can_reach_its_end(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+GET = 'class Ask(Effect):\n    def get() -> int: ...\n'
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    x = "a"\n    for i in range(0):\n'
+    '        x = 1\n    print(x + "b")\n    return 0\n',
+    'def main() -> int / []:\n    x = "a"\n    while x == "a":\n'
+    '        x = 1\n    print(x + "b")\n    return 0\n',
+    'class Boom(Exception): ...\ndef main() -> int / []:\n    x = 1\n'
+    '    try:\n        print("b")\n    except Boom:\n        x = "a"\n'
+    '    print(x + 1)\n    return 0\n',
+    GET + 'def main() -> int / []:\n    x = "a"\n    try:\n'
+    '        with handle(Ask):\n            perform(Ask.get())\n'
+    '            print(x + "!")\n    except Ask.get as eff:\n'
+    '        x = 1\n        eff.resume(0)\n    print(x - 1)\n'
+    '    return 0\n',
+], ids=['for', 'while', 'try', 'handle'])
+def test_accepts_a_name_merged_after_a_loop_try_or_handle(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def main() -> int / []:\n    xs = []\n    for i in range(2):\n'
+     '        print(xs[0] + 1)\n        xs.append("a")\n    return 0\n',
+     'line 11: unsupported operand types for +: str and int'),
+    ('class Boom(Exception): ...\ndef main() -> int / []:\n    x = 1\n'
+     '    try:\n        print("b")\n    except Boom:\n        x = "a"\n'
+     '        return 0\n    print(x + "a")\n    return 0\n',
+     'line 16: unsupported operand types for +: int and str'),
+    (GET + 'def main() -> int / []:\n    xs = []\n    try:\n'
+     '        with handle(Ask):\n            perform(Ask.get())\n'
+     '            print(xs[0] + "s")\n    except Ask.get as eff:\n'
+     '        xs.append(1)\n        eff.resume(0)\n    return 0\n',
+     'line 15: unsupported operand types for +: int and str'),
+], ids=['for-second-pass', 'try-clause-returns', 'handle-widened'])
+def test_rejects_a_name_merged_after_a_loop_try_or_handle(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('body, msg', [
+    ('def add(a: list[str]) -> int:\n    return 0\n'
+     'def main() -> int / []:\n    xs = []\n    add(xs)\n'
+     '    xs.append(1)\n    return 0\n',
+     'line 13: argument 1 of append() must be str, not int'),
+    ('def mk() -> list[int]:\n    xs = []\n    xs.append("a")\n'
+     '    return xs\n' + MAIN,
+     "line 11: function 'mk' must return list[int], not list[str]"),
+], ids=['parameter', 'return'])
+def test_rejects_an_empty_list_refined_by_its_receiver(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+def test_an_empty_list_assigned_to_another_name_loses_its_type():
+    check_source('def main() -> int / []:\n    xs = []\n    ys = xs\n'
+                 '    ys.append(1)\n    xs.append("a")\n'
+                 '    print(ys[0] + ys[1])\n    return 0\n')
+
+def test_accepts_an_append_to_a_name_of_unknown_type():
+    check_source('def main() -> int / []:\n    if True:\n'
+                 '        xs = [1]\n    xs.append(2)\n    return 0\n')

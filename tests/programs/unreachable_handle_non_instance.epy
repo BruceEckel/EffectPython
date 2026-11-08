@@ -1,0 +1,9 @@
+# The runtime's "handle() argument is not a handler instance" (install)
+# is unreachable: check_handle rejects a name that is neither an
+# effect nor an instance.
+
+def main() -> int:
+    c = 1
+    with handle(c):
+        print("body")
+    return 0

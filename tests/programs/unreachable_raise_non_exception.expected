@@ -1,0 +1,2 @@
+exit 1
+error: line 5: raise needs an exception, not int

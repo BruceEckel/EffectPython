@@ -40,15 +40,29 @@ string stands for a type the checker cannot determine, and an unknown
 type matches anything. An operator whose operands both have known
 types must have a pair the interpreter supports (OPERATORS), so the
 runtime's "unsupported operand types" error is reached through an
-operand of unknown type, or through a known type that is wrong. A
-name an if leaves with two types is unknown (check_if). A known type
-is wrong where the inference is loose, as a verification pass listed
-on 2026-11-07: a return value is not checked against the declared
-return type, the types a loop body or a try suite assigns are not
-merged with the types before them, and a [] is refined by the name
-appended to and not by other names holding the same list. For two
-lists the checker also requires one element type, which the runtime
-does not: it compares them and finds the elements unequal.
+operand of unknown type. A name that two paths leave with two types
+is unknown (merge_types, below). For two lists the checker also
+requires one element type, which the runtime does not: it compares
+them and finds the elements unequal.
+
+A return value must have the function's declared return type, and a
+bare return has the type None (check_return). A function whose
+return type is not None must return or raise an exception on every
+path the checker follows (always_returns): its last statement is a
+return or a raise, an if/else whose branches both qualify, a try
+whose finally qualifies or whose suite and clauses all do, or a
+handle whose body qualifies and whose clauses each qualify or end by
+resuming it. A loop never qualifies, so a function that returns from
+inside one needs a return after it. A handler method's return type
+equals its operation's (check_signature), so the rule covers the
+value a perform() gets from a method.
+
+A name holding [] that a statement hands to a parameter, a field, a
+return, or a resume() of type list[T] takes list[T], since the
+receiver may append to it (hand_over). One assigned to another name
+or placed in a list literal loses its type: the checker does not
+track which names share a list, so an append through either name
+would leave the other with a stale type.
 
 A read of a name that nothing has bound earlier in the function's
 source is rejected, and so is a read of the name a try statement's
@@ -63,12 +77,23 @@ clause (except E.op as eff) leaves its name as the runtime does
 unbound when nothing bound it before, and otherwise has the type it
 had before.
 
-Each branch of an if starts from the types before it (check_if).
-Afterwards a name the branches leave with two types, or that one
-branch alone binds, is unknown, while a [] that one branch refined
-to list[T] keeps the refinement (merged). A name one branch bound
-still counts as bound, since the source-order rule reads bindings,
-not paths.
+Where two paths meet, the types they left are merged (merge_types):
+a name they leave with two types, or that one path alone binds, is
+unknown, while a [] that one path refined to list[T] keeps the
+refinement (merged). A name one path bound still counts as bound,
+since the source-order rule reads bindings, not paths. The branches
+of an if are two such paths (check_if). A loop body is checked from
+the types before the loop, what it leaves is merged with them, and
+it is checked again from the merged types until nothing changes
+(check_loop_body), so the body is held to the types a name can have
+on any iteration and the code after the loop sees a name the body
+reassigns as unknown. A try's clauses start from the types before
+its suite merged with the types after it, and the code after the
+try sees the suite's end merged with the end of every clause that
+does not return (check_try). A handle statement's clauses start the
+same way, and since the body runs on from what a clause assigned,
+the body and clauses are checked again from the widened entry until
+it is stable (check_handle_suites).
 
 Lists (plan 1.9) are types like the others: "list[int]", "list[str]",
 and "list[bool]" are type names. "list" is the type of a literal
@@ -122,8 +147,8 @@ def matches(actual, expected):
     return actual == LIST and is_list(expected)
 
 def merged(a, b):
-    """The type a name has after an if whose branches left it with
-    types a and b: the one type, the list[T] that refines a [], or
+    """The type a name has where two paths meet and left it with types
+    a and b: the one type, the list[T] that refines a [], or
     unknown."""
     if a == b:
         return a
@@ -133,11 +158,80 @@ def merged(a, b):
         return a
     return UNKNOWN
 
+def merge_types(a, b):
+    """The types after two paths that left the types a and b: merged()
+    for a name both hold, and unknown for a name one alone holds, which
+    still counts as bound."""
+    result = {}
+    for name in a:
+        if name in b:
+            result[name] = merged(a[name], b[name])
+        else:
+            result[name] = UNKNOWN
+    for name in b:
+        if name not in a:
+            result[name] = UNKNOWN
+    return result
+
+def same_types(a, b):
+    if len(a) != len(b):
+        return False
+    for name in a:
+        if name not in b or a[name] != b[name]:
+            return False
+    return True
+
 def ends_in_return(stmts):
     """Whether nothing after the enclosing statement can run once
     these statements have. A raise does not qualify: an enclosing try
     in the same function may catch the exception and continue."""
     return len(stmts) > 0 and isinstance(stmts[-1], ast.Return)
+
+def always_returns(stmts):
+    """Whether the function returns or raises an exception before
+    these statements run out, on every path the checker follows: the
+    last statement is a return or a raise, an if/else whose branches
+    both qualify, a try whose finally qualifies or whose suite and
+    clauses all do, or a handle whose body qualifies and whose clauses
+    each qualify or end by resuming it. A loop never qualifies."""
+    if len(stmts) == 0:
+        return False
+    last = stmts[-1]
+    if isinstance(last, ast.Return) or isinstance(last, ast.Raise):
+        return True
+    if isinstance(last, ast.If):
+        return always_returns(last.body) and always_returns(last.orelse)
+    if isinstance(last, ast.Try):
+        if always_returns(last.finalbody):
+            return True
+        if not always_returns(last.body):
+            return False
+        for clause in last.clauses:
+            if not always_returns(clause.body):
+                return False
+        return True
+    if isinstance(last, ast.Handle):
+        if not always_returns(last.body):
+            return False
+        for clause in last.clauses:
+            if not (always_returns(clause.body)
+                    or ends_in_resume(clause)):
+                return False
+        return True
+    return False
+
+def ends_in_resume(clause):
+    """Whether the clause's last statement resumes its own binding, so
+    the body runs on."""
+    if len(clause.body) == 0:
+        return False
+    last = clause.body[-1]
+    if not isinstance(last, ast.ExprStmt):
+        return False
+    expr = last.expr
+    if not isinstance(expr, ast.Resume):
+        return False
+    return expr.target == clause.binding
 
 class EffectSet(object):
     """The effects a piece of code may perform and the exception classes
@@ -194,6 +288,8 @@ class Checker(object):
         self.handlers = {}    # handler class name -> HandlerInfo
         self.functions = {}   # function name -> FunctionDef
         self.loop_depth = 0   # loops around the statement being checked
+        self.fn = None        # the FunctionDef being checked
+        self.what = ""        # "function" or "method"
 
     def check(self):
         self.collect_declarations()
@@ -376,7 +472,13 @@ class Checker(object):
             scope.types[fn.params[i]] = fn.param_types[i]
         effects = EffectSet()
         self.loop_depth = 0
+        self.fn = fn
+        self.what = what
         self.check_block(fn.body, scope, effects)
+        if fn.return_type != "None" and not always_returns(fn.body):
+            raise InvalidProgram(
+                fn.lineno, "%s '%s' can reach its end without returning "
+                "%s" % (what, fn.name, fn.return_type))
         performed = []
         raised = []
         for name in effects.names:
@@ -402,14 +504,12 @@ class Checker(object):
 
     def check_stmt(self, stmt, scope, effects):
         if isinstance(stmt, ast.Return):
-            if stmt.value is not None:
-                self.type_of(stmt.value, scope, effects)
+            self.check_return(stmt, scope, effects)
         elif isinstance(stmt, ast.If):
             self.type_of(stmt.test, scope, effects)
             self.check_if(stmt, scope, effects)
         elif isinstance(stmt, ast.While):
-            self.type_of(stmt.test, scope, effects)
-            self.check_loop_body(stmt.body, scope, effects)
+            self.check_loop_body(stmt.test, stmt.body, scope, effects)
         elif isinstance(stmt, ast.Break):
             self.require_loop(stmt, "'break' outside loop")
         elif isinstance(stmt, ast.Continue):
@@ -429,7 +529,10 @@ class Checker(object):
             self.check_range(stmt.args, stmt.lineno, scope, effects)
             self.check_loop(stmt.name, "int", stmt.body, scope, effects)
         elif isinstance(stmt, ast.Assign):
-            scope.types[stmt.name] = self.type_of(stmt.value, scope, effects)
+            actual = self.type_of(stmt.value, scope, effects)
+            if self.hand_over(stmt.value, LIST, scope):
+                actual = UNKNOWN
+            scope.types[stmt.name] = actual
             self.rebind(scope, stmt.name)
         elif isinstance(stmt, ast.AttrAssign):
             info = self.require_instance(scope, stmt.target, stmt.lineno)
@@ -440,6 +543,7 @@ class Checker(object):
                     stmt.lineno, "field '%s' of handler class '%s' is %s; "
                     "cannot assign %s" % (stmt.attr, info.name, expected,
                                           actual))
+            self.hand_over(stmt.value, expected, scope)
         elif isinstance(stmt, ast.IndexAssign):
             element = self.check_index(stmt.target, stmt.index, stmt.lineno,
                                        scope, effects)
@@ -448,6 +552,7 @@ class Checker(object):
                 raise InvalidProgram(
                     stmt.lineno, "the list holds %s; cannot assign %s" %
                     (element, actual))
+            self.hand_over(stmt.value, element, scope)
         elif isinstance(stmt, ast.ExprStmt):
             self.type_of(stmt.expr, scope, effects)
         elif isinstance(stmt, ast.Pass):
@@ -473,31 +578,70 @@ class Checker(object):
         body_types = scope.types
         scope.types = before
         self.check_block(stmt.orelse, scope, effects)
-        for name in body_types:
-            if name in scope.types:
-                scope.types[name] = merged(body_types[name],
-                                           scope.types[name])
-            else:
-                scope.types[name] = UNKNOWN
-        for name in scope.types:
-            if name not in body_types:
-                scope.types[name] = UNKNOWN
+        scope.types = merge_types(body_types, scope.types)
+
+    def check_return(self, stmt, scope, effects):
+        """The value must have the declared return type; a bare return
+        gives None."""
+        if stmt.value is None:
+            actual = "None"
+        else:
+            actual = self.type_of(stmt.value, scope, effects)
+        expected = self.fn.return_type
+        if not matches(actual, expected):
+            raise InvalidProgram(
+                stmt.lineno, "%s '%s' must return %s, not %s" %
+                (self.what, self.fn.name, expected, actual))
+        if stmt.value is not None:
+            self.hand_over(stmt.value, expected, scope)
 
     def check_loop(self, name, element, body, scope, effects):
         """The name a for binds is an assignment for the source-order
         rule: it stays bound after the loop."""
         scope.types[name] = element
         self.rebind(scope, name)
-        self.check_loop_body(body, scope, effects)
+        self.check_loop_body(None, body, scope, effects)
 
-    def check_loop_body(self, body, scope, effects):
-        """A break or continue may stand anywhere under a loop in the
+    def check_loop_body(self, test, body, scope, effects):
+        """Check the test and the body from the types before the loop,
+        merge what the body left with them, and check again from the
+        merged types until nothing changes, so the body is checked
+        against the types a name can have on any iteration and the
+        code after the loop sees a name the body reassigns as unknown.
+        A break or continue may stand anywhere under a loop in the
         same function, a handle body or a clause included, since the
         runtime carries it out of a stacklet as it carries a return
         (plan 1.10); a method is its own function."""
         self.loop_depth += 1
-        self.check_block(body, scope, effects)
+        before = scope.types.copy()
+        while True:
+            if test is not None:
+                self.type_of(test, scope, effects)
+            self.check_block(body, scope, effects)
+            after = merge_types(before, scope.types)
+            if same_types(after, before):
+                break
+            before = after
+            scope.types = after.copy()
+        scope.types = after
         self.loop_depth -= 1
+
+    def hand_over(self, expr, expected, scope):
+        """A name holding [] that a statement hands to a parameter,
+        field, return, resume, list, or another name. The receiver may
+        append to the list, so the name takes the receiver's list[T]
+        type; where the receiver has no element type the name loses
+        its type, since the checker does not track which names share
+        a list. True when the name lost its type."""
+        if not isinstance(expr, ast.Name):
+            return False
+        if scope.types.get(expr.id, UNKNOWN) != LIST:
+            return False
+        if expected != LIST and is_list(expected):
+            scope.types[expr.id] = expected
+            return False
+        scope.types[expr.id] = UNKNOWN
+        return True
 
     def require_loop(self, stmt, msg):
         if self.loop_depth == 0:
@@ -531,14 +675,18 @@ class Checker(object):
         holding [] takes the element type of the first value appended,
         so the next append must match it."""
         type_name = self.type_of(target, scope, effects)
-        if not is_list(type_name):
+        if type_name != UNKNOWN and not is_list(type_name):
             raise InvalidProgram(
                 lineno, "%s is not a list" % describe(target, type_name))
         if method != "append":
             raise InvalidProgram(
                 lineno, "a list has no method '%s'" % method)
-        self.check_args(["value"], [element_of(type_name)], args,
-                        "append()", lineno, scope, effects)
+        if type_name == UNKNOWN:
+            element = UNKNOWN
+        else:
+            element = element_of(type_name)
+        self.check_args(["value"], [element], args, "append()", lineno,
+                        scope, effects)
         if type_name == LIST and isinstance(target, ast.Name):
             element = self.type_of(args[0], scope, effects)
             if element != UNKNOWN:
@@ -576,9 +724,18 @@ class Checker(object):
         """The suite's effects, less the classes the clauses catch, plus
         whatever the clauses perform or raise: the formula of a handle
         block with exception classes in place of handled effects. The
-        finally suite's effects join unconditionally (plan 1.8)."""
+        finally suite's effects join unconditionally (plan 1.8).
+
+        A clause may start after any statement of the suite, so it
+        starts from the types before the suite merged with the types
+        after it, and the code after the try may follow the suite or
+        any clause that does not end in a return, so it sees those
+        paths merged."""
         body_effects = EffectSet()
+        before = scope.types.copy()
         self.check_block(stmt.body, scope, body_effects)
+        after = scope.types
+        entry = merge_types(before, after)
         caught = {}
         for clause in stmt.clauses:
             if (clause.name != EXCEPTION
@@ -587,10 +744,14 @@ class Checker(object):
                     clause.lineno,
                     "'%s' is not an exception class" % clause.name)
             caught[clause.name] = True
+            scope.types = entry.copy()
             if clause.binding is None:
                 self.check_block(clause.body, scope, effects)
             else:
                 self.check_named_clause(clause, scope, effects)
+            if not ends_in_return(clause.body):
+                after = merge_types(after, scope.types)
+        scope.types = after
         for name in body_effects.names:
             if name in self.exceptions and (name in caught
                                             or EXCEPTION in caught):
@@ -688,7 +849,33 @@ class Checker(object):
             for name in self.handlers[handler_name].rows:
                 effects.add(name, stmt.lineno)
         body_effects = EffectSet()
+        entry = scope.types.copy()
+        while True:
+            after = self.check_handle_suites(stmt, fulfilled, entry, scope,
+                                             effects, body_effects)
+            widened = merge_types(entry, after)
+            if same_types(widened, entry):
+                break
+            entry = widened
+        scope.types = after
+        for name in body_effects.names:
+            if name not in stmt.effects and name not in fulfilled:
+                effects.add(name, body_effects.linenos[name])
+
+    def check_handle_suites(self, stmt, fulfilled, entry, scope, effects,
+                            body_effects):
+        """One check of the body and the clauses from the entry types,
+        giving the types after the statement. A clause runs while the
+        body is suspended at any of its performs, so it starts from the
+        entry types merged with the body's end types, and the body runs
+        on from whatever the clause assigned, which is why check_handle
+        checks again from the widened entry until it stops changing.
+        The statement ends after the body, or after a clause that does
+        not resume or return, so those paths are merged."""
+        scope.types = entry.copy()
         self.check_block(stmt.body, scope, body_effects)
+        after = scope.types
+        clause_entry = merge_types(entry, after)
         covered = {}
         for clause in stmt.clauses:
             if clause.effect in fulfilled:
@@ -707,8 +894,11 @@ class Checker(object):
                 raise InvalidProgram(
                     clause.lineno, "duplicate clause for %s" % key)
             covered[key] = True
+            scope.types = clause_entry.copy()
             self.check_effect_clause(clause, Binding(clause.effect, op),
                                      scope, effects)
+            if not ends_in_return(clause.body):
+                after = merge_types(after, scope.types)
         missing = []
         for name in stmt.effects:
             for op in self.effects[name].keys():
@@ -718,9 +908,7 @@ class Checker(object):
             raise InvalidProgram(
                 stmt.lineno, "handle(%s) is missing a clause for %s" %
                 (", ".join(stmt.effects), ", ".join(missing)))
-        for name in body_effects.names:
-            if name not in stmt.effects and name not in fulfilled:
-                effects.add(name, body_effects.linenos[name])
+        return after
 
     def fulfill(self, fulfilled, info, lineno):
         if info.effect in fulfilled:
@@ -744,6 +932,7 @@ class Checker(object):
             element = UNKNOWN
             for item in expr.elements:
                 actual = self.type_of(item, scope, effects)
+                self.hand_over(item, LIST, scope)
                 if element == UNKNOWN:
                     element = actual
                 elif actual != UNKNOWN and actual != element:
@@ -813,6 +1002,7 @@ class Checker(object):
                     expr.lineno, "%s.resume() for %s.%s must pass %s, not %s"
                     % (expr.target, binding.effect, binding.op.name,
                        expected, actual))
+            self.hand_over(expr.value, expected, scope)
             return "None"
         elif isinstance(expr, ast.Throw):
             binding = self.require_binding(scope, expr.target,
@@ -931,6 +1121,7 @@ class Checker(object):
                 raise InvalidProgram(
                     lineno, "argument %d of %s must be %s, not %s" %
                     (i + 1, what, param_types[i], actual))
+            self.hand_over(args[i], param_types[i], scope)
 
     def rebind(self, scope, name):
         """An assignment or a loop binding gives the name a value that

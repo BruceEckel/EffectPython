@@ -1,0 +1,8 @@
+# The runtime's "is not a list" for a for loop (list_value) is
+# unreachable where the checker knows the type: the For branch of
+# check_stmt rejects it.
+
+def main() -> int:
+    for x in 5:
+        print(x)
+    return 0

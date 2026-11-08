@@ -1,0 +1,17 @@
+# The runtime's "has no field" (field_index) is unreachable:
+# require_field rejects a field the class does not declare.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Counter(Handler[Log]):
+    n: int = 0
+    def note(self, text: str) -> int:
+        return self.n
+
+def main() -> int:
+    c = Counter()
+    print(c.total)
+    return 0

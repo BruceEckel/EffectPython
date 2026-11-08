@@ -1,0 +1,19 @@
+# The runtime's "takes N arguments" for a handler class constructor
+# (HandlerClass.construct) is unreachable: check_construction rejects
+# the call.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Counter(Handler[Log]):
+    n: int = 0
+    def note(self, text: str) -> int:
+        self.n = self.n + 1
+        return self.n
+
+def main() -> int:
+    with handle(Counter(1, 2)):
+        perform(Log.note("hi"))
+    return 0

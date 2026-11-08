@@ -1,0 +1,2 @@
+exit 1
+error: line 14: handle() has two handlers for Log

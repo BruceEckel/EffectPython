@@ -1,0 +1,6 @@
+# The runtime's "name is not defined" for a call (Interpreter.call) is
+# unreachable: check_call rejects a call to a function nobody defined.
+
+def main() -> int:
+    print(helper(1))
+    return 0

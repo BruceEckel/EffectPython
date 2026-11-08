@@ -1,0 +1,2 @@
+exit 1
+error: line 10: function 'main' performs Log (line 11) without declaring it in its effect row

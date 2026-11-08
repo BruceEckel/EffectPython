@@ -1,0 +1,2 @@
+exit 1
+error: line 5: unsupported operand types for +: int and str

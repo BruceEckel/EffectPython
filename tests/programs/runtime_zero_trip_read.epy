@@ -1,0 +1,8 @@
+# Runtime-only: the checker follows source order, so a name bound in a
+# loop body counts as bound after the loop. The body never ran.
+
+def main() -> int:
+    for i in range(0):
+        last = i
+    print(last)
+    return 0

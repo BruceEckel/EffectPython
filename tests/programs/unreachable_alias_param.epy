@@ -1,0 +1,12 @@
+# A [] passed where list[str] is expected takes that type, since the
+# callee may append to it: the next append of an int is rejected.
+
+def add(words: list[str]) -> int:
+    words.append("s")
+    return 0
+
+def main() -> int:
+    xs = []
+    add(xs)
+    xs.append(1)
+    return 0

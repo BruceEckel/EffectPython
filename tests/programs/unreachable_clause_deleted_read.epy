@@ -1,0 +1,18 @@
+# The except clause deletes its name when it ends, and the read in the
+# loop body comes earlier in the source than the clause, so a
+# source-order walk would accept it and the second iteration would
+# fail at runtime. check_loop_body checks the body again after the
+# first pass, and the name is unbound on the second.
+
+class Boom(Exception):
+    pass
+
+def main() -> int:
+    e = "none yet"
+    for i in range(2):
+        print(e)
+        try:
+            raise Boom("boom")
+        except Boom as e:
+            print("caught")
+    return 0

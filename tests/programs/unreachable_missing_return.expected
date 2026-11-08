@@ -1,0 +1,2 @@
+exit 1
+error: line 4: function 'pick' can reach its end without returning int

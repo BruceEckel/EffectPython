@@ -1,0 +1,7 @@
+# The runtime's "a list has no method" (list_method) is unreachable:
+# check_append rejects any method but append.
+
+def main() -> int:
+    xs = [1]
+    xs.pop()
+    return 0

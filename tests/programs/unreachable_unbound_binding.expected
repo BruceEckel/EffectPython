@@ -1,0 +1,2 @@
+exit 1
+error: line 15: 'eff' is not an except binding or a handler instance

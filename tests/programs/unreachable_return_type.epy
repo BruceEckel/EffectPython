@@ -1,0 +1,10 @@
+# A function's value is the declared return type at runtime, so a
+# caller's operator on it cannot meet a surprise: check_return rejects
+# a return of another type.
+
+def label() -> int:
+    return "seven"
+
+def main() -> int:
+    print(label() + 1)
+    return 0

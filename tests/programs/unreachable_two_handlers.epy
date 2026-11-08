@@ -1,0 +1,16 @@
+# The runtime's "handle() has two handlers for Log" (install) is
+# unreachable: check_handle rejects two arguments for one effect.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Counter(Handler[Log]):
+    def note(self, text: str) -> int:
+        return 1
+
+def main() -> int:
+    with handle(Counter(), Counter()):
+        perform(Log.note("hi"))
+    return 0

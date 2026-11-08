@@ -811,10 +811,18 @@ The static analyzer runs in three passes over the AST before execution:
                The net effect then gains the union of the fulfilling handler classes' method rows, each method's row less the classes its operation's own row declares,
                and the effects of the constructor arguments.
         *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, 2026-11-06); a `finalbody` unions its effects unconditionally (1.8; Milestone 8, 2026-11-06).
-        *   `IfNode` (`check_if`, 2026-11-07): each branch starts from the types before the `if`.
-            Afterwards a name the branches leave with two types, or that one branch alone binds, has the unknown type,
-            and a `[]` that one branch refined to `list[T]` keeps the refinement.
+        *   Merged paths (`merge_types`, 2026-11-07 for `if`, 2026-11-08 for the rest): where two paths meet, a name they leave with two types, or that one path alone binds, has the unknown type,
+            and a `[]` that one path refined to `list[T]` keeps the refinement.
+            The branches of an `if` are two such paths (`check_if`).
+            A loop body is checked from the types before the loop, what it leaves is merged with them, and it is checked again from the merged types until nothing changes (`check_loop_body`), so a name the body reassigns is unknown after the loop and the body is held to the types a name can have on any iteration.
+            A `try`'s clauses start from the types before its suite merged with the types after it, and the code after the `try` sees the suite's end merged with the end of every clause that does not return (`check_try`);
+            a `handle` statement's clauses start the same way, and the body and clauses are checked again from the widened entry until it is stable, since the body runs on from what a clause assigned (`check_handle_suites`).
             An effect clause's name is unbound after the `handle` statement unless it was bound before, in which case its earlier type comes back (`check_effect_clause`, 2026-11-07).
+        *   `Return` (`check_return`, 2026-11-08): the value must match the function's declared return type, and a bare `return` has the type `None`, as "function 'f' must return int, not str".
+            A function whose return type is not `None` must return or raise on every path the checker follows (`always_returns`: a trailing `return` or `raise`, an `if`/`else` whose branches both do, a `try` whose `finally` does or whose suite and clauses all do, a `handle` whose body does and whose clauses each do or end by resuming), else "function 'f' can reach its end without returning int"; a loop never qualifies.
+        *   `[]` handed over (`hand_over`, 2026-11-08): a name holding `[]` passed as an argument, assigned to a field, returned, or passed to `resume()` where `list[T]` is expected takes `list[T]`, since the receiver may append to it;
+            one assigned to another name or placed in a list literal loses its type, since the checker does not track which names share a list.
+            An `append` on a name of unknown type passes, as an unknown type does everywhere.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   Lists (1.9; Milestone 9, 2026-11-07): a `ListLiteral` has the type `list[T]` of its elements, which must share one type, or the element-less `list` when it is empty, which `matches` accepts for any list type; `Index` has the element type and needs an `int` index; `IndexAssign` and `append` need a value of the element type, and a name holding `[]` takes the element type of its first `append`; `len()` of a list or `str` is `int`, `str()` of a scalar is `str`, and `range()` outside a `for` is rejected; `For` binds its name to the iterable's element type and `ForRange` to `int`, each an assignment for the `Name` rule, and both union the suite's effects; `==` and `!=` are the operators of a list type; and `len`, `str`, and `range` join `print` as names a function cannot take.
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
@@ -1370,3 +1378,8 @@ EffectPython/
         `check_if` merges the branches of an `if` (2.2), where the checker had kept the type of the last assignment in source order and so let a name typed `str` in one branch and `int` in the other reach the runtime's operator error, a raise of a non-exception, a `handle()` of a non-instance, a missing field, and a missing handler, each from a program the checker accepted.
         `check_effect_clause` leaves an effect clause's name as `answer_with_clause` does, where a read of `eff` after the `try` had passed the checker and failed in the binary.
         The module docstrings of `interpreter.py`, `checker.py`, and `parser.py`, and sections 2.1, 2.2, 3.1, and 3.4, were corrected against the code in the same pass.
+    *   *Type rules tightened 2026-11-08*, closing what a second verification pass found: a known type the checker held could be wrong at runtime.
+        `check_return` and `always_returns` hold a function to its declared return type (2.2);
+        `check_loop_body`, `check_try`, and `check_handle_suites` merge the types the paths leave and check a loop body or a handled body again from the merged types;
+        `hand_over` types a `[]` by the `list[T]` it is handed to and drops the type of one handed to another name.
+        `tests/programs/unreachable_*.epy` holds a program per runtime error branch the checker makes unreachable, and `runtime_*.epy` one per runtime-only error, so `test_runtime.py` keeps the list in `interpreter.py`'s docstring true.

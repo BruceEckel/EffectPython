@@ -1,0 +1,6 @@
+# The runtime's "len() needs a list or str" (builtin) is unreachable
+# where the checker knows the type: check_builtin rejects it.
+
+def main() -> int:
+    print(len(5))
+    return 0

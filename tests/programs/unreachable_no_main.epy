@@ -1,0 +1,5 @@
+# The runtime's "no main() function defined" (entry_point) is
+# unreachable: check_entry_point rejects the module.
+
+def helper() -> int:
+    return 1

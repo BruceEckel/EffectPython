@@ -1,0 +1,8 @@
+# The runtime's "str() needs an int, str, or bool" (builtin) is
+# unreachable where the checker knows the type: check_builtin rejects
+# it.
+
+def main() -> int:
+    xs = [1]
+    print(str(xs))
+    return 0

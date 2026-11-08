@@ -1,0 +1,16 @@
+# The runtime's "is not bound by an except clause" (eff.resume() on a
+# name holding no binding) is unreachable: require_binding rejects it.
+
+from effectpython import Effect, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def main() -> int:
+    eff = 1
+    try:
+        with handle(Log):
+            perform(Log.note("hi"))
+    except Log.note as e:
+        eff.resume(0)
+    return 0

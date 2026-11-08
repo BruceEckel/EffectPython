@@ -1,0 +1,2 @@
+exit 1
+error: line 7: function 'main' raises Boom (line 8) without declaring it in its effect row
