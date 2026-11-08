@@ -1,0 +1,12 @@
+# The runtime's "range() needs an int" (int_value) is unreachable: an
+# if leaves n with two types, and a typed slot refuses a value of
+# unknown type (require_known).
+
+def main() -> int:
+    if 1 == 1:
+        n = "a"
+    else:
+        n = 3
+    for i in range(n):
+        print(i)
+    return 0

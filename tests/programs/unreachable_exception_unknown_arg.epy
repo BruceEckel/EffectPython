@@ -1,5 +1,6 @@
-# Runtime-only: an if leaves msg with two types, so the checker cannot
-# hold the exception constructor to a str; construct_exception does.
+# The runtime's "takes an optional str message" for an argument of
+# unknown type (construct_exception) is unreachable: a typed slot
+# refuses a value of unknown type (require_known).
 
 class Boom(Exception):
     pass

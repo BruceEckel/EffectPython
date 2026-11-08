@@ -1,0 +1,2 @@
+exit 1
+error: line 14: argument 1 of Boom() must be str, but 'msg' has no known type

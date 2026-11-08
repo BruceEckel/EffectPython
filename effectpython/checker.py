@@ -45,17 +45,17 @@ leave with two types is unknown (merge_types, below). For two lists
 the checker also requires one element type, which the runtime does
 not: it compares them and finds the elements unequal.
 
-A known type is the type the value has at runtime, with one
-exception: an unknown value handed to a typed slot, a parameter, a
-return, a field, a constructor argument, a resume(), an append, or
-an indexed assignment, is accepted by matches, and the receiver then
-holds the declared type for a value the checker never saw. A
-function that returns such a value to a caller who adds 1 to it
-reaches the runtime's operator error with both types known to the
-checker, and a handler instance that came that way can reach the
-runtime's handle() and field errors (interpreter.py lists them).
-Closing it means either rejecting an unknown value at every typed
-slot or checking the declared type at runtime; neither is done yet.
+A known type is the type the value has at runtime. The one way it
+could be wrong was an unknown value handed to a typed slot: a
+parameter, a return, a field, a constructor argument, a resume(), an
+append, or an indexed assignment, where matches would have accepted
+it and the receiver would have held the declared type for a value
+the checker never saw. A typed slot therefore refuses a value of
+unknown type (require_known), as "argument 1 of f() must be int, but
+'x' has no known type", and an append of one to a [] leaves the list
+with no known type. A value of unknown type may still be printed,
+measured with len(), converted with str(), indexed, iterated,
+compared, and used as an operand, where the runtime keeps the check.
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -67,8 +67,7 @@ handle whose body qualifies and whose clauses each qualify or end by
 resuming it. A loop never qualifies, so a function that returns from
 inside one needs a return after it. A handler method's return type
 equals its operation's (check_signature), so the rule covers the
-value a perform() gets from a method, with the exception above for a
-value of unknown type.
+value a perform() gets from a method.
 
 A name holding [] that a statement hands to a parameter, a field, a
 return, or a resume() of type list[T] takes list[T], since the
@@ -596,6 +595,10 @@ class Checker(object):
             info = self.require_instance(scope, stmt.target, stmt.lineno)
             expected = self.require_field(info, stmt.attr, stmt.lineno)
             actual = self.type_of(stmt.value, scope, effects)
+            self.require_known(
+                stmt.value, actual, expected,
+                "field '%s' of handler class '%s' must be %s" %
+                (stmt.attr, info.name, expected), stmt.lineno)
             if not matches(actual, expected):
                 raise InvalidProgram(
                     stmt.lineno, "field '%s' of handler class '%s' is %s; "
@@ -606,6 +609,9 @@ class Checker(object):
             element = self.check_index(stmt.target, stmt.index, stmt.lineno,
                                        scope, effects)
             actual = self.type_of(stmt.value, scope, effects)
+            self.require_known(stmt.value, actual, element,
+                               "an element of the list must be %s" % element,
+                               stmt.lineno)
             if element != UNKNOWN and not matches(actual, element):
                 raise InvalidProgram(
                     stmt.lineno, "the list holds %s; cannot assign %s" %
@@ -646,6 +652,9 @@ class Checker(object):
         else:
             actual = self.type_of(stmt.value, scope, effects)
         expected = self.fn.return_type
+        self.require_known(
+            stmt.value, actual, expected, "%s '%s' must return %s" %
+            (self.what, self.fn.name, expected), stmt.lineno)
         if not matches(actual, expected):
             raise InvalidProgram(
                 stmt.lineno, "%s '%s' must return %s, not %s" %
@@ -755,7 +764,9 @@ class Checker(object):
                         scope, effects)
         if type_name == LIST and isinstance(target, ast.Name):
             element = self.type_of(args[0], scope, effects)
-            if element != UNKNOWN:
+            if element == UNKNOWN:
+                scope.types[target.id] = UNKNOWN
+            else:
                 scope.types[target.id] = "list[%s]" % element
         return "None"
 
@@ -1120,6 +1131,11 @@ class Checker(object):
                                            expr.lineno)
             actual = self.type_of(expr.value, scope, effects)
             expected = binding.op.return_type
+            self.require_known(
+                expr.value, actual, expected,
+                "%s.resume() for %s.%s must pass %s" %
+                (expr.target, binding.effect, binding.op.name, expected),
+                expr.lineno)
             if not matches(actual, expected):
                 raise InvalidProgram(
                     expr.lineno, "%s.resume() for %s.%s must pass %s, not %s"
@@ -1240,11 +1256,25 @@ class Checker(object):
                 (what, len(params), len(args)))
         for i in range(len(args)):
             actual = self.type_of(args[i], scope, effects)
+            self.require_known(args[i], actual, param_types[i],
+                               "argument %d of %s must be %s" %
+                               (i + 1, what, param_types[i]), lineno)
             if not matches(actual, param_types[i]):
                 raise InvalidProgram(
                     lineno, "argument %d of %s must be %s, not %s" %
                     (i + 1, what, param_types[i], actual))
             self.hand_over(args[i], param_types[i], scope)
+
+    def require_known(self, expr, actual, expected, demand, lineno):
+        """A typed slot refuses a value of unknown type: were it
+        accepted, the receiver would hold the declared type for a
+        value the checker never saw, the one way a known type could be
+        wrong at runtime (settled 2026-11-08). The demand reads
+        "argument 1 of f() must be int"."""
+        if actual == UNKNOWN and expected != UNKNOWN:
+            raise InvalidProgram(
+                lineno, "%s, but %s has no known type" %
+                (demand, value_name(expr)))
 
     def rebind(self, scope, name):
         """An assignment or a loop binding gives the name a value that
@@ -1317,6 +1347,15 @@ def describe(target, type_name):
     if isinstance(target, ast.AttrRead):
         return "'%s.%s'" % (target.target, target.attr)
     return "a value of type %s" % type_name
+
+def value_name(expr):
+    """'x' for a name, 'self.n' for a field, and 'the value' for
+    anything else, in a 'has no known type' message."""
+    if isinstance(expr, ast.Name):
+        return "'%s'" % expr.id
+    if isinstance(expr, ast.AttrRead):
+        return "'%s.%s'" % (expr.target, expr.attr)
+    return "the value"
 
 def signature(op):
     """name: type, name: type for an operation's parameters."""

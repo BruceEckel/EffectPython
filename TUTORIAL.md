@@ -821,8 +821,10 @@ Everything in this list is rejected before the program runs, with a line number:
 - a `return` whose value is not the declared return type, and a function that can reach its end without returning one;
 - `Exception` in a row, since a row names the classes that can reach a caller.
 
-A name that an `if`, a loop, a `try`, or a handled body can leave with two types has no type the checker can hold it to,
-so an operator or a call on it passes the checker and meets the runtime's check instead.
+A name that an `if`, a loop, a `try`, or a handled body can leave with two types has no type the checker can hold it to.
+Such a value cannot be passed to a parameter, returned, stored in a field, or appended to a typed list
+(`argument 1 of f() must be int, but 'x' has no known type`), since the receiver would then trust a type nobody checked;
+an operator on it passes the checker and meets the runtime's check instead.
 What remains for runtime is what the checker does not settle:
 integer division or modulo by zero, a list index past either end, an operator whose operand types the checker could not both see, a name assigned in one branch of an `if` or in a loop that ran zero times and read after it, resuming twice, and a recursion that outgrows the stack (`maximum recursion depth exceeded`, from `tests/programs/deep_recursion.epy`).
 Under `tests/programs/`, `runtime_*.epy` reaches each of these, and `unreachable_*.epy` shows the checker stopping each error it makes unreachable.

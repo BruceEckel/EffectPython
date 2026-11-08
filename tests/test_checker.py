@@ -1449,3 +1449,75 @@ def test_rejects_a_loop_name_finally_read_or_nested_list(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(body)
     assert info.value.msg == msg
+
+UNSURE = ('    if 1 == 1:\n        x = 1\n    else:\n        x = "s"\n')
+
+HN = ('class X(Effect):\n    def a() -> int: ...\n'
+      'class H(Handler[X]):\n    n: int = 0\n'
+      '    def a(self) -> int:\n        return 1\n')
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f(n: int) -> int:\n    return n\n'
+     'def main() -> int / []:\n' + UNSURE + '    f(x)\n    return 0\n',
+     "line 15: argument 1 of f() must be int, but 'x' has no known type"),
+    (ASK + UNSURE + '    try:\n        with handle(Ask):\n'
+     '            print(perform(Ask.ask(x)))\n'
+     '    except Ask.ask as eff:\n        eff.resume(1)\n    return 0\n',
+     "line 17: argument 1 of Ask.ask must be int, but 'x' has no known "
+     "type"),
+    (HN + 'def main() -> int / []:\n' + UNSURE + '    h = H(x)\n'
+     '    return 0\n',
+     "line 19: argument 1 of H() must be int, but 'x' has no known type"),
+    ('class Boom(Exception): ...\ndef main() -> int / []:\n' + UNSURE
+     + '    e = Boom(x)\n    return 0\n',
+     "line 14: argument 1 of Boom() must be str, but 'x' has no known "
+     "type"),
+    ('def main() -> int / []:\n' + UNSURE
+     + '    for i in range(x):\n        pass\n    return 0\n',
+     "line 13: argument 1 of range() must be int, but 'x' has no known "
+     "type"),
+    ('def main() -> int / []:\n' + UNSURE
+     + '    xs = [1]\n    xs.append(x)\n    return 0\n',
+     "line 14: argument 1 of append() must be int, but 'x' has no known "
+     "type"),
+    ('def f() -> int:\n' + UNSURE + '    return x\n' + MAIN,
+     "line 13: function 'f' must return int, but 'x' has no known type"),
+    (GET + 'class H(Handler[Ask]):\n    def get(self) -> int:\n'
+     '        if 1 == 1:\n            v = 1\n        else:\n'
+     '            v = "s"\n        return v\n' + MAIN,
+     "line 16: method 'get' must return int, but 'v' has no known type"),
+    (HN + 'def main() -> int / []:\n' + UNSURE
+     + '    h = H()\n    h.n = x\n    return 0\n',
+     "line 20: field 'n' of handler class 'H' must be int, but 'x' has no "
+     "known type"),
+    ('def main() -> int / []:\n' + UNSURE
+     + '    xs = [1]\n    xs[0] = x\n    return 0\n',
+     "line 14: an element of the list must be int, but 'x' has no known "
+     "type"),
+    (ASK + UNSURE + ASKED + '        eff.resume(x)\n    return 0\n',
+     "line 19: eff.resume() for Ask.ask must pass int, but 'x' has no "
+     "known type"),
+    ('def main() -> int / []:\n' + UNSURE
+     + '    ys = [x, 1]\n    for i in range(ys[0]):\n        pass\n'
+     '    return 0\n',
+     "line 14: argument 1 of range() must be int, but the value has no "
+     "known type"),
+], ids=['function', 'operation', 'handler-class', 'exception-class',
+        'range', 'append', 'return', 'method', 'field', 'index',
+        'resume', 'element'])
+def test_rejects_a_value_of_unknown_type_at_a_typed_slot(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n' + UNSURE + '    print(x)\n    return 0\n',
+    'def main() -> int / []:\n' + UNSURE + '    xs = []\n'
+    '    xs.append(x)\n    xs.append(1)\n    return 0\n',
+    'def main() -> int / []:\n' + UNSURE + '    print(len(x))\n'
+    '    print(str(x))\n    return 0\n',
+    'def main() -> int / []:\n' + UNSURE + '    print(x + 1)\n'
+    '    return 0\n',
+], ids=['print', 'empty-list', 'len-and-str', 'operator'])
+def test_accepts_a_value_of_unknown_type_where_no_slot_is_typed(body):
+    check_source(body)

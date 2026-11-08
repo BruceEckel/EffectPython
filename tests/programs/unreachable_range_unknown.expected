@@ -1,0 +1,2 @@
+exit 1
+error: line 10: argument 1 of range() must be int, but 'n' has no known type
