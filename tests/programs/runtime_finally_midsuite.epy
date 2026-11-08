@@ -1,0 +1,20 @@
+# Runtime-only: the exception leaves the inner suite with x a str,
+# and the finally runs before the outer clause catches it. The checker
+# checks the finally from every boundary of the suite, so x is
+# unknown there and the operator passes; the runtime finds the str.
+
+class Boom(Exception):
+    pass
+
+def main() -> int:
+    x = 1
+    try:
+        try:
+            x = "s"
+            raise Boom("b")
+            x = 1
+        finally:
+            print(x + 1)
+    except Boom:
+        print("caught")
+    return 0

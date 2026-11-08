@@ -1,0 +1,9 @@
+# A list of lists is rejected (plan 1.9, open question 5): the
+# element type is int, str, or bool. Without the rule, two reads of
+# xss[0] would be two names for one list, each refined on its own.
+
+def main() -> int:
+    xss = [[]]
+    a = xss[0]
+    a.append(1)
+    return 0

@@ -127,34 +127,48 @@ in binop and compare); and the list errors on a value the checker
 typed: a subscript, an append, or a for on a value that is not a list
 (list_value), a non-integer index (list_index), a method other than
 append and an append with the wrong number of arguments
-(list_method), and a built-in with the wrong argument (builtin), plus
-range() outside a for (call). The "unknown node" branches guard the
-dispatch and no parse reaches them. The claims hold where the checker
-holds a type for the value, and a type it holds is the type the value
-has at runtime: a return value has the declared return type
-(check_return, always_returns); a name that two paths leave with two
-types is unknown (merge_types), the paths being the branches of an
-if, the end and every break or continue of a loop body, the
-statement boundaries of a try suite, and the boundaries of a handled
-body and its clauses, with a loop body and a handled body checked
-again from the merged types; and a [] handed to another name loses
-its type, while one handed to a list[T] parameter, field, return, or
-resume() takes it (hand_over). An unknown type reaches these branches
-as any untyped value does: an element read from a [] the checker
-never refined, or a name two paths left with two types. The branches
-stay because the unit tests build modules by hand and run them
-without the checker. tests/programs/unreachable_*.epy holds a program
-per branch that the checker rejects, with rejected_missing_clause.epy
-for the clause_for branch, so test_runtime.py keeps this list true.
+(list_method), and a built-in with the wrong number or type of
+argument (builtin), plus range() outside a for (call). The "unknown
+node" branches guard the dispatch and no parse reaches them. The
+claims hold where the checker holds a type for the value, and a type
+it holds is the type the value has at runtime, with one exception
+below: a return value has the declared return type (check_return,
+always_returns); a name that two paths leave with two types is
+unknown (merge_types), the paths being the branches of an if, the
+end and every break or continue of a loop body and the zero-trip
+path of a for, the statement boundaries of a try suite and of its
+clauses, which a finally suite follows, and the boundaries of a
+handled body and its clauses, with a loop body and a handled body
+checked again from the merged types; a [] handed to another name
+loses its type, while one handed to a list[T] parameter, field,
+return, or resume() takes it (hand_over); a list is no element of a
+list; and a literal with an element of unknown type is unknown. An
+unknown type reaches these branches as any untyped value does: an
+element read from a [] the checker never refined, or a name two
+paths left with two types. The exception: an unknown value handed to
+a typed slot (a parameter, return, field, constructor argument,
+resume(), append, or indexed assignment) is accepted, and the
+receiver then holds the declared type for a value the checker never
+saw, so a program that routes an unknown value through a typed
+return or parameter can reach the handle() errors, the field errors,
+the raise error, the no-handler error, and the operator errors with
+the checker's types known and wrong (checker.py, "A known type").
+The branches stay because the unit tests build modules by hand and
+run them without the checker. tests/programs/unreachable_*.epy holds
+a program per branch that the checker rejects, with
+rejected_missing_clause.epy for the clause_for branch; test_runtime.py
+runs each against its .expected, so a branch the checker stops
+rejecting shows up there, while a branch without a program does not.
 The cases the checker does not see are runtime-only, and
 tests/programs/runtime_*.epy reaches each: a read, an append, or a
 call on a name whose assignment comes earlier in the source but did
 not run, because it sits in a loop body that ran zero times or in
 one branch of an if (Environment.lookup and the OpCall branch of
-eval_expr); an operator, a range() argument, a list index, or an
-exception message whose type the checker could not see; integer
-division or modulo by zero; a list index out of range
-(list_index_error.epy); and a recursion that outgrows the C stack,
+eval_expr); an operator, a for, a len() or str() argument, a range()
+argument, a list index, or an exception message whose type the
+checker could not see; integer division or modulo by zero; a list
+index out of range (list_index_error.epy); and a recursion that
+outgrows the C stack,
 which RPython's stack check stops and run_body_callback or the entry
 point reports as "maximum recursion depth exceeded"
 (deep_recursion.epy). A read of a name an except clause deleted,

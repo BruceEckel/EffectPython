@@ -1,0 +1,2 @@
+exit 1
+error: str() needs an int, str, or bool, not list

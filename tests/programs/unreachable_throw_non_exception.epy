@@ -1,4 +1,4 @@
-# The runtime's "throw() needs an exception" (require_exception_value)
+# The runtime's "throw() needs an exception" (exception_value)
 # is unreachable where the checker knows the type: require_exception
 # rejects it.
 

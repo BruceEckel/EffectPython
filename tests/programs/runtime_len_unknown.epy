@@ -1,0 +1,10 @@
+# Runtime-only: an if leaves v with two types, so the checker cannot
+# hold len() to a list or str; builtin does.
+
+def main() -> int:
+    if 1 == 1:
+        v = 5
+    else:
+        v = [1]
+    print(len(v))
+    return 0

@@ -1,0 +1,10 @@
+# Runtime-only: an if leaves v with two types, so the checker cannot
+# hold str() to a scalar; builtin does.
+
+def main() -> int:
+    if 1 == 1:
+        v = [1]
+    else:
+        v = 1
+    print(str(v))
+    return 0

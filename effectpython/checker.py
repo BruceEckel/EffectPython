@@ -37,13 +37,25 @@ handler class name is the type of its instances, so a name holding
 one may be passed to handle() and its fields read, and an exception
 class name is the type of the name an except clause binds. The empty
 string stands for a type the checker cannot determine, and an unknown
-type matches anything. An operator whose operands both have known
-types must have a pair the interpreter supports (OPERATORS), so the
-runtime's "unsupported operand types" error is reached through an
-operand of unknown type. A name that two paths leave with two types
-is unknown (merge_types, below). For two lists the checker also
-requires one element type, which the runtime does not: it compares
-them and finds the elements unequal.
+type matches anything (matches). An operator whose operands both
+have known types must have a pair the interpreter supports
+(OPERATORS), so the runtime's "unsupported operand types" error is
+reached through an operand of unknown type. A name that two paths
+leave with two types is unknown (merge_types, below). For two lists
+the checker also requires one element type, which the runtime does
+not: it compares them and finds the elements unequal.
+
+A known type is the type the value has at runtime, with one
+exception: an unknown value handed to a typed slot, a parameter, a
+return, a field, a constructor argument, a resume(), an append, or
+an indexed assignment, is accepted by matches, and the receiver then
+holds the declared type for a value the checker never saw. A
+function that returns such a value to a caller who adds 1 to it
+reaches the runtime's operator error with both types known to the
+checker, and a handler instance that came that way can reach the
+runtime's handle() and field errors (interpreter.py lists them).
+Closing it means either rejecting an unknown value at every typed
+slot or checking the declared type at runtime; neither is done yet.
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -55,14 +67,18 @@ handle whose body qualifies and whose clauses each qualify or end by
 resuming it. A loop never qualifies, so a function that returns from
 inside one needs a return after it. A handler method's return type
 equals its operation's (check_signature), so the rule covers the
-value a perform() gets from a method.
+value a perform() gets from a method, with the exception above for a
+value of unknown type.
 
 A name holding [] that a statement hands to a parameter, a field, a
 return, or a resume() of type list[T] takes list[T], since the
 receiver may append to it (hand_over). One assigned to another name
-or placed in a list literal loses its type: the checker does not
-track which names share a list, so an append through either name
-would leave the other with a stale type.
+loses its type: the checker does not track which names share a list,
+so an append through either name would leave the other with a stale
+type. A list cannot be an element of a list (plan 1.9), which keeps
+xss[0] from being a second name for a list, and a literal with an
+element of unknown type has the unknown type, so nothing refines it
+as a [] is refined.
 
 A read of a name that nothing has bound earlier in the function's
 source is rejected, and so is a read of the name a try statement's
@@ -71,7 +87,9 @@ again, since the clause deletes its name when it ends
 (require_bound). The walk follows source order, as the typing does,
 and does not ask whether the clause would run. A clause that ends in
 a return is the exception: the code after the try cannot follow it,
-so the name keeps the type and the state it had before. An effect
+so the name keeps the type and the state it had before, while the
+try's own finally suite, which does follow it, sees the name unbound
+(check_try). An effect
 clause (except E.op as eff) leaves its name as the runtime does
 (check_effect_clause). After the handle statement the name is
 unbound when nothing bound it before, and otherwise has the type it
@@ -93,7 +111,13 @@ the types at every statement boundary of its suite, the first
 included, since the exception may arrive after any statement
 (check_suite), and the code after the try sees the suite's end
 merged with the end of every clause that does not return
-(check_try). A handle statement's clauses start from every boundary
+(check_try), while a finally suite is checked from every boundary of
+the suite and of each clause, since it runs on every path out of
+them, and then from the continuing paths for the code after it. A
+for over a list binds its name on the path through the body alone,
+so afterwards the name has the element type merged with the type it
+had before (check_loop). A handle statement's clauses start from
+every boundary
 of its body, where a perform() may suspend it, and since the body
 runs on from any boundary of a clause where resume() may stand, the
 body and clauses are checked again from the entry widened with those
@@ -631,10 +655,15 @@ class Checker(object):
 
     def check_loop(self, name, element, body, scope, effects):
         """The name a for binds is an assignment for the source-order
-        rule: it stays bound after the loop."""
+        rule: it stays bound after the loop. Over an empty list it
+        keeps the value it had before, so afterwards it has that type
+        merged with the element type."""
+        old_type = scope.types.get(name, None)
         scope.types[name] = element
         self.rebind(scope, name)
         self.check_loop_body(None, body, scope, effects)
+        if old_type is not None:
+            scope.types[name] = merged(old_type, scope.types[name])
 
     def check_loop_body(self, test, body, scope, effects):
         """Check the test and the body from the types before the loop,
@@ -764,13 +793,20 @@ class Checker(object):
         finally suite's effects join unconditionally (plan 1.8).
 
         A clause may start after any statement of the suite, so it
-        starts from the types before the suite merged with the types
-        after it, and the code after the try may follow the suite or
-        any clause that does not end in a return, so it sees those
-        paths merged."""
+        starts from the types at every boundary of the suite, and the
+        code after the try may follow the suite or any clause that
+        does not end in a return, so it sees those paths merged. The
+        finally suite may follow any boundary of the suite or of a
+        clause, a return or an exception included, so it is checked
+        first from all of them merged, with the name of a clause that
+        returned unbound, since exec_clauses deleted it, and then
+        again from the paths that continue, for the code after it."""
         body_effects = EffectSet()
         entry = self.check_suite(stmt.body, scope, body_effects)
         after = scope.types
+        into_finally = entry.copy()
+        absorb(into_finally, after)
+        returned = []
         caught = {}
         for clause in stmt.clauses:
             if (clause.name != EXCEPTION
@@ -780,26 +816,41 @@ class Checker(object):
                     "'%s' is not an exception class" % clause.name)
             caught[clause.name] = True
             scope.types = entry.copy()
-            if clause.binding is None:
-                self.check_block(clause.body, scope, effects)
+            boundaries = self.check_suite(clause.body, scope, effects,
+                                          None, None, clause)
+            if ends_in_return(clause.body):
+                if clause.binding is not None:
+                    returned.append(clause.binding)
             else:
-                self.check_named_clause(clause, scope, effects)
-            if not ends_in_return(clause.body):
                 after = merge_types(after, scope.types)
-        scope.types = after
+            absorb(into_finally, boundaries)
         for name in body_effects.names:
             if name in self.exceptions and (name in caught
                                             or EXCEPTION in caught):
                 continue
             effects.add(name, body_effects.linenos[name])
-        self.check_block(stmt.finalbody, scope, effects)
+        if len(stmt.finalbody) > 0:
+            scope.types = into_finally
+            bound = []
+            for name in returned:
+                if name not in scope.unbound:
+                    bound.append(name)
+                    scope.unbound[name] = True
+            self.check_block(stmt.finalbody, scope, effects)
+            for name in bound:
+                del scope.unbound[name]
+            scope.types = after
+            self.check_block(stmt.finalbody, scope, effects)
+        else:
+            scope.types = after
 
     def check_named_clause(self, clause, scope, effects):
         """Check a clause with its name typed as the class it catches.
         Afterwards the name is unbound, as Python 3 leaves it. A
         clause that ends in a return is the exception: no code after
         the try follows it, so the name gets back the type and the
-        state it had before the clause."""
+        state it had before the clause; check_try unbinds it again
+        while it checks the finally suite, which does follow."""
         name = clause.binding
         assert name is not None
         old_binding = scope.bindings.get(name, None)
@@ -820,22 +871,29 @@ class Checker(object):
         if was_unbound or not returns:
             scope.unbound[name] = True
 
-    def check_suite(self, stmts, scope, effects, binding=None, clause=None):
+    def check_suite(self, stmts, scope, effects, binding=None, clause=None,
+                    except_clause=None):
         """Check a suite and give the types at every statement boundary
         in it, the first included: where a try suite's exception may
         arrive, where a handle body's perform() may suspend it, or
         where a clause's resume() may return to the body. With a
-        binding the suite is an effect clause's, checked through
-        check_effect_clause, and its name is left as that leaves it."""
+        clause the suite is an effect clause's, checked through
+        check_effect_clause, and with an except_clause a try's, checked
+        through check_named_clause when it binds a name; the name is
+        left as those leave it."""
         acc = scope.types.copy()
         self.boundaries.append(acc)
-        if binding is None:
-            self.check_block(stmts, scope, effects)
-        else:
-            self.check_effect_clause(clause, binding, scope, effects)
-        self.boundaries.pop()
+        name = None
         if clause is not None:
             name = clause.binding
+            self.check_effect_clause(clause, binding, scope, effects)
+        elif except_clause is not None and except_clause.binding is not None:
+            name = except_clause.binding
+            self.check_named_clause(except_clause, scope, effects)
+        else:
+            self.check_block(stmts, scope, effects)
+        self.boundaries.pop()
+        if name is not None:
             if name in scope.types:
                 acc[name] = scope.types[name]
             elif name in acc:
@@ -987,15 +1045,23 @@ class Checker(object):
             return scope.types.get(expr.id, UNKNOWN)
         elif isinstance(expr, ast.ListLiteral):
             element = UNKNOWN
+            untyped = False
             for item in expr.elements:
                 actual = self.type_of(item, scope, effects)
-                self.hand_over(item, LIST, scope)
-                if element == UNKNOWN:
+                if is_list(actual):
+                    raise InvalidProgram(
+                        expr.lineno, "list elements must be int, str, or "
+                        "bool, not a list")
+                if actual == UNKNOWN:
+                    untyped = True
+                elif element == UNKNOWN:
                     element = actual
-                elif actual != UNKNOWN and actual != element:
+                elif actual != element:
                     raise InvalidProgram(
                         expr.lineno, "list elements must share a type: "
                         "%s and %s" % (element, actual))
+            if untyped:
+                return UNKNOWN
             if element == UNKNOWN:
                 return LIST
             return "list[%s]" % element

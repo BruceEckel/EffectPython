@@ -1399,3 +1399,53 @@ def test_rejects_a_name_whose_type_survives_every_boundary(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(body)
     assert info.value.msg == msg
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    x = "s"\n    for x in range(0):\n'
+    '        pass\n    print(x + 1)\n    return 0\n',
+    'def main() -> int / []:\n    for x in range(2):\n        pass\n'
+    '    print(x + 1)\n    return 0\n',
+    'class E(Exception): ...\ndef main() -> int / []:\n    x = 1\n'
+    '    try:\n        x = "s"\n        raise E()\n        x = 1\n'
+    '    except E:\n        pass\n    finally:\n        print(x + 1)\n'
+    '    return 0\n',
+    'class E(Exception): ...\ndef main() -> int / []:\n    x = 1\n'
+    '    try:\n        raise E()\n    except E:\n        x = "s"\n'
+    '        return 0\n    finally:\n        print(x + 1)\n'
+    '    return 0\n',
+    'def main() -> int / []:\n    if 1 == 1:\n        v = "a"\n'
+    '    else:\n        v = 1\n    xs = [v]\n    xs.append(1)\n'
+    '    print(xs[0] + 1)\n    return 0\n',
+    'def main() -> int / []:\n    if 1 == 1:\n        v = "a"\n'
+    '    else:\n        v = 1\n    xs = [v, 1]\n'
+    '    print(xs[0] + "a")\n    return 0\n',
+], ids=['for-zero-trips', 'for-unbound-before', 'finally-midsuite',
+        'finally-clause-returns', 'unknown-element-append',
+        'unknown-element-mixed'])
+def test_accepts_a_name_widened_by_a_loop_finally_or_literal(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def main() -> int / []:\n    x = 1\n    for x in range(2):\n'
+     '        pass\n    print(x + "a")\n    return 0\n',
+     'line 12: unsupported operand types for +: int and str'),
+    ('class E(Exception): ...\ndef main() -> int / []:\n    x = 1\n'
+     '    try:\n        print("s")\n    except E:\n        pass\n'
+     '    finally:\n        print(x + "a")\n    return 0\n',
+     'line 16: unsupported operand types for +: int and str'),
+    ('class E(Exception): ...\ndef main() -> int / []:\n    x = 1\n'
+     '    try:\n        raise E()\n    except E as x:\n'
+     '        return 0\n    finally:\n        print(x)\n',
+     "line 16: name 'x' is unbound after the except clause that "
+     "bound it"),
+    ('def main() -> int / []:\n    xs = [[]]\n    return 0\n',
+     'line 9: list elements must be int, str, or bool, not a list'),
+    ('def main() -> int / []:\n    ys = [1]\n    zs = [ys]\n'
+     '    return 0\n',
+     'line 10: list elements must be int, str, or bool, not a list'),
+], ids=['for-same-type', 'finally-every-path', 'finally-clause-name',
+        'nested-empty', 'nested-name'])
+def test_rejects_a_loop_name_finally_read_or_nested_list(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg

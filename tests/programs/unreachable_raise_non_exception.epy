@@ -1,4 +1,4 @@
-# The runtime's "raise needs an exception" (require_exception_value)
+# The runtime's "raise needs an exception" (exception_value)
 # is unreachable: check_raise rejects a value of a known other type.
 
 def main() -> int:

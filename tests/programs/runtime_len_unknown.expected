@@ -1,0 +1,2 @@
+exit 1
+error: len() needs a list or str, not int

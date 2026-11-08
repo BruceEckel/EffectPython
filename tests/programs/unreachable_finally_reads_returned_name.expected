@@ -1,0 +1,2 @@
+exit 1
+error: line 16: name 'x' is unbound after the except clause that bound it

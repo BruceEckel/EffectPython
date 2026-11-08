@@ -1,0 +1,11 @@
+# Runtime-only: a for over an empty range leaves x the str it held
+# before, where the loop would have made it an int. The checker
+# merges the two, so x is unknown and the operator passes; the
+# runtime finds the str.
+
+def main() -> int:
+    x = "s"
+    for x in range(0):
+        pass
+    print(x + 1)
+    return 0

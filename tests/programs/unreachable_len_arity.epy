@@ -1,0 +1,6 @@
+# The runtime's "len() takes 1 arguments" (builtin) is unreachable:
+# check_builtin rejects the call.
+
+def main() -> int:
+    print(len("a", "b"))
+    return 0

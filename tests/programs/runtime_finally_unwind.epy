@@ -1,0 +1,23 @@
+# Runtime-only: the clause abandons the body while it is suspended at
+# the perform with x a str, and the unwinding runs the finally. The
+# perform is a boundary of the suite, so the checker holds x unknown
+# in the finally; the runtime finds the str.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def get() -> int: ...
+
+def main() -> int:
+    x = 1
+    try:
+        with handle(Ask):
+            try:
+                x = "s"
+                perform(Ask.get())
+                x = 1
+            finally:
+                print(x + 1)
+    except Ask.get as eff:
+        pass
+    return 0
