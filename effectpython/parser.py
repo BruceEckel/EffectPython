@@ -45,9 +45,11 @@ class give a Try; a mix is an error.
 
 RPython requires every production to return one type, so every value on
 the parse stack is a BaseBox: a Token, a Node (ast_nodes makes Node a
-BaseBox), or one of the list boxes below for the sequences the grammar
-accumulates. Each production narrows its operands with isinstance
-asserts, which the annotator reads as type information.
+BaseBox), or one of the boxes below: list boxes for the sequences the
+grammar accumulates, and _Type, _Skipped, and _ClauseBox for a type, an
+item with no node, and a clause with its token. A production that
+builds a node narrows its operands with isinstance asserts, which the
+annotator reads as type information.
 """
 from rply import ParserGenerator
 from rply.token import BaseBox, Token

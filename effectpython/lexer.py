@@ -10,8 +10,9 @@ Keywords come out of the generated lexer as NAME tokens and are renamed
 in the same pass, so the keyword list lives in one place.
 
 The whole file is lexed before parsing because RPython's next() built-in
-propagates only StopIteration: a LexingError raised while the parser
-fetches a token would vanish in the translated binary (plan 2.1).
+propagates StopIteration and RuntimeError alone: a LexingError raised
+while the parser fetches a token would vanish in the translated binary
+(plan 2.1).
 TokenList gives the parser an iterator whose next() raises only
 StopIteration.
 """

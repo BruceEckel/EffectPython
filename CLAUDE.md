@@ -69,7 +69,7 @@ Do not pass `-O0`: it selects the refcounting GC, which cannot combine with `--c
 - A target that uses `rstacklet` links `rvmprof.c`, which fails in gcc unless a function decorated with
   `rvmprof.vmprof_execute_code` is reachable from the entry point, guarded by a condition the backend cannot fold.
   The stub in `targeteffectpython.py` does this; copy it to any new target.
-- rply's parser fetches tokens with the `next()` built-in, and RPython propagates only `StopIteration` from it,
+- rply's parser fetches tokens with the `next()` built-in, and RPython propagates `StopIteration` and `RuntimeError` alone from it,
   so a `LexingError` raised inside the lexer stream vanishes in the translated binary.
   Lex the whole file into a token list first, catching `LexingError` around direct `stream.next()` calls,
   and feed the parser an iterator over that list.

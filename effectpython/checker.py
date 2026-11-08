@@ -39,11 +39,16 @@ class name is the type of the name an except clause binds. The empty
 string stands for a type the checker cannot determine, and an unknown
 type matches anything. An operator whose operands both have known
 types must have a pair the interpreter supports (OPERATORS), so the
-runtime's "unsupported operand types" error is reached only through
-an operand of unknown type. A name an if leaves with two types is one
-such operand (check_if). For two lists the checker also requires one
-element type, which the runtime does not: it compares them and finds
-the elements unequal.
+runtime's "unsupported operand types" error is reached through an
+operand of unknown type, or through a known type that is wrong. A
+name an if leaves with two types is unknown (check_if). A known type
+is wrong where the inference is loose, as a verification pass listed
+on 2026-11-07: a return value is not checked against the declared
+return type, the types a loop body or a try suite assigns are not
+merged with the types before them, and a [] is refined by the name
+appended to and not by other names holding the same list. For two
+lists the checker also requires one element type, which the runtime
+does not: it compares them and finds the elements unequal.
 
 A read of a name that nothing has bound earlier in the function's
 source is rejected, and so is a read of the name a try statement's
@@ -627,9 +632,9 @@ class Checker(object):
         old_type = scope.types.get(name, None)
         old_binding = scope.bindings.get(name, None)
         was_unbound = name in scope.unbound
+        self.rebind(scope, name)
         scope.bindings[name] = binding
         scope.types[name] = UNKNOWN
-        self.rebind(scope, name)
         self.check_block(clause.body, scope, effects)
         if old_type is None:
             del scope.types[name]
@@ -928,8 +933,12 @@ class Checker(object):
                     (i + 1, what, param_types[i], actual))
 
     def rebind(self, scope, name):
+        """An assignment or a loop binding gives the name a value that
+        is no clause binding, whatever it held before."""
         if name in scope.unbound:
             del scope.unbound[name]
+        if name in scope.bindings:
+            del scope.bindings[name]
 
     def require_bound(self, scope, name, lineno):
         """A read needs a parameter, an assignment, or a clause that
