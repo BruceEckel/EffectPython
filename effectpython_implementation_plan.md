@@ -762,9 +762,9 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
 *   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
-    *   `from effectpython import <names>` (accepted and ignored)
+    *   `from <module> import <names>`, accepted and ignored whatever the module
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
-    *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <literal>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; Milestone 5, 2026-10-31)
+    *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <int or str literal, or [] for a list field>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; Milestone 5, 2026-10-31)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -779,7 +779,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `try: <suite> except <Name> [as <name>]: <suite>`, a `Try` node with one `ExceptClause` per clause; one production covers this and the `handle` form above, and the action tells them apart by the clauses (1.6; Milestone 6, 2026-11-06)
     *   `finally: <suite>` after the clauses of either `try` form, or after a `try` suite with no clauses, filling `Try.finalbody`; on effect clauses the `Handle` is wrapped in a clause-less `Try` (1.8; Milestone 8, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
-*   **Expressions:** Integer/string literals, `True` and `False` (a `BoolLiteral`, added 2026-11-06, which `==` and `!=` compare), variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31). Milestone 9 adds list literals `[<exprs>]`, indexing `<expr>[<expr>]` (an `Index`), a method call on an expression `<expr>.<name>(<args>)` (a `MethodCall`; on a name it is the `OpCall` above), the built-in calls `len(...)`, `str(...)`, and `range(...)`, and a unary minus folded into the literal it negates or into `0 - x`; attribute reads, attribute calls, and indexing are postfix forms on an expression, with a name required on the left of a dot (1.9; Milestone 9, 2026-11-07).
+*   **Expressions:** Integer/string literals, `True` and `False` (a `BoolLiteral`, added 2026-11-06, which `==` and `!=` compare), variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31). Milestone 9 adds list literals `[<exprs>]`, indexing `<expr>[<expr>]` (an `Index`), a method call on an expression `<expr>.<name>(<args>)` (a `MethodCall`; on a name it is the `OpCall` above), the built-in calls `len(...)`, `str(...)`, and `range(...)`, and a unary minus folded into the literal it negates or into `0 - x`; attribute reads, attribute calls, and indexing are postfix forms on an expression, with a name required on the left of an attribute read (1.9; Milestone 9, 2026-11-07).
 *   **Types:** a parameter, return, or field type is a name or `list[int]`, `list[str]`, or `list[bool]`, which the parser reads into one string (1.9; Milestone 9, 2026-11-07).
 
 Two constraints on the lexer, found when translating `experiments/rply_addition.py` (2026-10-28), which confirmed that `rply` 0.7.8 translates with this toolchain:
@@ -791,27 +791,35 @@ Two constraints on the lexer, found when translating `experiments/rply_addition.
 The static analyzer runs in three passes over the AST before execution:
 
 1.  **Pass 1 — Effect & Function Signature Collection:**
-    *   Collects all `Effect` subclasses and their declared operations (`op_name -> (param_names, arg_types, return_type)`).
+    *   Collects all `Effect` subclasses and their declared operations (`op_name -> (param_names, arg_types, return_type, row)`, the row added in 1.7).
+    *   Collects the exception classes (1.6) and the handler classes (1.5), and checks each handler class against its effect: one method per operation, with the operation's parameters after `self` and its return type (Milestone 5, 2026-10-31).
     *   Collects all function signatures (`func_name -> (param_types, return_type, declared_effect_row)`).
     *   Allows recursive and mutually recursive functions by seeding the symbol table from explicit annotations before checking function bodies.
 2.  **Pass 2 — Intra-Procedural Effect Verification:**
-    *   For each function body, computes the active `inferred_effects: set[str]` of each AST node bottom-up:
+    *   For each function body, and from Milestone 5 each handler method body, computes the active `inferred_effects: set[str]` of each AST node bottom-up:
         *   `PerformNode(Effect.op, args)`: produces `{Effect}` plus the classes in `Effect.op`'s row (1.7; Milestone 7, 2026-11-06), verifies `args` match `Effect.op`'s parameter types, and types the `perform` expression with `Effect.op`'s return type.
         *   `ThrowNode(binding, expr)`: produces nothing; requires `binding` to be a clause binding and `expr`'s type to be an exception class in the binding's operation's row (1.7; Milestone 7, 2026-11-06).
         *   `Name`: a read needs a parameter, an assignment, or a clause that bound the name earlier in the function's source, else "name 'x' is not defined" at the read's line, the runtime's message (added 2026-11-06); the walk is in source order, so a read before an assignment later in a loop body is rejected, and an assignment in one branch of an `if` satisfies a read after the `if`.
-        *   `BinOp` and `Compare`: when both operand types are known, the pair must be one the interpreter supports (`int` with every operator, `str` with `+`, `==`, and `!=`, `bool` with `==` and `!=`), else "unsupported operand types for +: str and int" at the expression's line, the runtime's message moved to the checker (added 2026-11-06); an operand of unknown type passes, and the runtime keeps the check for that case.
+        *   `BinOp` and `Compare`: when both operand types are known, the pair must be one the interpreter supports (`int` with every operator, `str` with `+`, `==`, and `!=`, `bool` with `==` and `!=`), else "unsupported operand types for +: str and int" at the expression's line, the runtime's message moved to the checker (added 2026-11-06), except that for a list operand the checker names the element type, as in `list[int]`, where the runtime says `list`; an operand of unknown type passes, and the runtime keeps the check for that case.
         *   `CallNode(callee, args)`: looks up `callee` in the function table and unions `callee.declared_effect_row` into the current scope's `inferred_effects`.
         *   `HandleNode(handled_effects, body, clauses)`:
             1. Verifies that for every `E` in `handled_effects`, `clauses` provide an `except E.op as eff:` clause for **every** operation declared on `E` (exhaustiveness check).
             2. Types `eff.<param>` inside each clause from `E.op`'s parameter names and types, and verifies that `eff.resume(val)` is called with a `val` matching `E.op`'s return type.
             3. Computes the net effect of the `HandleNode` as:
                $$\text{Effects}(\text{HandleNode}) = (\text{Effects}(\text{body}) \setminus \text{handled\_effects}) \cup \bigcup_{c \in \text{clauses}} \text{Effects}(c)$$
+               Since Milestone 5 (`check_handle` and `HandlerInfo.rows`), the body's effects also lose every effect a handler instance or constructor call fulfills.
+               The net effect then gains the union of the fulfilling handler classes' method rows, each method's row less the classes its operation's own row declares,
+               and the effects of the constructor arguments.
         *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, 2026-11-06); a `finalbody` unions its effects unconditionally (1.8; Milestone 8, 2026-11-06).
+        *   `IfNode` (`check_if`, 2026-11-07): each branch starts from the types before the `if`.
+            Afterwards a name the branches leave with two types, or that one branch alone binds, has the unknown type,
+            and a `[]` that one branch refined to `list[T]` keeps the refinement.
+            An effect clause's name is unbound after the `handle` statement unless it was bound before, in which case its earlier type comes back (`check_effect_clause`, 2026-11-07).
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   Lists (1.9; Milestone 9, 2026-11-07): a `ListLiteral` has the type `list[T]` of its elements, which must share one type, or the element-less `list` when it is empty, which `matches` accepts for any list type; `Index` has the element type and needs an `int` index; `IndexAssign` and `append` need a value of the element type, and a name holding `[]` takes the element type of its first `append`; `len()` of a list or `str` is `int`, `str()` of a scalar is `str`, and `range()` outside a `for` is rejected; `For` binds its name to the iterable's element type and `ForRange` to `int`, each an assignment for the `Name` rule, and both union the suite's effects; `==` and `!=` are the operators of a list type; and `len`, `str`, and `range` join `print` as names a function cannot take.
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
 3.  **Pass 3 — Entrypoint Verification:**
-    *   Verifies that `main()` exists and its `declared_effect_row` is empty (`[]`).
+    *   Verifies that `main()` exists, takes no parameters, and has an empty `declared_effect_row` (`[]`).
 
 ---
 
@@ -820,7 +828,7 @@ The static analyzer runs in three passes over the AST before execution:
 RPython is a statically typed subset of Python 2 that compiles to C. The interpreter cannot pass untyped Python objects around; it requires a boxed object hierarchy, and since a stacklet switch carries no value (3.2), a mailbox object to transfer data across switches.
 
 ### 3.1 Boxed Runtime Value Hierarchy (`W_Root`)
-All runtime values inherit from a single base class `W_Root` so `eval_ast` has a uniform RPython return type:
+All runtime values inherit from a single base class `W_Root` so `eval_expr` has a uniform RPython return type:
 
 ```python
 class W_Root(object):
@@ -867,7 +875,7 @@ class W_EffBinding(W_Root):
 ```
 
 `eff.path` resolves through the operation's declared parameter names: the interpreter looks up `"Effect.op"` in an operations table it builds from the module's effect declarations and indexes `args_w` by the parameter's position. In `model.py` every class declares `_attrs_`, which this sketch omits, and the module also holds the prebuilt `w_None`, `w_True`, and `w_False`.
-A `W_List` is the one mutable value: `xs.append(v)` and `xs[i] = v` change the list every holder sees, and `print(xs)` writes each element's `repr()`, so a `str` element comes out single-quoted as Python prints it.
+A `W_List` is shared by reference and mutable, like a handler instance's fields: `xs.append(v)` and `xs[i] = v` change the list every holder sees, and `print(xs)` writes each element's `repr()`, so a `str` element comes out single-quoted as Python prints it.
 
 ### 3.2 How `rlib.rstacklet` Works
 `rpython.rlib.rstacklet` is the RPython-level primitive under PyPy's app-level `continulet`; there is no `continulet` class at the RPython level. The module exposes one class, `StackletThread`, with four methods:
@@ -974,7 +982,11 @@ sequenceDiagram
         It then sets `frame.status = STATUS_COMPLETED` and returns `frame.h_handler`, which finishes the stacklet.
     *   `new()` returns on the handler side either when the body first performs (with a live handle) or when it finishes (with an empty handle).
         Call `dispatch(frame, h)` (step 3) inside a `try`/`finally` that pops the top of `handler_stack` when `frame.status == STATUS_COMPLETED`:
-        a body that completed has put the frame back on top (step 2), and a body a clause abandoned left it hidden, so nothing is popped.
+        a body that completed has put the frame back on top (step 2).
+        Since 1.8 an abandoned body is unwound to completion too:
+        `perform` restores the hidden frames before it raises the `Unwind` (step 5),
+        the body finishes with `STATUS_COMPLETED`, and the frame is popped.
+        (Before 1.8, a body a clause abandoned left the frame hidden, and nothing was popped.)
         The `finally` runs whether `dispatch` returned or raised.
 2.  **Executing `perform(Effect.op(*args))` (`Interpreter.perform`):**
     *   The parser folds `perform(Effect.op(...))` into one `Perform` node,
@@ -990,7 +1002,8 @@ sequenceDiagram
         which is either `new()` in step 1 or `switch()` inside `switch_into` (step 4).
         The assignment stores the fresh handle of whichever side resumes the body.
     *   When the switch returns, `handler_stack.extend(frame.saved_frames)`, reset `saved_frames` to `[]`,
-        raise a `RaisedException` for `frame.resume_exception` if it is set (1.7), and otherwise return `frame.resume_value`, clearing the field.
+        take and clear `frame.resume_unwind` and raise it if it is set (1.8),
+        then raise a `RaisedException` for `frame.resume_exception` if it is set (1.7), and otherwise return `frame.resume_value`, clearing the field.
 3.  **Dispatching the Handler Clause or Method (`Interpreter.dispatch(frame, h)`), a loop:**
     *   While `h` is not empty, the body is suspended and `frame.pending_payload` holds the performed operation.
     *   If the payload's effect is a key of `frame.instances_w`, a handler method answers it (1.5):
@@ -1051,8 +1064,13 @@ sequenceDiagram
         the `try` around the clause or method in `dispatch` (step 3) catches the signal, unwinds the body through a nested `dispatch` when `eff.h_body` is still live,
         and re-raises it, so the exception or `return` continues from the `handle` statement after the body's `finally` suites have run.
         A method's exception whose class the row names is thrown into the body instead (step 3).
-    *   An outer clause's `Unwind` reaches an inner frame's loop through its body's `pending_error`, or through a perform in its clause (both when the inner body's stacklet finishes);
-        the loop re-raises it, since the `Unwind` names another frame, and the signal climbs to the frame that began it, unwinding each body on the way.
+    *   An outer clause's `Unwind` reaches an inner frame's `dispatch` by one of two paths.
+        Through the inner body's `pending_error`, it arrives when the inner body's stacklet finishes,
+        and the loop re-raises it, since the `Unwind` names another frame.
+        Through a perform in the inner clause, the outer `Unwind` is raised at that perform while the inner body is still suspended.
+        The inner `dispatch`'s `except (ControlSignal, EffectError)` catches it and unwinds the inner body with the inner frame's own `Unwind`, which a nested `dispatch` swallows;
+        it then re-raises the outer one without looking at which frame it names.
+        Either way the signal climbs to the frame that began it, unwinding each body on the way.
     *   `StackletThread` has no `destroy` method, and none is needed: every body's stacklet runs to completion, since an abandoned one is unwound.
         The `shadowstack` backend would still free a stacklet from its GC destructor when the handle object became unreachable.
         Before 1.8, abandonment dropped the body's stacklet that way, with its `W_EffBinding`, and no statement of the body ran again.
@@ -1348,3 +1366,7 @@ EffectPython/
         *   `loop_exits.epy`: `break` and `continue` in a `while`, a `for` over a list, and a `for` over `range()`; a `break` leaves the innermost loop alone; a `finally` inside the loop runs on either; the loop name keeps the element the `break` saw; a `break` in a called function's loop leaves the caller's loop alone.
         *   `break_in_handled_body.epy`: a `break` in a handled body ends the loop around the `handle` statement; a `break` in a clause abandons the suspended body, whose `finally` runs, and then ends the loop.
         *   Reject `break` and `continue` outside a loop, including in a handler method whose installing function loops. Accept them in a `while`, a `for`, an `if` under a loop, a `try`/`finally` under a loop, an inner loop, and an effect clause under a loop.
+    *   *Checker gaps closed 2026-11-07*, found by a verification pass over the docstrings and the plan after Milestone 9.
+        `check_if` merges the branches of an `if` (2.2), where the checker had kept the type of the last assignment in source order and so let a name typed `str` in one branch and `int` in the other reach the runtime's operator error, a raise of a non-exception, a `handle()` of a non-instance, a missing field, and a missing handler, each from a program the checker accepted.
+        `check_effect_clause` leaves an effect clause's name as `answer_with_clause` does, where a read of `eff` after the `try` had passed the checker and failed in the binary.
+        The module docstrings of `interpreter.py`, `checker.py`, and `parser.py`, and sections 2.1, 2.2, 3.1, and 3.4, were corrected against the code in the same pass.

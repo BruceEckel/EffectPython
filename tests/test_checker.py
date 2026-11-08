@@ -1152,3 +1152,78 @@ def test_rejects_a_loop_exit_outside_a_loop(body, msg):
         'inner-loop', 'in-effect-clause'])
 def test_accepts_a_loop_exit_inside_a_loop(body):
     check_source(body)
+
+# --- if branches and effect clause bindings (Milestone 10) -------------------
+
+HX = ('class X(Effect):\n    def a() -> int: ...\n'
+      'class HX(Handler[X]):\n    def a(self) -> int:\n        return 1\n')
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    x = "s"\n    if 1 == 1:\n'
+    '        x = "s"\n    else:\n        x = 1\n    print(x + 1)\n'
+    '    return 0\n',
+    'def main() -> int / []:\n    if True:\n        x = 1\n    else:\n'
+    '        x = 2\n    print(x + 1)\n    return 0\n',
+    'def main() -> int / []:\n    xs = []\n    if True:\n'
+    '        xs.append(1)\n    xs.append(2)\n    return 0\n',
+    'def main() -> int / []:\n    if True:\n        y = 5\n'
+    '    print(y)\n    return 0\n',
+], ids=['branches-differ', 'branches-agree', 'empty-list-refined',
+        'one-branch-binds'])
+def test_accepts_a_name_merged_after_an_if(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def main() -> int / []:\n    if 1 == 1:\n        x = 1\n    else:\n'
+     '        x = 2\n    print(x + "a")\n    return 0\n',
+     'line 13: unsupported operand types for +: int and str'),
+    ('class E(Exception): ...\nclass F(Exception): ...\n'
+     'def main() -> int / []:\n    x = E()\n    if 1 == 1:\n'
+     '        x = E()\n    else:\n        x = F()\n    try:\n'
+     '        raise x\n    except F as e:\n        pass\n    return 0\n',
+     'line 17: raise needs an exception, not a value of unknown type'),
+    (HX + 'def main() -> int / []:\n    h = 1\n    if 1 == 1:\n'
+     '        h = 1\n    else:\n        h = HX()\n'
+     '    with handle(h):\n        print(perform(X.a()))\n'
+     '    return 0\n',
+     "line 19: 'h' is not an effect or a handler instance"),
+    ('def main() -> int / []:\n    xs = []\n    if True:\n'
+     '        xs.append(1)\n    xs.append("a")\n    return 0\n',
+     'line 12: argument 1 of append() must be int, not str'),
+], ids=['branches-agree', 'raise-unknown', 'handle-unknown',
+        'empty-list-refined'])
+def test_rejects_a_name_merged_after_an_if(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+ASK = ('class Ask(Effect):\n    def ask(n: int) -> int: ...\n'
+       'def main() -> int / []:\n')
+
+ASKED = ('    try:\n        with handle(Ask):\n'
+         '            print(perform(Ask.ask(1)))\n'
+         '    except Ask.ask as eff:\n')
+
+@pytest.mark.parametrize('body', [
+    ASK + '    eff = 3\n' + ASKED + '        eff.resume(1)\n'
+    '    print(eff + 1)\n    return 0\n',
+    ASK + ASKED + '        eff.resume(1)\n    eff = 2\n'
+    '    print(eff)\n    return 0\n',
+    ASK + ASKED + '        print(eff.n)\n        eff.resume(1)\n'
+    '    return 0\n',
+], ids=['bound-before', 'assigned-after', 'read-in-clause'])
+def test_accepts_an_effect_clause_name_as_the_runtime_leaves_it(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    (ASK + ASKED + '        eff.resume(1)\n    print(eff)\n    return 0\n',
+     "line 16: name 'eff' is unbound after the except clause that "
+     "bound it"),
+    (ASK + '    eff = "s"\n' + ASKED + '        eff.resume(1)\n'
+     '    print(eff + 1)\n    return 0\n',
+     'line 17: unsupported operand types for +: str and int'),
+], ids=['fresh', 'bound-before'])
+def test_rejects_an_effect_clause_name_as_the_runtime_leaves_it(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg

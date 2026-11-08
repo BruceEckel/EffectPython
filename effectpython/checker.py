@@ -6,7 +6,7 @@ handler classes, and the function signatures, so a function body can
 call a function defined later or itself, and checks each handler
 class against the effect it fulfills: one method per operation with
 the operation's signature after self, and fields of type int or str
-(plan 1.5).
+(plan 1.5) or list[int], list[str], or list[bool] (plan 1.9).
 Pass 2 walks each function and method body and infers the effects it
 may perform: a perform() contributes its effect, a call contributes
 the callee's declared row, and a handle block removes the effects it
@@ -40,24 +40,43 @@ string stands for a type the checker cannot determine, and an unknown
 type matches anything. An operator whose operands both have known
 types must have a pair the interpreter supports (OPERATORS), so the
 runtime's "unsupported operand types" error is reached only through
-an operand of unknown type.
+an operand of unknown type. A name an if leaves with two types is one
+such operand (check_if). For two lists the checker also requires one
+element type, which the runtime does not: it compares them and finds
+the elements unequal.
 
 A read of a name that nothing has bound earlier in the function's
-source is rejected, and so is a read of the name an except clause
-bound, after the clause, until something binds it again, since the
-clause deletes its name when it ends (require_bound). The walk follows source order, as
-the typing does, and does not ask whether the clause would run. A
-clause that ends in a return is the exception: the code after the
-try cannot follow it, so the name keeps the type and the state it
+source is rejected, and so is a read of the name a try statement's
+except clause bound, after the clause, until something binds it
+again, since the clause deletes its name when it ends
+(require_bound). The walk follows source order, as the typing does,
+and does not ask whether the clause would run. A clause that ends in
+a return is the exception: the code after the try cannot follow it,
+so the name keeps the type and the state it had before. An effect
+clause (except E.op as eff) leaves its name as the runtime does
+(check_effect_clause). After the handle statement the name is
+unbound when nothing bound it before, and otherwise has the type it
 had before.
 
+Each branch of an if starts from the types before it (check_if).
+Afterwards a name the branches leave with two types, or that one
+branch alone binds, is unknown, while a [] that one branch refined
+to list[T] keeps the refinement (merged). A name one branch bound
+still counts as bound, since the source-order rule reads bindings,
+not paths.
+
 Lists (plan 1.9) are types like the others: "list[int]", "list[str]",
-and "list[bool]" are type names, and "list" is the type of [], an
-empty literal whose element type nothing fixes, which matches any
-list type as an unknown type matches anything (matches). A for over
-a list binds its name to the element type, and over range() to int.
-len(), str(), and range() are built-in names beside print, and a
-function cannot take one of them.
+and "list[bool]" are type names. "list" is the type of a literal
+whose element type nothing fixes: [], or one whose elements all have
+unknown types. It matches any list type as an unknown type matches
+anything (matches). A for over a list binds its name to the element
+type, and over range() to int. len(), str(), and range() are
+built-in names beside print, and a function cannot take one of them.
+
+A break or continue outside a loop of the same function is rejected
+with "'break' outside loop" or "'continue' not properly in loop"
+(plan 1.10). The count is loop_depth, which check_loop_body
+increments around every loop suite and check_function resets.
 
 The checker dispatches by isinstance over the ast_nodes classes, as the
 evaluator does, so adding a node means adding a branch in both.
@@ -96,6 +115,18 @@ def matches(actual, expected):
     if actual == UNKNOWN or expected == UNKNOWN or actual == expected:
         return True
     return actual == LIST and is_list(expected)
+
+def merged(a, b):
+    """The type a name has after an if whose branches left it with
+    types a and b: the one type, the list[T] that refines a [], or
+    unknown."""
+    if a == b:
+        return a
+    if a == LIST and is_list(b):
+        return b
+    if b == LIST and is_list(a):
+        return a
+    return UNKNOWN
 
 def ends_in_return(stmts):
     """Whether nothing after the enclosing statement can run once
@@ -137,7 +168,8 @@ class Scope(object):
 class HandlerInfo(object):
     """A handler class as Pass 1 records it: its fields in declaration
     order, with the count that a constructor call must supply, and the
-    union of its methods' effect rows."""
+    union of its methods' effect rows, each less the exception classes
+    its operation's row lets the handler throw."""
 
     def __init__(self, node):
         self.node = node
@@ -369,8 +401,7 @@ class Checker(object):
                 self.type_of(stmt.value, scope, effects)
         elif isinstance(stmt, ast.If):
             self.type_of(stmt.test, scope, effects)
-            self.check_block(stmt.body, scope, effects)
-            self.check_block(stmt.orelse, scope, effects)
+            self.check_if(stmt, scope, effects)
         elif isinstance(stmt, ast.While):
             self.type_of(stmt.test, scope, effects)
             self.check_loop_body(stmt.body, scope, effects)
@@ -424,6 +455,28 @@ class Checker(object):
             self.check_try(stmt, scope, effects)
         else:
             raise InvalidProgram(stmt.lineno, "unknown statement node")
+
+    def check_if(self, stmt, scope, effects):
+        """Each branch starts from the types before the if, and a name
+        the branches leave with two types, or that one branch alone
+        binds, is unknown afterwards: either branch may have run, so
+        the checker cannot hold a later use to one type. A name still
+        counts as bound after the if when one branch bound it, since
+        the source-order rule reads bindings, not paths."""
+        before = scope.types.copy()
+        self.check_block(stmt.body, scope, effects)
+        body_types = scope.types
+        scope.types = before
+        self.check_block(stmt.orelse, scope, effects)
+        for name in body_types:
+            if name in scope.types:
+                scope.types[name] = merged(body_types[name],
+                                           scope.types[name])
+            else:
+                scope.types[name] = UNKNOWN
+        for name in scope.types:
+            if name not in body_types:
+                scope.types[name] = UNKNOWN
 
     def check_loop(self, name, element, body, scope, effects):
         """The name a for binds is an assignment for the source-order
@@ -566,6 +619,30 @@ class Checker(object):
         if was_unbound or not returns:
             scope.unbound[name] = True
 
+    def check_effect_clause(self, clause, binding, scope, effects):
+        """Check the clause with its name bound to the operation, then
+        leave the name as answer_with_clause leaves it: what it held
+        before the clause, or unbound when it held nothing."""
+        name = clause.binding
+        old_type = scope.types.get(name, None)
+        old_binding = scope.bindings.get(name, None)
+        was_unbound = name in scope.unbound
+        scope.bindings[name] = binding
+        scope.types[name] = UNKNOWN
+        self.rebind(scope, name)
+        self.check_block(clause.body, scope, effects)
+        if old_type is None:
+            del scope.types[name]
+            scope.unbound[name] = True
+        else:
+            scope.types[name] = old_type
+        if old_binding is None:
+            del scope.bindings[name]
+        else:
+            scope.bindings[name] = old_binding
+        if was_unbound:
+            scope.unbound[name] = True
+
     def check_handle(self, stmt, scope, effects):
         """Sort the arguments into effects, which need clauses, and
         handlers, which fulfill their effect; then check the clauses
@@ -625,10 +702,8 @@ class Checker(object):
                 raise InvalidProgram(
                     clause.lineno, "duplicate clause for %s" % key)
             covered[key] = True
-            scope.bindings[clause.binding] = Binding(clause.effect, op)
-            scope.types[clause.binding] = UNKNOWN
-            self.rebind(scope, clause.binding)
-            self.check_block(clause.body, scope, effects)
+            self.check_effect_clause(clause, Binding(clause.effect, op),
+                                     scope, effects)
         missing = []
         for name in stmt.effects:
             for op in self.effects[name].keys():

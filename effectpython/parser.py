@@ -23,21 +23,25 @@ bare name is an effect or a handler instance (plan 1.5).
 
 Attribute reads, attribute calls, and indexing are postfix forms on
 an expression, as in Python's grammar, so self.entries.append(x)
-and collector.entries[0] parse; the action requires a name on the
-left of an attribute read and of an assignment target, where the
-dialect allows nothing else. One production reads every assignment,
-and the target's shape picks Assign, AttrAssign, or IndexAssign. A
-type is a name or list[name], a for whose iterable is a call to
-range becomes a ForRange, and a unary minus is folded into the
-literal it negates or into 0 - x (plan 1.9).
+and collector.entries[0] parse. attr_read requires a name on the
+left of an attribute read, and so of an attribute assignment, where
+the dialect allows nothing else. An index target may be any postfix
+expression, so f()[0] = 2 parses. One production reads every
+assignment, and the target's shape picks Assign, AttrAssign, or
+IndexAssign. A type is a name or list[name] whose element is int,
+str, or bool; a bare list is rejected, since it needs an element
+type. A for whose iterable is a call to range becomes a ForRange,
+and a unary minus is folded into the literal it negates or into
+0 - x (plan 1.9). break and continue are simple statements giving
+Break and Continue nodes (plan 1.10).
 
-One production reads every try statement, because separate ones for
-a handler installation and an ordinary try/except would conflict in
-the LALR tables: both begin TRY COLON NEWLINE INDENT, and with
-handle(...) is also a statement (plan 1.6). The action decides by
-the clauses. Clauses that name Effect.op around a single with
-handle(...) statement give a Handle; clauses that name a class give
-a Try; a mix is an error.
+One nonterminal, try_stmt, reads every try statement, because
+separate ones for a handler installation and an ordinary try/except
+would conflict in the LALR tables: both begin TRY COLON NEWLINE
+INDENT, and with handle(...) is also a statement (plan 1.6). The
+action decides by the clauses. Clauses that name Effect.op around a
+single with handle(...) statement give a Handle; clauses that name a
+class give a Try; a mix is an error.
 
 RPython requires every production to return one type, so every value on
 the parse stack is a BaseBox: a Token, a Node (ast_nodes makes Node a

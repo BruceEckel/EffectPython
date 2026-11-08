@@ -19,15 +19,18 @@ clause; eff.resume() stores the value and switches back. The body is a
 suite, so eff.resume() evaluates to None once the body finishes. An
 exception the body raises is stored in the frame and re-raised on the
 handler side inside the eff.resume() call that resumed it, or at the
-handle statement if the body never performed, so the rest of the
-clause does not run. A clause runs in the function's own environment
-with its binding defined for the clause's duration and removed
-afterwards, as Python does for `except ... as e`, so a clause that
-runs nested inside another clause's resume() cannot overwrite the
-outer clause's binding. A clause whose last statement is a resume()
-on its own binding does not nest: dispatch() switches into the body
-from its loop, so any number of sequential performs handled that way
-use constant stack.
+handle statement if the body never performed or was last resumed
+from the dispatch loop (a tail resume, a tail throw, or a handler
+method), so the rest of the clause does not run. A clause runs in the
+function's own environment with its binding defined for the clause's
+duration. Afterwards the binding is restored to its earlier value, or
+removed when it had none, which is not what Python does for
+`except ... as e`. The restore keeps a clause that runs nested inside
+another clause's resume() from overwriting the outer clause's
+binding. The checker mirrors this (check_effect_clause). A clause
+whose last statement is a resume() on its own binding does not nest:
+dispatch() switches into the body from its loop, so any number of
+sequential performs handled that way use constant stack.
 
 A handler class (plan 1.5) adds no mechanism to that. A handle
 statement evaluates its constructor calls and looks up its instance
@@ -47,12 +50,15 @@ meetings with the handlers follow from where the RPython exception
 travels. Raised in a handled body, it takes the path of any body
 error: through the frame to the handler side, and out of the handle
 statement or the enclosing resume(). Raised in a clause or a handler
-method, it leaves dispatch() and the handle statement with the body
-still suspended, so the body is abandoned as it is by a clause that
-does not resume. A Try inside the body sits on the body's stack
-slice, which the stacklet keeps across a perform, so it catches what
-the body raises after a resume. It does not catch what a clause or
-method raises, because that exception travels on the handler side.
+method, it leaves dispatch() and the handle statement after the body
+is unwound (plan 1.8, below), unless a method raises a class its
+operation declares, which is thrown into the body (plan 1.7, below).
+A Try inside the body sits on the body's stack slice, which the
+stacklet keeps across a perform, so it catches what the body raises
+after a resume. It does not catch what a clause or method raises,
+because that exception travels on the handler side, unless a method
+raises a class its operation declares, which plan 1.7 below delivers
+at the perform site.
 
 eff.throw(exc) (plan 1.7) is the second way to switch into the body:
 switch_into() stores the exception in the frame instead of a value,
@@ -103,28 +109,32 @@ number of arguments (check_args), a module without main()
 binding read where none is bound, an eff.<attr> naming no parameter,
 and the handler instance errors: a constructor call with too few or
 too many arguments (check_construction, in HandlerClass.construct),
-a field read or assigned on a name that holds no instance
-(require_instance, in Interpreter.instance), a field the class does
-not declare (require_field, in field_index), and a handle() argument
-that is not an instance or that fulfills an effect another argument
-fulfills (check_handle, in install); and the exception errors: a
-raise of a value that is not an exception (check_raise), an exception
-constructor call with more than a str message
-(check_exception_call, in construct_exception), and a
-RaisedException that reaches entry_point, since main()'s empty row
-makes the checker reject an exception nobody catches; and an operator
-on operands of the wrong types where the checker knows both types
-(check_operands, in binop and compare); and the list errors on a
-value the checker typed: a subscript, an append, or a for on a value
-that is not a list (list_value), a non-integer index (list_index), a
-method other than append (list_method), and a built-in with the
-wrong argument (builtin), plus range() outside a for (call). They
-stay because the unit tests build modules by hand and run them
-without the checker. The cases the checker does not see remain
-runtime-only: a read of a name whose assignment comes later in the
-source, as in a loop body, or sits in one branch of an if, and a
-read of a name an except clause deleted where the read comes earlier
-in the source (require_bound follows source order), an operator
+a field assigned on a name that holds no instance (require_instance,
+in Interpreter.instance), a field the class does not declare
+(require_field, in field_index), and a handle() argument that is not
+an instance or that fulfills an effect another argument fulfills
+(check_handle, in install); and the exception errors: a raise of a
+value that is not an exception (check_raise), an exception
+constructor call with more than a str message where the checker knows
+the argument's type (check_exception_call, in construct_exception),
+and a RaisedException that reaches entry_point, since main()'s empty
+row makes the checker reject an exception nobody catches; and an
+operator on operands of the wrong types where the checker knows both
+types (check_operands, in binop and compare); and the list errors on
+a value the checker typed: a subscript, an append, or a for on a
+value that is not a list (list_value), a non-integer index
+(list_index), a method other than append (list_method), and a
+built-in with the wrong argument (builtin), plus range() outside a
+for (call). The claims hold where the checker knows the value's type;
+a name an if leaves with two types, or a [] nothing appended to, has
+the unknown type and reaches these branches as any untyped value does
+(check_if, 2026-11-07). The branches stay because the unit tests
+build modules by hand and run them without the checker. The cases the
+checker does not see remain runtime-only: a read of a name whose
+assignment comes earlier in the source but did not run, because it
+sits in a loop body that ran zero times or in one branch of an if,
+and a read of a name an except clause deleted where the read comes
+earlier in the source (require_bound follows source order), an operator
 applied to operands of the wrong types where one operand's type is
 unknown (the checker infers types only as far as argument checks
 need), integer division or modulo by zero, a list index out of
@@ -471,7 +481,7 @@ class Interpreter(object):
         that names its class or Exception, with the clause's name bound
         to the exception. The name is deleted after the clause, as
         Python 3 deletes it, so a value it held before the try does
-        not come back; dispatch() restores eff instead. A nested
+        not come back; answer_with_clause restores eff instead. A nested
         clause that binds the same name has deleted it by then.
         Without a matching clause the exception propagates. A
         ReturnSignal and a runtime error pass through (plan 1.6)."""
@@ -995,8 +1005,8 @@ def switch_value(expr):
     return expr.value
 
 def exception_value(w_value, what):
-    """The W_Exception a raise or a throw delivers; the checker makes
-    any other value unreachable."""
+    """The W_Exception a raise or a throw delivers; the checker rejects
+    any other value whose type it knows."""
     if not isinstance(w_value, W_Exception):
         raise EffectPythonRuntimeError(
             "%s needs an exception, not %s" % (what, type_name(w_value)))
