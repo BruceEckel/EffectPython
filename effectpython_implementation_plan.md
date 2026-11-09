@@ -1031,10 +1031,12 @@ The static analyzer runs in three passes over the AST before execution:
             and a `[]` that one path refined to `list[T]` keeps the refinement.
             The branches of an `if` are two such paths (`check_if`).
             A loop body is checked from the types before the loop, what it leaves at its end and at each `break` or `continue` is merged with them, and it is checked again from the merged types until nothing changes (`check_loop_body`), so a name the body gives another type is unknown after the loop, and unknown on the next pass over the body.
+            The name a `for` binds is bound to the element type at the start of every pass, as every iteration binds it, so what the body does to it does not reach the next pass.
             A `try`'s clauses start from the types at every statement boundary of its suite, the first included, since the exception may arrive after any statement (`check_suite`), and the code after the `try` sees the suite's end merged with the end of every clause that does not return (`check_try`);
             a `finally` suite is checked from every boundary of the suite and of each clause, a return or an exception included and with the name of a clause that returned unbound, and then from the continuing paths for the code after it;
             a `for` binds its name on the path through the body alone, so afterwards the name has the element type merged with the type it had before (`check_loop`);
-            a `handle` statement's clauses start from every boundary of its body, where a `perform()` may suspend it, and `check_handle` checks the body and clauses again from the entry widened with every boundary of each clause, where a `resume()` may stand, until it is stable (`check_handle_suites` makes one pass).
+            a `handle` statement's clauses start from every boundary of its body, where a `perform()` may suspend it, and `check_handle` checks the body and clauses again from the entry widened with the types the clauses gave the names they retyped (`Scope.written`) and with the names they left unbound, until it is stable (`check_handle_suites` makes one pass);
+            the body's own end state is not fed back, since a `resume()` continues the body where it stopped, and a clause's retyping applies at the body's entry rather than at its performs, so a read before the first `perform()` is held to the widened type too (settled 2026-11-08, after a verification pass found the entry widened with the body's own end).
             The first pass over a loop or a handled body uses the types before it, so a statement there that is right only through a later reassignment, or a clause's, is rejected on that pass.
             An effect clause's name is unbound after the `handle` statement unless it was bound before, in which case its earlier type comes back (`check_effect_clause`, 2026-11-07).
         *   `Return` (`check_return`, 2026-11-08): the value must match the function's declared return type, and a bare `return` has the type `None`, as "function 'f' must return int, not str".
@@ -1610,6 +1612,11 @@ EffectPython/
         `check_loop_body`, `check_try`, and `check_handle` merge the types the paths leave, at a loop body's end and its `break` and `continue` statements and at every statement boundary of a `try` suite, a handled body, and an effect clause (`check_suite`), and check a loop body or a handled body again from the merged types;
         `hand_over` types a `[]` by the `list[T]` it is handed to and drops the type of one handed to another name.
         `tests/programs/unreachable_*.epy` holds a program per runtime error branch the checker makes unreachable, and `runtime_*.epy` one per runtime-only error, so a branch the checker stops rejecting fails in `test_runtime.py`; a branch without a program would not, so the list in `interpreter.py`'s docstring is checked by reading.
+    *   *Second passes corrected 2026-11-08*, after a fifth verification pass, this one over what a second pass over a suite sees, with 90 probes.
+        A `for` name is bound to the element type at the start of every pass (`bind_element`), where the body's rebinding or unbinding of it had reached the next pass;
+        the second check of a `finally` starts from the bound names the continuing paths left, where a name the first check unbound had stayed unbound, and a `finally` that rebinds the name of a clause that returned no longer crashes the checker;
+        `check_handle` widens the entry with the names the clauses retyped (`Scope.written`) or unbound alone, where the body's own end had been fed back and a rebinding late in a handled body had failed a read early in it;
+        and a store into a dict says "the dict holds int" rather than "the list holds int".
 
 11. **Milestone 11: `and`, `or`, `not`, and `elif` (1.11)**
     *   *Designed and implemented 2026-11-08*, the four open questions settled as 1.11 recommends: `bool` operands, `bool` tests for `if` and `while`, `elif` as nested `If` nodes, and `not` above the comparison as in Python.

@@ -120,22 +120,30 @@ nothing changes (check_loop_body), so the code after the loop sees a
 name the body gives another type as unknown, and a type the body can
 carry into a later iteration is unknown on the next pass over the
 body; a pass that unbinds a name is followed by another too, so a
-read earlier in the body meets the unbound name (same_names). The name a for binds is the exception to the one-path rule:
-afterwards it has the element type merged with the type it had
-before, or the element type alone when it had none, since an unbound
-name fails at runtime whatever its type (check_loop). A try's
-clauses start from the types at every statement boundary of its
-suite, the first included, since the exception may arrive after any
-statement (check_suite), and the code after the try sees the suite's
-end merged with the end of every clause that does not return
-(check_try), while a finally suite is checked from every boundary of
-the suite and of each clause, since it runs on every path out of
-them, and then from the continuing paths for the code after it. A
-handle statement's clauses start from every boundary of its body,
-where a perform() may suspend it, and since the body runs on from
-any boundary of a clause where resume() may stand, the body and
-clauses are checked again from the entry widened with those until it
-is stable (check_handle, check_handle_suites).
+read earlier in the body meets the unbound name (same_names). The
+name a for binds is bound afresh to the element type at the start of
+every pass, as every iteration binds it, and is the exception to the
+one-path rule afterwards: it has the element type merged with the
+type it had before, or the element type alone when it had none,
+since an unbound name fails at runtime whatever its type
+(check_loop). A try's clauses start from the types at every
+statement boundary of its suite, the first included, since the
+exception may arrive after any statement (check_suite), and the code
+after the try sees the suite's end merged with the end of every
+clause that does not return (check_try), while a finally suite is
+checked from every boundary of the suite and of each clause, since
+it runs on every path out of them, and then from the continuing
+paths, types and bound names both, for the code after it. A handle
+statement's clauses start from every boundary of its body, where a
+perform() may suspend it, and the body runs on from any boundary of
+a clause where resume() may stand, so the body and clauses are
+checked again from the entry widened with the types the clauses gave
+the names they retyped (scope.written) and with the names they
+unbound, until it is stable; the body's own end state is not fed
+back, since a resume does not restart the body (check_handle,
+check_handle_suites). This places a clause's retyping at the body's
+entry rather than at its performs, so a read of the name before the
+first perform() is held to the widened type too.
 
 A break or continue outside a loop of the same function is rejected
 with "'break' outside loop" or "'continue' not properly in loop"
@@ -348,6 +356,13 @@ class Scope(object):
         self.types = {}     # variable name -> type name
         self.bindings = {}  # variable name -> Binding
         self.unbound = {}   # variable name -> True
+        self.written = {}   # variable name -> True, since the last reset
+
+    def set_type(self, name, type_name):
+        """Every retyping of a name goes through here, so check_handle
+        can tell which names a clause changed."""
+        self.types[name] = type_name
+        self.written[name] = True
 
 class HandlerInfo(object):
     """A handler class as Pass 1 records it: its fields in declaration
@@ -639,7 +654,7 @@ class Checker(object):
             actual = self.type_of(stmt.value, scope, effects)
             if self.hand_over(stmt.value, LIST, scope):
                 actual = UNKNOWN
-            scope.types[stmt.name] = actual
+            scope.set_type(stmt.name, actual)
             self.rebind(scope, stmt.name)
         elif isinstance(stmt, ast.AttrAssign):
             info = self.require_instance(scope, stmt.target, stmt.lineno)
@@ -708,19 +723,25 @@ class Checker(object):
         keeps the value it had before, so afterwards it has that type
         merged with the element type."""
         old_type = scope.types.get(name, None)
-        scope.types[name] = element
-        self.rebind(scope, name)
-        self.check_loop_body(None, body, scope, effects)
+        self.bind_element(scope, name, element)
+        self.check_loop_body(None, body, scope, effects, name, element)
         if old_type is not None:
             scope.types[name] = merged(old_type, scope.types[name])
 
-    def check_loop_body(self, test, body, scope, effects):
+    def bind_element(self, scope, name, element):
+        scope.set_type(name, element)
+        self.rebind(scope, name)
+
+    def check_loop_body(self, test, body, scope, effects, name=None,
+                        element=UNKNOWN):
         """Check the test and the body from the types before the loop,
         merge what the body left with them, and check again from the
         merged types until nothing changes, so the body is checked
         against the types a name can have on any iteration and the
         code after the loop sees a name the body gives another type as
-        unknown.
+        unknown. A for binds its name afresh on every iteration, so
+        each pass starts with the name bound to the element type,
+        whatever the body did to it.
         A break or continue may stand anywhere under a loop in the
         same function, a handle body or a clause included, since the
         runtime carries it out of a stacklet as it carries a return
@@ -731,6 +752,8 @@ class Checker(object):
         self.loop_exits.append(exits)
         while True:
             unbound = scope.unbound.copy()
+            if name is not None:
+                self.bind_element(scope, name, element)
             if test is not None:
                 self.require_bool(self.type_of(test, scope, effects),
                                   "while", test.lineno)
@@ -758,9 +781,9 @@ class Checker(object):
         if not is_empty(held):
             return False
         if not is_empty(expected) and matches(held, expected):
-            scope.types[expr.id] = expected
+            scope.set_type(expr.id, expected)
             return False
-        scope.types[expr.id] = UNKNOWN
+        scope.set_type(expr.id, UNKNOWN)
         return True
 
     def require_loop(self, stmt, msg):
@@ -803,14 +826,18 @@ class Checker(object):
         the dict type, as the first append gives a [] its type."""
         element = self.check_index(stmt.target, stmt.index, stmt.lineno,
                                    scope, effects)
+        kind = kind_of(self.type_of(stmt.target, scope, EffectSet()))
+        slot = "an element"
+        if kind == "dict":
+            slot = "a value"
         actual = self.type_of(stmt.value, scope, effects)
         self.require_known(stmt.value, actual, element,
-                           "an element of the list must be %s" % element,
+                           "%s of the %s must be %s" % (slot, kind, element),
                            stmt.lineno)
         if element != UNKNOWN and not matches(actual, element):
             raise InvalidProgram(
-                stmt.lineno, "the list holds %s; cannot assign %s" %
-                (element, actual))
+                stmt.lineno, "the %s holds %s; cannot assign %s" %
+                (kind, element, actual))
         if is_list(actual) or is_dict(actual):
             raise InvalidProgram(
                 stmt.lineno, "dict values must be int, str, or bool, not "
@@ -820,9 +847,9 @@ class Checker(object):
         if (isinstance(target, ast.Name)
                 and scope.types.get(target.id, UNKNOWN) == DICT):
             if actual == UNKNOWN:
-                scope.types[target.id] = UNKNOWN
+                scope.set_type(target.id, UNKNOWN)
             else:
-                scope.types[target.id] = "dict[str, %s]" % actual
+                scope.set_type(target.id, "dict[str, %s]" % actual)
 
     def check_dict_literal(self, expr, scope, effects):
         """{k: v, ...}: str keys and values of one scalar type; a value
@@ -898,9 +925,9 @@ class Checker(object):
                 "%s" % kind_of(actual))
         if type_name == LIST and isinstance(target, ast.Name):
             if actual == UNKNOWN:
-                scope.types[target.id] = UNKNOWN
+                scope.set_type(target.id, UNKNOWN)
             else:
-                scope.types[target.id] = "list[%s]" % actual
+                scope.set_type(target.id, "list[%s]" % actual)
         return "None"
 
     def check_raise(self, stmt, scope, effects):
@@ -944,7 +971,9 @@ class Checker(object):
         clause, a return or an exception included, so it is checked
         first from all of them merged, with the name of a clause that
         returned unbound, since exec_clauses deleted it, and then
-        again from the paths that continue, for the code after it."""
+        again from the paths that continue, for the code after it,
+        with the bound names those paths left, since the first check
+        may have unbound a name in the finally suite."""
         body_effects = EffectSet()
         entry = self.check_suite(stmt.body, scope, body_effects)
         after = scope.types
@@ -974,15 +1003,12 @@ class Checker(object):
                 continue
             effects.add(name, body_effects.linenos[name])
         if len(stmt.finalbody) > 0:
+            unbound = scope.unbound.copy()
             scope.types = into_finally
-            bound = []
             for name in returned:
-                if name not in scope.unbound:
-                    bound.append(name)
-                    scope.unbound[name] = True
+                scope.unbound[name] = True
             self.check_block(stmt.finalbody, scope, effects)
-            for name in bound:
-                del scope.unbound[name]
+            scope.unbound = unbound
             scope.types = after
             self.check_block(stmt.finalbody, scope, effects)
         else:
@@ -1002,7 +1028,7 @@ class Checker(object):
             del scope.bindings[name]
         was_unbound = name in scope.unbound
         old_type = scope.types.get(name, None)
-        scope.types[name] = clause.name
+        scope.set_type(name, clause.name)
         self.rebind(scope, name)
         self.check_block(clause.body, scope, effects)
         returns = ends_in_return(clause.body)
@@ -1054,7 +1080,7 @@ class Checker(object):
         was_unbound = name in scope.unbound
         self.rebind(scope, name)
         scope.bindings[name] = binding
-        scope.types[name] = UNKNOWN
+        scope.set_type(name, UNKNOWN)
         self.check_block(clause.body, scope, effects)
         if old_type is None:
             del scope.types[name]
@@ -1113,36 +1139,53 @@ class Checker(object):
                 effects.add(name, stmt.lineno)
         body_effects = EffectSet()
         entry = scope.types.copy()
+        entry_unbound = scope.unbound.copy()
         while True:
-            unbound = scope.unbound.copy()
+            changed = {}
+            carried = {}
             after = self.check_handle_suites(stmt, fulfilled, entry, scope,
-                                             effects, body_effects)
-            widened = merge_types(entry, after)
-            if (same_types(widened, entry)
-                    and same_names(scope.unbound, unbound)):
+                                             effects, body_effects, changed,
+                                             carried)
+            widened = entry.copy()
+            for name in changed:
+                if name in widened:
+                    widened[name] = merged(widened[name], changed[name])
+            stable = same_types(widened, entry)
+            for name in carried:
+                if name not in entry_unbound:
+                    entry_unbound[name] = True
+                    stable = False
+            if stable:
                 break
             entry = widened
+            scope.unbound = entry_unbound.copy()
         scope.types = after
         for name in body_effects.names:
             if name not in stmt.effects and name not in fulfilled:
                 effects.add(name, body_effects.linenos[name])
 
     def check_handle_suites(self, stmt, fulfilled, entry, scope, effects,
-                            body_effects):
+                            body_effects, changed, carried):
         """One check of the body and the clauses from the entry types,
         giving the types after the statement. A clause runs while the
         body is suspended at any of its performs, so it starts from the
         types at every boundary of the body, and the body runs on from
         whatever the clause assigned, which is why check_handle checks
-        again from the widened entry until it stops changing. The
-        statement ends after the body or after a clause, so its end
-        merges the body's end, the end of every clause that does not
-        end in a return (a resuming one included, since a resume that
-        is not the last statement returns into the clause), and every
-        clause boundary."""
+        again from an entry widened with what the clauses changed until
+        it stops changing: changed collects the names a clause retyped
+        (scope.written) with their type at any clause boundary, and
+        carried the names a clause left unbound. The body's own end
+        state is not fed back, since a resume continues the body where
+        it stopped and does not restart it. The statement ends after
+        the body or after a clause, so its end merges the body's end,
+        the end of every clause that does not end in a return (a
+        resuming one included, since a resume that is not the last
+        statement returns into the clause), and every clause
+        boundary."""
         scope.types = entry.copy()
         clause_entry = self.check_suite(stmt.body, scope, body_effects)
         after = scope.types
+        body_unbound = scope.unbound.copy()
         covered = {}
         for clause in stmt.clauses:
             if clause.effect in fulfilled:
@@ -1162,11 +1205,22 @@ class Checker(object):
                     clause.lineno, "duplicate clause for %s" % key)
             covered[key] = True
             scope.types = clause_entry.copy()
+            written = scope.written
+            scope.written = {}
             resumed = self.check_suite(clause.body, scope, effects,
                                        Binding(clause.effect, op), clause)
+            for name in scope.written:
+                if name in resumed:
+                    changed[name] = merged(changed.get(name, resumed[name]),
+                                           resumed[name])
+                written[name] = True
+            scope.written = written
             if not ends_in_return(clause.body):
                 after = merge_types(after, scope.types)
             after = merge_types(after, resumed)
+        for name in scope.unbound:
+            if name not in body_unbound:
+                carried[name] = True
         missing = []
         for name in stmt.effects:
             for op in self.effects[name].keys():

@@ -1623,7 +1623,7 @@ def test_accepts_dict_and_membership(body):
      'line 10: a dict key must be str, not int'),
     ('def main() -> int / []:\n    d = {"a": 1}\n    d["b"] = "s"\n'
      '    return 0\n',
-     'line 10: the list holds int; cannot assign str'),
+     'line 10: the dict holds int; cannot assign str'),
     ('def main() -> int / []:\n    d = {"a": "x"}\n    print(1 in d)\n'
      '    return 0\n',
      "line 10: 'd' holds str; cannot test int"),
@@ -1661,3 +1661,83 @@ def test_an_instance_name_survives_a_second_pass_over_its_suite():
             '    except X.a as eff:\n        eff.resume(2)\n'
             '    return 0\n')
     check_source(body)
+
+# --- second passes over a suite (verification pass of 2026-11-08) -----------
+
+PASSES = ('class Log(Effect):\n    def note(text: str) -> int: ...\n'
+          'class Boom(Exception): ...\n'
+          'def take_int(n: int) -> int:\n    return n\n')
+
+def rebound(pad):
+    return (pad + 'try:\n' + pad + '    raise Boom()\n' +
+            pad + 'except Boom as x:\n' + pad + '    pass\n')
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    for v in [1, 2]:\n'
+    '        take_int(v)\n        v = "s"\n    return 0\n',
+    'def take_str(s: str) -> int:\n    return 0\n'
+    'def main() -> int / []:\n    d = {"a": 1}\n    for k in d:\n'
+    '        take_str(k)\n        k = 3\n    return 0\n',
+    'def main() -> int / []:\n    for i in range(3):\n'
+    '        take_int(i)\n        i = "s"\n    return 0\n',
+    'def main() -> int / []:\n    for e in [1, 2]:\n'
+    '        take_int(e)\n        try:\n            raise Boom()\n'
+    '        except Boom as e:\n            pass\n    return 0\n',
+], ids=['list-retyped', 'dict-retyped', 'range-retyped', 'except-rebound'])
+def test_accepts_a_for_name_bound_afresh_on_every_pass(body):
+    check_source(PASSES + body)
+
+def test_a_second_check_of_finally_starts_from_the_continuing_paths():
+    body = ('def main() -> int / []:\n    x = 0\n    try:\n'
+            '        print(1)\n    finally:\n        take_int(x)\n'
+            '        try:\n            raise Boom()\n'
+            '        except Boom as x:\n            pass\n'
+            '    return 0\n')
+    check_source(PASSES + body)
+
+def test_a_finally_may_rebind_the_name_of_a_clause_that_returned():
+    body = ('def f() -> int:\n    try:\n        raise Boom()\n'
+            '    except Boom as e:\n        return 0\n'
+            '    finally:\n        e = 1\n    return 1\n'
+            'def main() -> int / []:\n    print(f())\n    return 0\n')
+    check_source(PASSES + body)
+
+def handled(body, clause):
+    return ('def main() -> int / []:\n    x = 0\n    try:\n'
+            '        with handle(Log):\n' + body +
+            '    except Log.note as eff:\n' + clause +
+            '        eff.resume(0)\n    return 0\n')
+
+NOTED = '            perform(Log.note("a"))\n            take_int(x)\n'
+
+NESTED = ('        try:\n            with handle(Ask):\n'
+          '                perform(Ask.get())\n'
+          '        except Ask.get as e:\n            x = "s"\n'
+          '            e.resume(1)\n')
+
+@pytest.mark.parametrize('body', [
+    PASSES + handled(NOTED + rebound(' ' * 12), ''),
+    PASSES + handled('            take_int(x)\n            x = "s"\n'
+                     '            perform(Log.note(x))\n', ''),
+    PASSES + handled(NOTED, '        x = 5\n'),
+], ids=['body-unbinds', 'body-retypes', 'clause-keeps-type'])
+def test_accepts_a_handled_body_whose_own_end_state_differs(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    (PASSES + handled(NOTED, '        x = "s"\n'),
+     "line 18: argument 1 of take_int() must be int, "
+     "but 'x' has no known type"),
+    (PASSES + handled(NOTED + '            x = "s"\n', '        x = "t"\n'),
+     "line 18: argument 1 of take_int() must be int, "
+     "but 'x' has no known type"),
+    (PASSES + handled(NOTED, rebound(' ' * 8)),
+     "line 18: name 'x' is unbound after the except clause that bound it"),
+    (PASSES + GET + handled(NOTED, NESTED),
+     "line 20: argument 1 of take_int() must be int, "
+     "but 'x' has no known type"),
+], ids=['clause-retypes', 'both-retype', 'clause-unbinds', 'nested-retypes'])
+def test_rejects_a_clause_change_fed_back_into_the_body(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
