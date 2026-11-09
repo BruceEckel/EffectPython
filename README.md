@@ -8,7 +8,7 @@ Handlers are delimited continuations built on RPython's `rstacklet`.
 
 This file is the short version.
 [TUTORIAL.md](TUTORIAL.md) walks through the dialect in eleven sections with a working program for each step,
-from a first effect and handler through nested handlers, handler classes, exceptions, `eff.throw()`, `finally`, and lists with the `for` loop;
+from a first effect and handler through nested handlers, handler classes, exceptions, `eff.throw()`, `finally`, and lists and dicts with the `for` loop;
 every listing in it is a file under `tests/programs/` with its recorded output beside it, and a test holds the two to each other.
 
 ```python
@@ -94,7 +94,7 @@ A method abandons the body by raising an exception, as the next section describe
 A method that performs effects of its own declares them in a `/ [...]` row,
 and those effects resolve to the handlers outside the `with` block.
 
-Fields are declared like dataclass fields, as `int` or `str` with an optional literal default, or as a `list[int]`, `list[str]`, or `list[bool]` defaulting to `[]`,
+Fields are declared like dataclass fields, as `int` or `str` with an optional literal default, as a `list[int]`, `list[str]`, or `list[bool]` defaulting to `[]`, or as a `dict[str, T]` defaulting to `{}`,
 and the constructor takes them positionally in declaration order.
 The instance lives for the whole block, so a field keeps its value from one operation to the next,
 and the code after the block can read it, as `fake.writes` does above.

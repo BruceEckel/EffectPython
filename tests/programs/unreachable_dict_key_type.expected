@@ -1,0 +1,2 @@
+exit 1
+error: line 7: a dict key must be str, not int

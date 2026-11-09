@@ -28,7 +28,7 @@ so a line number in an error message counts from the file's first line, a few li
 
 The dialect is a proof of concept, and you will notice what it lacks sooner than what it has.
 The values are `int`, `str`, and `bool`, with `True` and `False` as the literals, and a `list` of one of those three.
-There are no dicts or tuples, no string methods, no slicing, no chained comparisons, no `else` on a loop, and no `else` or bare `except:` on a `try`.
+There is a `dict` with `str` keys, and no tuples, no string methods, no slicing, no chained comparisons, no `else` on a loop, and no `else` or bare `except:` on a `try`.
 The built-ins are `print`, which takes any number of arguments and separates them with spaces, as Python does, `len`, and `str`.
 Every parameter and return type is written out, and the checker reads them.
 Those limits are the size of the project, not design choices, and they do not get in the way of the effects.
@@ -399,13 +399,12 @@ class Log(Effect):
     def note(text: str) -> int: ...
 
 class FakeFileIO(Handler[FileIO]):
+    files: dict[str, str] = {}
     def read(self, path: str) -> str:
-        if path == "settings.json":
-            return "debug = true"
-        elif path == "app.json":
-            return "name = demo"
+        if path in self.files:
+            return self.files[path]
         else:
-            return "contents of " + path
+            return "missing: " + path
     def write(self, path: str, content: str) -> int / [Log]:
         perform(Log.note("writing " + path))
         return 7
@@ -421,8 +420,10 @@ def load_app(name: str) -> int / [FileIO]:
 def main() -> int / []:
     try:
         with handle(Log):
-            with handle(FakeFileIO()):
+            fake = FakeFileIO({"settings.json": "debug = true"})
+            with handle(fake):
                 print(load_app("settings"))
+                print(load_app("other"))
     except Log.note as eff:
         print("log:", eff.text)
         eff.resume(0)
@@ -433,11 +434,15 @@ def main() -> int / []:
 debug = true
 log: writing settings
 7
+missing: other.json
+log: writing other
+7
 ```
 
 A method takes the operation's parameters after `self` and returns the operation's return type;
 returning is how a method resumes the body.
-`read` answers by path through an `if`/`elif`/`else` chain, which is how a fake handler stands in for a small filesystem.
+`read` answers from `files`, a `dict[str, str]` field the constructor fills, which is how a fake handler stands in for a small filesystem;
+`in` asks whether a key is present, and section 9 has the rest of the dict.
 `with handle(FakeFileIO()):` installs an instance for the block, and no `try` is needed,
 since the class supplies every clause.
 A method that performs effects of its own declares them in a row, as `write` declares `Log`,
@@ -481,7 +486,7 @@ def main() -> int / []:
 2
 ```
 
-A field is declared like a dataclass field, `int` or `str` with an optional default, or a list as section 9 shows,
+A field is declared like a dataclass field, `int` or `str` with an optional default, or a list or dict as section 9 shows,
 and the constructor takes the fields positionally.
 The instance outlives the block, so `main()` reads `fake.writes` after it.
 A `handle()` may mix handler instances with bare effect names, which still need their clauses:
@@ -815,6 +820,71 @@ and the name keeps the last element after the loop.
 A `perform` inside a loop suspends the loop where it is, and a clause that abandons the body leaves the loop as an exception would,
 running a `finally` inside the suite once, for the pass in progress, and then any `finally` around the loop;
 `tests/programs/perform_in_for.epy` shows both.
+
+A `dict` maps `str` keys to values of one type, written `dict[str, int]`, `dict[str, str]`, or `dict[str, bool]`:
+
+```python tests/programs/lookup.epy
+from effectpython import Effect, Handler, perform, handle
+
+class Count(Effect):
+    def seen(word: str) -> int: ...
+
+class Lookup(Effect):
+    def get(key: str) -> int: ...
+
+class Tally(Handler[Count]):
+    counts: dict[str, int] = {}
+    def seen(self, word: str) -> int:
+        if word in self.counts:
+            self.counts[word] = self.counts[word] + 1
+        else:
+            self.counts[word] = 1
+        return self.counts[word]
+
+def total(d: dict[str, int]) -> int:
+    n = 0
+    for k in d:
+        n = n + d[k]
+    return n
+
+def main() -> int / []:
+    squares = {}
+    for i in range(4):
+        squares[str(i)] = i * i
+    print(squares, len(squares), total(squares))
+    print("2" in squares, "9" in squares, "9" not in squares)
+    tally = Tally()
+    with handle(tally):
+        for word in ["a", "b", "a", "c", "a"]:
+            perform(Count.seen(word))
+    print(tally.counts, tally.counts["a"])
+    table = {"x": 1}
+    try:
+        with handle(Lookup):
+            print(perform(Lookup.get("x")), "y" in table)
+            print(perform(Lookup.get("y")), table)
+    except Lookup.get as eff:
+        if eff.key not in table:
+            table[eff.key] = len(table) + 1
+        eff.resume(table[eff.key])
+    return 0
+```
+
+```text tests/programs/lookup.expected
+{'0': 0, '1': 1, '2': 4, '3': 9} 4 14
+True False True
+{'a': 3, 'b': 1, 'c': 1} 3
+1 False
+2 {'x': 1, 'y': 2}
+```
+
+`{}` starts a dict of no value type yet, and the first store `d[k] = v` settles it, as the first `append` settles a `[]`.
+`d[k]` reads, `d[k] = v` stores, `k in d` and `k not in d` test for a key, `len(d)` counts, and `for k in d` walks the keys in the order they were stored;
+`in` also tests a list for an element.
+A key the dict lacks is a runtime error, `key 'b' not found`, so a program tests with `in` first,
+and a store that adds a key while a `for` walks the dict is the error Python raises for the same program, `dict changed size during iteration`.
+A dict is shared by reference, as a list is: the clause above stores into `table` while the body is suspended, and the body's next read sees the key.
+A dict field's default is `{}`, fresh for each instance.
 A `break` in a handled body ends the loop around the `handle` statement, and a `break` in a clause abandons the suspended body before it ends the loop,
 which `tests/programs/break_in_handled_body.epy` shows.
 

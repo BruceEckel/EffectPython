@@ -1,2 +1,2 @@
 exit 1
-error: line 6: for needs a list or range(), not int
+error: line 6: for needs a list, a dict, or range(), not int

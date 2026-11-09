@@ -25,9 +25,13 @@ folds, and counts in an RPython local. xs.append(v) on a name is the
 OpCall the parser builds for Effect.op(...), told apart by the name
 being bound, since an effect is never a value; on any other
 expression it is a MethodCall. len(), str(), and range() are Call
-nodes recognized by name, as print is. A field default is evaluated
-per construction, so the [] a list field declares gives each
-instance a list of its own.
+nodes recognized by name, as print is. A W_Dict (plan 1.12) is
+shared the same way, over an RPython dict from str to W_Root, which
+keeps insertion order; exec_for_dict walks its keys and stops with
+Python's error when a store changes the size, and k in d and x in xs
+are one In node (contains). A field default is evaluated per
+construction, so the [] or {} a field declares gives each instance a
+container of its own.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -130,9 +134,12 @@ exception_value), an exception constructor call with more than a str
 message (check_exception_call; construct_exception), an operator on
 operands of the wrong types (check_operands; binop and compare), a
 subscript, an append, or a for on a value that is not a list
-(check_index, check_append, the For branch; list_value), a
-non-integer index or range() argument (check_index, check_range;
-list_index and int_value), a method other than append or an append
+(check_index, check_append, the For branch; list_value), an in test
+on a value that is neither a list nor a dict (check_membership;
+contains, through list_value), a non-integer index or range()
+argument (check_index, check_range; list_index and int_value), a
+non-str dict key (check_index, check_dict_literal; dict_key), a
+method other than append or an append
 with the wrong number of arguments (check_append; list_method), a
 built-in with the wrong number or type of argument (check_builtin;
 builtin), range() outside a for (check_call; call), and a non-bool
@@ -156,10 +163,12 @@ reaches each: a read of a name, or an append on one, whose
 assignment comes earlier in the source but did not run, because it
 sits in a loop body that ran zero times or in one branch of an if
 (Environment.lookup, and the OpCall branch of eval_expr); an
-operator or a comparison, a subscript, append, or for target, a
-len() or str() argument, a list index, a bool operand, or an if or
-while test whose type the checker could not see; integer division or
-modulo by zero; a list index out of range (list_index_error.epy);
+operator or a comparison, a subscript, append, for, or in target, a
+len() or str() argument, a list index, a dict key, a bool operand,
+or an if or while test whose type the checker could not see; integer
+division or modulo by zero; a list index out of range
+(list_index_error.epy); a key a dict lacks, and a dict a store
+resizes while a for walks it;
 and a recursion that outgrows the C stack, which RPython's stack
 check stops and the entry point (deep_recursion.epy) or
 run_body_callback (deep_recursion_in_body.epy) reports as "maximum
@@ -180,7 +189,7 @@ from effectpython.errors import (EffectError, EffectPythonRuntimeError,
                                  OneShotContinuationError, RaisedException,
                                  Unwind)
 from effectpython.model import (W_Root, W_Int, W_Str, W_Bool, W_List,
-                                W_EffectPayload, W_EffBinding,
+                                W_Dict, W_EffectPayload, W_EffBinding,
                                 W_Exception, W_HandlerInstance, w_None,
                                 wrap_bool)
 
@@ -280,6 +289,8 @@ def default_value(expr):
         return W_Int(expr.value)
     elif isinstance(expr, ast.StrLiteral):
         return W_Str(expr.value)
+    if isinstance(expr, ast.DictLiteral):
+        return W_Dict({})
     assert isinstance(expr, ast.ListLiteral)
     return W_List([])
 
@@ -428,9 +439,13 @@ class Interpreter(object):
             w_target.fields_w[i] = self.eval_expr(stmt.value, env)
         elif isinstance(stmt, ast.IndexAssign):
             w_value = self.eval_expr(stmt.value, env)
-            w_list = list_value(self.eval_expr(stmt.target, env))
-            i = list_index(w_list, self.eval_expr(stmt.index, env))
-            w_list.items_w[i] = w_value
+            w_target = self.eval_expr(stmt.target, env)
+            w_index = self.eval_expr(stmt.index, env)
+            if isinstance(w_target, W_Dict):
+                w_target.items_w[dict_key(w_index)] = w_value
+            else:
+                w_list = list_value(w_target)
+                w_list.items_w[list_index(w_list, w_index)] = w_value
         elif isinstance(stmt, ast.For):
             self.exec_for(stmt, env)
         elif isinstance(stmt, ast.ForRange):
@@ -455,13 +470,31 @@ class Interpreter(object):
         keeps the last element afterwards (plan 1.9). The index is a
         local of this call, so a perform in the suite suspends the
         loop where it is."""
-        w_list = list_value(self.eval_expr(stmt.iterable, env))
+        w_iterable = self.eval_expr(stmt.iterable, env)
+        if isinstance(w_iterable, W_Dict):
+            self.exec_for_dict(stmt, w_iterable, env)
+            return
+        w_list = list_value(w_iterable)
         i = 0
         while i < len(w_list.items_w):
             env.define(stmt.name, w_list.items_w[i])
             if self.exec_pass(stmt.body, env):
                 break
             i += 1
+
+    def exec_for_dict(self, stmt, w_dict, env):
+        """Walk the keys in insertion order; a store that changes the
+        size is found when the walk would advance, the last step
+        included, which is the error Python raises for the same
+        program (plan 1.12)."""
+        size = len(w_dict.items_w)
+        for key in w_dict.items_w.keys():
+            env.define(stmt.name, W_Str(key))
+            if self.exec_pass(stmt.body, env):
+                break
+            if len(w_dict.items_w) != size:
+                raise EffectPythonRuntimeError(
+                    "dict changed size during iteration")
 
     def exec_for_range(self, stmt, env):
         """Count from start, or 0, up to stop without building a list."""
@@ -834,9 +867,26 @@ class Interpreter(object):
                 items_w.append(self.eval_expr(element, env))
             return W_List(items_w)
         elif isinstance(expr, ast.Index):
-            w_list = list_value(self.eval_expr(expr.target, env))
-            return w_list.items_w[
-                list_index(w_list, self.eval_expr(expr.index, env))]
+            w_target = self.eval_expr(expr.target, env)
+            w_index = self.eval_expr(expr.index, env)
+            if isinstance(w_target, W_Dict):
+                key = dict_key(w_index)
+                if key not in w_target.items_w:
+                    raise EffectPythonRuntimeError(
+                        "key '%s' not found" % key)
+                return w_target.items_w[key]
+            w_list = list_value(w_target)
+            return w_list.items_w[list_index(w_list, w_index)]
+        elif isinstance(expr, ast.DictLiteral):
+            items_w = {}
+            for i in range(len(expr.keys)):
+                key = dict_key(self.eval_expr(expr.keys[i], env))
+                items_w[key] = self.eval_expr(expr.values[i], env)
+            return W_Dict(items_w)
+        elif isinstance(expr, ast.In):
+            w_left = self.eval_expr(expr.left, env)
+            w_right = self.eval_expr(expr.right, env)
+            return wrap_bool(contains(w_right, w_left) != expr.negated)
         elif isinstance(expr, ast.AttrRead):
             w_target = env.lookup(expr.target)
             if isinstance(w_target, W_HandlerInstance):
@@ -952,6 +1002,21 @@ def list_value(w_value):
     raise EffectPythonRuntimeError(
         "%s is not a list" % type_name(w_value))
 
+def dict_key(w_value):
+    if isinstance(w_value, W_Str):
+        return w_value.val
+    raise EffectPythonRuntimeError(
+        "a dict key must be str, not %s" % type_name(w_value))
+
+def contains(w_container, w_value):
+    """k in d, or x in xs element by element (plan 1.12)."""
+    if isinstance(w_container, W_Dict):
+        return dict_key(w_value) in w_container.items_w
+    for w_item in list_value(w_container).items_w:
+        if scalars_equal(w_item, w_value):
+            return True
+    return False
+
 def int_value(w_value, what):
     if isinstance(w_value, W_Int):
         return w_value.val
@@ -993,8 +1058,10 @@ def builtin(name, args_w):
             return W_Int(len(w_arg.items_w))
         if isinstance(w_arg, W_Str):
             return W_Int(len(w_arg.val))
+        if isinstance(w_arg, W_Dict):
+            return W_Int(len(w_arg.items_w))
         raise EffectPythonRuntimeError(
-            "len() needs a list or str, not %s" % type_name(w_arg))
+            "len() needs a list, dict, or str, not %s" % type_name(w_arg))
     if (isinstance(w_arg, W_Int) or isinstance(w_arg, W_Str)
             or isinstance(w_arg, W_Bool)):
         return W_Str(w_arg.str())
@@ -1080,4 +1147,6 @@ def type_name(w):
         return w.class_name
     elif isinstance(w, W_List):
         return "list"
+    elif isinstance(w, W_Dict):
+        return "dict"
     return "object"

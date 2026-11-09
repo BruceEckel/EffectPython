@@ -90,6 +90,24 @@ class W_List(W_Root):
     def is_true(self):
         return len(self.items_w) > 0
 
+class W_Dict(W_Root):
+    """A dict with str keys (plan 1.12): mutable and shared by
+    reference, as a W_List is, over an RPython dict, which keeps
+    insertion order. str() gives Python's form with the keys quoted."""
+    _attrs_ = ['items_w']
+
+    def __init__(self, items_w):
+        self.items_w = items_w  # dict of str -> W_Root
+
+    def str(self):
+        parts = []
+        for key in self.items_w:
+            parts.append("'" + key + "': " + self.items_w[key].repr())
+        return "{" + ", ".join(parts) + "}"
+
+    def is_true(self):
+        return len(self.items_w) > 0
+
 class W_EffectPayload(W_Root):
     """What evaluating FileIO.read(path) produces: the effect, the
     operation, and the evaluated arguments, ready for perform() (plan 1.3).

@@ -6,9 +6,9 @@ declarations and methods, exception classes, function definitions
 with typed parameters, a return type, and an optional effect row;
 return, raise, assignment, attribute assignment, expression, pass,
 if/elif/else, while, for, try/except/finally, and handle statements;
-int, str, bool, and list literals, names, arithmetic, comparisons,
-and, or, and not in Python's precedence, calls, indexing, attribute
-reads, and attribute calls. An elif builds an If alone in the else
+int, str, bool, list, and dict literals, names, arithmetic,
+comparisons, in and not in, and, or, and not in Python's precedence,
+calls, indexing, attribute reads, and attribute calls. An elif builds an If alone in the else
 suite of the one above it, as CPython's AST does (plan 1.11).
 
 perform and handle are names in Python, not keywords, so the grammar
@@ -121,6 +121,13 @@ class _ExprList(BaseBox):
 
     def __init__(self, items):
         self.items = items  # list of Expr
+
+class _DictItems(BaseBox):
+    _attrs_ = ['keys', 'values']
+
+    def __init__(self, keys, values):
+        self.keys = keys      # list of Expr
+        self.values = values  # list of Expr
 
 class _NameList(BaseBox):
     _attrs_ = ['items']
@@ -284,10 +291,13 @@ def field_with_default(p):
     if isinstance(default, ast.ListLiteral):
         if len(default.elements) > 0:
             raise _error(p[3], "a list field's default must be []")
+    elif isinstance(default, ast.DictLiteral):
+        if len(default.keys) > 0:
+            raise _error(p[3], "a dict field's default must be {}")
     elif not (isinstance(default, ast.IntLiteral)
               or isinstance(default, ast.StrLiteral)):
         raise _error(p[3], "a field default must be an int or str "
-                     "literal, or []")
+                     "literal, [], or {}")
     return ast.FieldDef(_text(p[0]), _type(p[2]), default, _line(p[0]))
 
 @pg.production('handler_item : DEF NAME LPAREN method_params RPAREN ARROW'
@@ -368,6 +378,9 @@ def plain_type(p):
     if _text(p[0]) == 'list':
         raise _error(p[0], "list needs an element type: list[int], "
                      "list[str], or list[bool]")
+    if _text(p[0]) == 'dict':
+        raise _error(p[0], "dict needs a key and a value type: "
+                     "dict[str, int], dict[str, str], or dict[str, bool]")
     return _Type(_text(p[0]))
 
 @pg.production('type : NAME LBRACKET NAME RBRACKET')
@@ -380,6 +393,19 @@ def list_type(p):
         raise _error(p[2], "list[%s] is not a type; the element type is "
                      "int, str, or bool" % element)
     return _Type('list[%s]' % element)
+
+@pg.production('type : NAME LBRACKET NAME COMMA NAME RBRACKET')
+def dict_type(p):
+    if _text(p[0]) != 'dict':
+        raise _error(p[0], "'%s' takes no key and value types; "
+                     "dict[str, ...] does" % _text(p[0]))
+    if _text(p[2]) != 'str':
+        raise _error(p[2], "dict keys are str, not %s" % _text(p[2]))
+    value = _text(p[4])
+    if value not in LIST_ELEMENTS:
+        raise _error(p[4], "dict[str, %s] is not a type; the value type "
+                     "is int, str, or bool" % value)
+    return _Type('dict[str, %s]' % value)
 
 LIST_ELEMENTS = ['int', 'str', 'bool']
 
@@ -668,6 +694,16 @@ def bool_op(p):
 def not_op(p):
     return ast.Not(_expr(p[1]), _line(p[0]))
 
+@pg.production('comparison : arith IN arith')
+def membership(p):
+    left = _expr(p[0])
+    return ast.In(left, _expr(p[2]), False, left.lineno)
+
+@pg.production('comparison : arith NOT IN arith')
+def non_membership(p):
+    left = _expr(p[0])
+    return ast.In(left, _expr(p[3]), True, left.lineno)
+
 @pg.production('comparison : arith cmpop arith')
 def compare(p):
     left = _expr(p[0])
@@ -778,6 +814,28 @@ def list_literal(p):
     elements = p[1]
     assert isinstance(elements, _ExprList)
     return ast.ListLiteral(elements.items, _line(p[0]))
+
+@pg.production('atom : LBRACE RBRACE')
+def empty_dict_literal(p):
+    return ast.DictLiteral([], [], _line(p[0]))
+
+@pg.production('atom : LBRACE dict_items RBRACE')
+def dict_literal(p):
+    items = p[1]
+    assert isinstance(items, _DictItems)
+    return ast.DictLiteral(items.keys, items.values, _line(p[0]))
+
+@pg.production('dict_items : expr COLON expr')
+def dict_item(p):
+    return _DictItems([_expr(p[0])], [_expr(p[2])])
+
+@pg.production('dict_items : dict_items COMMA expr COLON expr')
+def dict_items(p):
+    items = p[0]
+    assert isinstance(items, _DictItems)
+    items.keys.append(_expr(p[2]))
+    items.values.append(_expr(p[4]))
+    return items
 
 @pg.production('atom : LPAREN expr RPAREN')
 def parenthesized(p):

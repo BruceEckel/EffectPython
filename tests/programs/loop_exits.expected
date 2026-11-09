@@ -8,8 +8,10 @@ odd 7
 2 1
 a
 done with a
+exit word skip
 done with skip
 b
 done with b
+exit word stop
 done with stop
 9 stop

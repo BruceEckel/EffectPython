@@ -378,6 +378,27 @@ class BinOp(Expr):
         self.left = left    # Expr
         self.right = right  # Expr
 
+class DictLiteral(Expr):
+    """{key: value, ...} or {} (plan 1.12); keys and values are
+       parallel lists"""
+    _attrs_ = ['keys', 'values']
+
+    def __init__(self, keys, values, lineno=0):
+        Node.__init__(self, lineno)
+        self.keys = keys      # list of Expr
+        self.values = values  # list of Expr
+
+class In(Expr):
+    """left in right, or left not in right (plan 1.12): a key of a
+       dict or an element of a list"""
+    _attrs_ = ['left', 'right', 'negated']
+
+    def __init__(self, left, right, negated, lineno=0):
+        Node.__init__(self, lineno)
+        self.left = left        # Expr
+        self.right = right      # Expr
+        self.negated = negated  # bool
+
 class BoolOp(Expr):
     """left and right, or left or right (plan 1.11). The right operand
        is evaluated only when the left one does not decide the result,

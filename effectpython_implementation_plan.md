@@ -828,7 +828,7 @@ The acceptance program `conditions.epy` has an effect `Log.note` performed insid
     Python's `not` sits above the comparison, so `not a == b` is `not (a == b)`; `not n + 1` is `not (n + 1)` either way, legal in Python and meaningless under the `bool` rule.
     *The design follows Python, so every accepted program parses as Python parses it, and leaves `not n + 1` to the checker: "not needs a bool, not int".*
 
-### 1.12 `dict[str, T]` (designed 2026-11-08)
+### 1.12 `dict[str, T]` (designed and implemented 2026-11-08, open questions settled as recommended)
 
 The fake handler that answers by path is the central sample, and it answers through an `if`/`elif` chain on the path (`handler_class.epy`), because the dialect has no mapping.
 This section adds a dictionary with `str` keys and values of one scalar type, with the operations the samples need and no more, on the pattern of 1.9's lists.
@@ -856,16 +856,16 @@ A typed slot refuses an unknown value, and a known type is the runtime type, as 
 `W_Dict(items_w)` holds an RPython `dict` from `str` to `W_Root`, which RPython keeps in insertion order, so `for k in d` and `str()` follow the order of the stores as Python's do.
 `str()` gives Python's form, `{'a': 1, 'b': 'x'}`, with the key quoted as a `str` element of a list is.
 `d[k]` on a missing key is the runtime error "key 'k' not found", uncatchable like "list index out of range": the program tests with `in` first, and a key it did not test for is a bug, not a condition it planned for (open question 5).
-`exec_for` over a dict walks the keys and, before each step, compares the dict's length with the one it started with; a change is the runtime error "dict changed size during iteration", Python's `RuntimeError` for the same program (open question 6).
+`exec_for` over a dict walks the keys and, after each step, where Python's iterator would advance, compares the dict's length with the one it started with; a change is the runtime error "dict changed size during iteration", Python's `RuntimeError` for the same program (open question 6).
 `HandlerClass.construct` builds a fresh `W_Dict` for a `dict` field on every construction, through `default_value`, as it builds a fresh `W_List`.
 `In` evaluates both operands and asks the dict for the key or walks the list with `scalars_equal`.
-`list_value`, `list_index`, and `builtin` gain the dict cases, so a subscript on a value that is neither is "int is not a list or dict".
+`builtin` gains the dict case of `len()`, the `Index`, `IndexAssign`, and `For` branches test for a `W_Dict` before `list_value`, and `dict_key` and `contains` are new, so a subscript on a value that is neither keeps the message "int is not a list".
 Nothing in the handler runtime changes: a `W_Dict` is a value the body and a clause may share by reference, as a `W_List` is.
 
 **What the programs gain.**
-`FakeFileIO` holds `files: dict[str, str]` and answers `read` with `if path in self.files: return self.files[path]` and a `raise NotFound(path)` otherwise, which is the fake a reader expects and the shape the tutorial's exception section builds toward.
+`FakeFileIO` holds `files: dict[str, str]` and answers `read` with `if path in self.files: return self.files[path]`, and with a "missing: " string otherwise, since the tutorial's section 6 comes before its exceptions; a reader of section 7 can see where the `raise NotFound(path)` goes.
 A counting handler keeps `counts: dict[str, int]` by label, where today it keeps one `int`.
-`loop_exits.epy` writes `if s in ["skip", "stop"]:`.
+`loop_exits.epy` tests `if s in ["skip", "stop"]:` before its two exits.
 The acceptance program `lookup.epy` has a dict built in a loop, read in a clause while the body is suspended, and lengthened by the clause, so the body's next read sees the new key: the sharing claim of 1.9, for the new value.
 
 **Open questions (recommendations in italics).**
@@ -900,7 +900,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`, and from 2026-11-08 `{` and `}`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from <module> import <names>`, accepted and ignored whatever the module
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
@@ -912,6 +912,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `while <expr>: <suite>` (added 2026-10-30 for `tests/programs/many_performs.epy`)
     *   `break` and `continue`, a `Break` and a `Continue` node, anywhere under a `while` or `for` in the same function (1.10; Milestone 10, 2026-11-07)
     *   `and`, `or`, and `not`, a `BoolOp` and a `Not` node, in three grammar layers above a comparison with Python's precedence; and `elif`, which builds an `If` alone in the `orelse` of the `If` above it, with no node of its own (1.11; Milestone 11, 2026-11-08)
+    *   dict literals `{}` and `{<expr>: <expr>, ...}`, a `DictLiteral` node; the type form `dict[str, T]`; and `in` and `not in` in the comparison layer, an `In` node (1.12; Milestone 12, 2026-11-08)
     *   `for <name> in <expr>: <suite>`, a `For` node, or a `ForRange` node when the expression is a call to `range` (1.9; Milestone 9, 2026-11-07)
     *   indexed assignment `<expr>[<expr>] = <expr>`, an `IndexAssign` node; one production reads every assignment and sorts the target into `Assign`, `AttrAssign`, or `IndexAssign` (1.9; Milestone 9, 2026-11-07)
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
@@ -970,6 +971,7 @@ The static analyzer runs in three passes over the AST before execution:
             one assigned to another name loses its type, since the checker does not track which names share a list; a list is no element of a list (1.9, open question 5), in a literal or an `append`, which keeps `xss[0]` from naming one twice; and a literal with an element of unknown type is unknown, so nothing refines it as `[]` is refined.
             An `append` on a name of unknown type passes, as an unknown type does everywhere.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
+        *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `BoolOp` and `Not` (1.11; Milestone 11, 2026-11-08) have the type `bool`, and their operands, like the test of an `IfNode` or a `While`, must be `bool` where the type is known, else "and needs a bool, not int" (`require_bool`); both operands' effects count, though the runtime may skip the right one.
         *   Lists (1.9; Milestone 9, 2026-11-07): a `ListLiteral` has the type `list[T]` of its elements, which must share one type, or the element-less `list` when it is empty, which `matches` accepts for any list type; `Index` has the element type and needs an `int` index; `IndexAssign` and `append` need a value of the element type, and a name holding `[]` takes the element type of its first `append`; `len()` of a list or `str` is `int`, `str()` of a scalar is `str`, and `range()` outside a `for` is rejected; `For` binds its name to the iterable's element type and `ForRange` to `int`, each an assignment for the `Name` rule, and both union the suite's effects; `==` and `!=` are the operators of a list type; and `len`, `str`, and `range` join `print` as names a function cannot take.
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
@@ -1001,6 +1003,10 @@ class W_Str(W_Root):
 class W_List(W_Root):
     """A list (1.9; Milestone 9): mutable and shared by reference; str() gives Python's form"""
     def __init__(self, items_w): self.items_w = items_w  # list[W_Root]
+
+class W_Dict(W_Root):
+    """A dict with str keys (1.12; Milestone 12), over RPython's ordered dict; shared like a list"""
+    def __init__(self, items_w): self.items_w = items_w  # dict[str, W_Root]
 
 class W_EffectPayload(W_Root):
     def __init__(self, effect_name, op_name, args_w):
@@ -1542,11 +1548,12 @@ EffectPython/
         *   `runtime_bool_operand.epy`: an `and` whose left operand has an unknown type and holds an `int`, reaching the runtime's "and needs a bool, not int".
 
 12. **Milestone 12: `dict[str, T]` (1.12)**
-    *   *Designed 2026-11-08*, with seven open questions and recommendations in 1.12.
+    *   *Designed and implemented 2026-11-08*, the seven open questions settled as 1.12 recommends.
+        The implementation turned up a checker bug of the day before: `check_handle` moved instance names out of `stmt.effects` on its first pass, so a second pass over the enclosing suite found no instance and let the effect leak; the sort now reads both lists.
     *   *Implementation:* `lexer.py` gains `LBRACE` and `RBRACE`; `ast_nodes.py` gains `DictLiteral` and `In`; `parser.py` gains the dict literal atom, the two-parameter type form, and the `in` and `not in` comparisons; `checker.py` gains the dict types in `is_dict`, `value_of`, `matches`, `check_index`, the `IndexAssign` branch, `check_builtin`, the `For` branch, and `collect_field`, plus `In`; `model.py` gains `W_Dict`; `interpreter.py` gains the `DictLiteral` and `In` branches, the dict cases of `list_value`, `list_index`, `builtin`, `exec_for`, and `default_value`, and the two runtime errors.
         `tests/test_parser.py`, `tests/test_checker.py`, and `tests/test_interpreter.py` each get a section; `TUTORIAL.md` section 6 shows the fake filesystem as a dict field and section 9 the dict beside the list.
     *   *Acceptance test:*
         *   `lookup.epy`: a `dict[str, int]` built in a `for`, printed in insertion order, read with `in` and `d[k]`, stored into a `dict[str, str]` handler field through a method, and read in a clause while the body is suspended, with a key the clause adds visible to the body's next read.
-        *   `handler_class.epy` answers `read` from a `files: dict[str, str]` field, raising `NotFound` for a path not in it, and `loop_exits.epy` tests membership with `in`.
+        *   `handler_class.epy` answers `read` from a `files: dict[str, str]` field, with a "missing: " answer for a path not in it, and `loop_exits.epy` tests membership with `in`.
         *   Reject `{1: "a"}` ("dict keys must be str, not int"), `{"a": 1, "b": "s"}`, `d[1]` on a `dict[str, int]`, `d["a"] = "s"` on a `dict[str, int]`, `1 in d`, `{}` passed where an `int` is expected, a field `dict[int, str]`, and a dict literal holding a list; accept `{}` refined by its first store and then handed to a `dict[str, int]` parameter, `k in d` with `k` a `str`, `not in`, and `for k in d` reading `d[k]`.
-        *   `runtime_missing_key.epy` reaches "key 'x' not found", `runtime_dict_resized.epy` reaches "dict changed size during iteration" from a clause storing a key while the body walks the dict, and `unreachable_dict_key_type.epy` shows the checker stopping `d[1]`.
+        *   `runtime_missing_key.epy` reaches "key 'b' not found", `runtime_dict_resized.epy` reaches "dict changed size during iteration" from a clause storing a key while the body walks the dict, `runtime_dict_key_unknown.epy` reaches "a dict key must be str" through an unknown type, and `unreachable_dict_key_type.epy` and `unreachable_in_target.epy` show the checker stopping `d[1]` and `1 in n`.

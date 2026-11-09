@@ -1,0 +1,8 @@
+# The runtime's "is not a list" for an in test (contains) is
+# unreachable where the checker knows the type: check_membership
+# rejects it.
+
+def main() -> int:
+    n = 5
+    print(1 in n)
+    return 0

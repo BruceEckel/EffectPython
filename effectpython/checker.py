@@ -29,20 +29,27 @@ method raising one of them delivers to the perform instead.
 A type is a type name, and the checker types every expression. A
 handler class name is the type of its instances, so a name holding
 one may be passed to handle() and its fields read; an exception
-class name is the type of the name an except clause binds; and
+class name is the type of the name an except clause binds;
 "list[int]", "list[str]", and "list[bool]" are the list types (plan
-1.9), the element being one of the three scalars, so a list literal
-or an append refuses a list element. A field is int, str, or one of
-the list types (plan 1.5, 1.9). The empty string stands for a type
-the checker cannot determine, and an unknown type matches anything
-(matches). "list" is the type of [] alone: it matches any list type,
-and a literal with an element of unknown type has the unknown type,
-so nothing refines it as a [] is refined. A for over a list binds its
-name to the element type, and over range() to int. len(), str(), and
-range() are built-in names beside print, and a function cannot take
-one of them. For two lists the checker requires one element type,
-which the runtime does not: it compares them and finds the elements
-unequal.
+1.9) and "dict[str, int]", "dict[str, str]", and "dict[str, bool]"
+the dict types (plan 1.12), the element or value being one of the
+three scalars, so a list literal, an append, a dict literal, or a
+store refuses a list or dict value. A field is int, str, a list type,
+or a dict type (plan 1.5, 1.9, 1.12). The empty string stands for a
+type the checker cannot determine, and an unknown type matches
+anything (matches). "list" is the type of [] alone and "dict" of {}
+alone: each matches any type of its kind, and a literal with an
+element or value of unknown type has the unknown type, so nothing
+refines it as a [] or {} is refined. A dict's keys are str, in a
+literal, a subscript, a store, and an in test (check_dict_literal,
+check_index, check_index_assign, check_membership); x in xs needs a
+value of the list's element type; and in gives bool. A for over a
+list binds its name to the element type, over a dict to str, and
+over range() to int. len(), str(), and range() are built-in names
+beside print, and a function cannot take one of them. For two lists
+the checker requires one element type, which the runtime does not:
+it compares them and finds the elements unequal; dicts have no
+operator.
 
 An operator whose operands both have known types must have a pair
 the interpreter supports (OPERATORS), so the runtime's "unsupported
@@ -143,6 +150,8 @@ from effectpython.errors import InvalidProgram, UnhandledEffectError
 
 UNKNOWN = ""
 LIST = "list"
+DICT = "dict"
+SCALARS = ["int", "str", "bool"]
 FIELD_TYPES = ["int", "str"]
 OPERATORS = {
     "int": ["+", "-", "*", "//", "%", "<", "<=", ">", ">=", "==", "!="],
@@ -155,6 +164,29 @@ EXCEPTION = "Exception"
 
 def is_list(type_name):
     return type_name == LIST or type_name.startswith("list[")
+
+def is_dict(type_name):
+    return type_name == DICT or type_name.startswith("dict[")
+
+def is_empty(type_name):
+    """Whether the type is that of a [] or a {}, which the first store
+    refines."""
+    return type_name == LIST or type_name == DICT
+
+def container_of(type_name):
+    """The list[T] or dict[str, T] type a [] or {} takes for T."""
+    if type_name.startswith("list"):
+        return "list[%s]"
+    return "dict[str, %s]"
+
+def value_of(type_name):
+    """The value type of dict[str, T], or unknown for a bare dict."""
+    if type_name == DICT:
+        return UNKNOWN
+    assert type_name.startswith("dict[str, ")
+    end = len(type_name) - 1
+    assert end >= 10
+    return type_name[10:end]
 
 def element_of(type_name):
     """The element type of list[T], or unknown for a bare list."""
@@ -171,7 +203,9 @@ def matches(actual, expected):
     any list."""
     if actual == UNKNOWN or expected == UNKNOWN or actual == expected:
         return True
-    return actual == LIST and is_list(expected)
+    if actual == LIST:
+        return is_list(expected)
+    return actual == DICT and is_dict(expected)
 
 def merged(a, b):
     """The type a name has where two paths meet and left it with types
@@ -179,9 +213,9 @@ def merged(a, b):
     unknown."""
     if a == b:
         return a
-    if a == LIST and is_list(b):
+    if is_empty(a) and matches(a, b):
         return b
-    if b == LIST and is_list(a):
+    if is_empty(b) and matches(b, a):
         return a
     return UNKNOWN
 
@@ -434,10 +468,11 @@ class Checker(object):
             raise InvalidProgram(
                 field.lineno, "field '%s' is declared twice in handler "
                 "class '%s'" % (field.name, info.name))
-        if field.type not in FIELD_TYPES and not is_list(field.type):
+        if (field.type not in FIELD_TYPES and not is_list(field.type)
+                and not is_dict(field.type)):
             raise InvalidProgram(
                 field.lineno, "field '%s' of handler class '%s' must be "
-                "int, str, or list[...], not %s" %
+                "int, str, list[...], or dict[str, ...], not %s" %
                 (field.name, info.name, field.type))
         if field.default is None:
             if info.required < len(info.field_names):
@@ -449,6 +484,8 @@ class Checker(object):
             self.check_default(field, "int")
         elif isinstance(field.default, ast.StrLiteral):
             self.check_default(field, "str")
+        elif isinstance(field.default, ast.DictLiteral):
+            self.check_default(field, DICT)
         else:
             self.check_default(field, LIST)
         info.field_names.append(field.name)
@@ -587,10 +624,13 @@ class Checker(object):
                 element = UNKNOWN
             elif is_list(iterable):
                 element = element_of(iterable)
+            elif is_dict(iterable):
+                element = "str"
             else:
                 raise InvalidProgram(
                     stmt.lineno,
-                    "for needs a list or range(), not %s" % iterable)
+                    "for needs a list, a dict, or range(), not %s" %
+                    iterable)
             self.check_loop(stmt.name, element, stmt.body, scope, effects)
         elif isinstance(stmt, ast.ForRange):
             self.check_range(stmt.args, stmt.lineno, scope, effects)
@@ -616,17 +656,7 @@ class Checker(object):
                                           actual))
             self.hand_over(stmt.value, expected, scope)
         elif isinstance(stmt, ast.IndexAssign):
-            element = self.check_index(stmt.target, stmt.index, stmt.lineno,
-                                       scope, effects)
-            actual = self.type_of(stmt.value, scope, effects)
-            self.require_known(stmt.value, actual, element,
-                               "an element of the list must be %s" % element,
-                               stmt.lineno)
-            if element != UNKNOWN and not matches(actual, element):
-                raise InvalidProgram(
-                    stmt.lineno, "the list holds %s; cannot assign %s" %
-                    (element, actual))
-            self.hand_over(stmt.value, element, scope)
+            self.check_index_assign(stmt, scope, effects)
         elif isinstance(stmt, ast.ExprStmt):
             self.type_of(stmt.expr, scope, effects)
         elif isinstance(stmt, ast.Pass):
@@ -724,9 +754,10 @@ class Checker(object):
         a list. True when the name lost its type."""
         if not isinstance(expr, ast.Name):
             return False
-        if scope.types.get(expr.id, UNKNOWN) != LIST:
+        held = scope.types.get(expr.id, UNKNOWN)
+        if not is_empty(held):
             return False
-        if expected != LIST and is_list(expected):
+        if not is_empty(expected) and matches(held, expected):
             scope.types[expr.id] = expected
             return False
         scope.types[expr.id] = UNKNOWN
@@ -745,9 +776,16 @@ class Checker(object):
                         args, "range()", lineno, scope, effects)
 
     def check_index(self, target, index, lineno, scope, effects):
-        """The element type of the list target, unknown when the checker
-        cannot see it."""
+        """The element type of the list target or the value type of the
+        dict target, unknown when the checker cannot see it; a list
+        takes an int index and a dict a str key."""
         type_name = self.type_of(target, scope, effects)
+        if is_dict(type_name):
+            actual = self.type_of(index, scope, effects)
+            if not matches(actual, "str"):
+                raise InvalidProgram(
+                    lineno, "a dict key must be str, not %s" % actual)
+            return value_of(type_name)
         if type_name != UNKNOWN and not is_list(type_name):
             raise InvalidProgram(
                 lineno, "%s is not a list" % describe(target, type_name))
@@ -758,6 +796,83 @@ class Checker(object):
         if type_name == UNKNOWN:
             return UNKNOWN
         return element_of(type_name)
+
+    def check_index_assign(self, stmt, scope, effects):
+        """xs[i] = v or d[k] = v: the value must have the element or the
+        value type, and the first store into a name holding {} gives it
+        the dict type, as the first append gives a [] its type."""
+        element = self.check_index(stmt.target, stmt.index, stmt.lineno,
+                                   scope, effects)
+        actual = self.type_of(stmt.value, scope, effects)
+        self.require_known(stmt.value, actual, element,
+                           "an element of the list must be %s" % element,
+                           stmt.lineno)
+        if element != UNKNOWN and not matches(actual, element):
+            raise InvalidProgram(
+                stmt.lineno, "the list holds %s; cannot assign %s" %
+                (element, actual))
+        if is_list(actual) or is_dict(actual):
+            raise InvalidProgram(
+                stmt.lineno, "dict values must be int, str, or bool, not "
+                "a %s" % kind_of(actual))
+        self.hand_over(stmt.value, element, scope)
+        target = stmt.target
+        if (isinstance(target, ast.Name)
+                and scope.types.get(target.id, UNKNOWN) == DICT):
+            if actual == UNKNOWN:
+                scope.types[target.id] = UNKNOWN
+            else:
+                scope.types[target.id] = "dict[str, %s]" % actual
+
+    def check_dict_literal(self, expr, scope, effects):
+        """{k: v, ...}: str keys and values of one scalar type; a value
+        of unknown type makes the literal unknown, as it does a list
+        literal (plan 1.12)."""
+        value = UNKNOWN
+        untyped = False
+        for i in range(len(expr.keys)):
+            key = self.type_of(expr.keys[i], scope, effects)
+            if not matches(key, "str"):
+                raise InvalidProgram(
+                    expr.lineno, "dict keys must be str, not %s" % key)
+            actual = self.type_of(expr.values[i], scope, effects)
+            if is_list(actual) or is_dict(actual):
+                raise InvalidProgram(
+                    expr.lineno, "dict values must be int, str, or bool, "
+                    "not a %s" % kind_of(actual))
+            if actual == UNKNOWN:
+                untyped = True
+            elif value == UNKNOWN:
+                value = actual
+            elif actual != value:
+                raise InvalidProgram(
+                    expr.lineno, "dict values must share a type: %s and %s"
+                    % (value, actual))
+        if untyped:
+            return UNKNOWN
+        if value == UNKNOWN:
+            return DICT
+        return "dict[str, %s]" % value
+
+    def check_membership(self, expr, scope, effects):
+        """k in d or x in xs (plan 1.12): a str key against a dict, or a
+        value of the element type against a list, giving bool."""
+        left = self.type_of(expr.left, scope, effects)
+        right = self.type_of(expr.right, scope, effects)
+        if is_dict(right):
+            expected = "str"
+        elif is_list(right):
+            expected = element_of(right)
+        elif right == UNKNOWN:
+            return "bool"
+        else:
+            raise InvalidProgram(
+                expr.lineno, "in needs a list or dict, not %s" % right)
+        if not matches(left, expected):
+            raise InvalidProgram(
+                expr.lineno, "%s holds %s; cannot test %s" %
+                (describe(expr.right, right), expected, left))
+        return "bool"
 
     def check_append(self, target, method, args, lineno, scope, effects):
         """xs.append(v) on a list: the one method a list has. A name
@@ -777,10 +892,10 @@ class Checker(object):
         self.check_args(["value"], [element], args, "append()", lineno,
                         scope, effects)
         actual = self.type_of(args[0], scope, effects)
-        if is_list(actual):
+        if is_list(actual) or is_dict(actual):
             raise InvalidProgram(
                 lineno, "list elements must be int, str, or bool, not a "
-                "list")
+                "%s" % kind_of(actual))
         if type_name == LIST and isinstance(target, ast.Name):
             if actual == UNKNOWN:
                 scope.types[target.id] = UNKNOWN
@@ -956,22 +1071,26 @@ class Checker(object):
     def check_handle(self, stmt, scope, effects):
         """Sort the arguments into effects, which need clauses, and
         handlers, which fulfill their effect; then check the clauses
-        cover the effects and nothing the handlers fulfill."""
+        cover the effects and nothing the handlers fulfill. The sort
+        reads the instances of an earlier pass too, since a suite is
+        checked more than once and the first pass moved them."""
         fulfilled = {}  # effect name -> handler class name
         handled = []
-        for name in stmt.effects:
+        instances = []
+        for name in stmt.effects + stmt.instances:
             if name in self.effects:
                 handled.append(name)
             elif scope.types.get(name, UNKNOWN) in self.handlers:
                 info = self.handlers[scope.types[name]]
                 self.fulfill(fulfilled, info, stmt.lineno)
-                stmt.instances.append(name)
+                instances.append(name)
             else:
                 self.require_bound(scope, name, stmt.lineno)
                 raise InvalidProgram(
                     stmt.lineno,
                     "'%s' is not an effect or a handler instance" % name)
         stmt.effects = handled
+        stmt.instances = instances
         for call in stmt.constructions:
             if call.func not in self.handlers:
                 raise InvalidProgram(
@@ -1082,10 +1201,10 @@ class Checker(object):
             untyped = False
             for item in expr.elements:
                 actual = self.type_of(item, scope, effects)
-                if is_list(actual):
+                if is_list(actual) or is_dict(actual):
                     raise InvalidProgram(
                         expr.lineno, "list elements must be int, str, or "
-                        "bool, not a list")
+                        "bool, not a %s" % kind_of(actual))
                 if actual == UNKNOWN:
                     untyped = True
                 elif element == UNKNOWN:
@@ -1099,6 +1218,10 @@ class Checker(object):
             if element == UNKNOWN:
                 return LIST
             return "list[%s]" % element
+        elif isinstance(expr, ast.DictLiteral):
+            return self.check_dict_literal(expr, scope, effects)
+        elif isinstance(expr, ast.In):
+            return self.check_membership(expr, scope, effects)
         elif isinstance(expr, ast.Index):
             return self.check_index(expr.target, expr.index, expr.lineno,
                                     scope, effects)
@@ -1247,10 +1370,12 @@ class Checker(object):
                 (expr.func, len(expr.args)))
         actual = self.type_of(expr.args[0], scope, effects)
         if expr.func == "len":
-            if actual == UNKNOWN or actual == "str" or is_list(actual):
+            if (actual == UNKNOWN or actual == "str" or is_list(actual)
+                    or is_dict(actual)):
                 return "int"
             raise InvalidProgram(
-                expr.lineno, "len() needs a list or str, not %s" % actual)
+                expr.lineno, "len() needs a list, dict, or str, not %s" %
+                actual)
         if actual == UNKNOWN or actual in ["int", "str", "bool"]:
             return "str"
         raise InvalidProgram(
@@ -1388,6 +1513,13 @@ def describe(target, type_name):
     if isinstance(target, ast.AttrRead):
         return "'%s.%s'" % (target.target, target.attr)
     return "a value of type %s" % type_name
+
+def kind_of(type_name):
+    """'list' or 'dict' for a container type, in a message about an
+    element that cannot be one."""
+    if is_list(type_name):
+        return "list"
+    return "dict"
 
 def value_name(expr):
     """'x' for a name, 'self.n' for a field, and 'the value' for

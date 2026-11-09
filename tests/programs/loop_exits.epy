@@ -25,6 +25,8 @@ def main() -> int:
             print(i, j)
     for s in ["a", "skip", "b", "stop", "c"]:
         try:
+            if s in ["skip", "stop"]:
+                print("exit word", s)
             if s == "skip":
                 continue
             if s == "stop":

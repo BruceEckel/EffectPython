@@ -1,6 +1,7 @@
 # Milestone 5: the handler class example from plan 1.5. FakeFileIO
-# fulfills FileIO through its methods, and its write method performs
-# Log, which the inline clause outside handles.
+# fulfills FileIO through its methods, answering read from a dict
+# field (plan 1.12), and its write method performs Log, which the
+# inline clause outside handles.
 
 from effectpython import Effect, Handler, perform, handle
 
@@ -12,13 +13,12 @@ class Log(Effect):
     def note(text: str) -> int: ...
 
 class FakeFileIO(Handler[FileIO]):
+    files: dict[str, str] = {}
     def read(self, path: str) -> str:
-        if path == "settings.json":
-            return "debug = true"
-        elif path == "app.json":
-            return "name = demo"
+        if path in self.files:
+            return self.files[path]
         else:
-            return "contents of " + path
+            return "missing: " + path
     def write(self, path: str, content: str) -> int / [Log]:
         perform(Log.note("writing " + path))
         return 7
@@ -34,8 +34,10 @@ def load_app(name: str) -> int / [FileIO]:
 def main() -> int / []:
     try:
         with handle(Log):
-            with handle(FakeFileIO()):
+            fake = FakeFileIO({"settings.json": "debug = true"})
+            with handle(fake):
                 print(load_app("settings"))
+                print(load_app("other"))
     except Log.note as eff:
         print("log:", eff.text)
         eff.resume(0)

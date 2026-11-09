@@ -60,13 +60,15 @@ RULES = [
     ('RPAREN', r'\)'),
     ('LBRACKET', r'\['),
     ('RBRACKET', r'\]'),
+    ('LBRACE', r'\{'),
+    ('RBRACE', r'\}'),
 ]
 
 TOKENS = (['INDENT', 'DEDENT'] + [name for name, pattern in RULES]
           + sorted(KEYWORDS.values()))
 
-OPENERS = ['LPAREN', 'LBRACKET']
-CLOSERS = ['RPAREN', 'RBRACKET']
+OPENERS = ['LPAREN', 'LBRACKET', 'LBRACE']
+CLOSERS = ['RPAREN', 'RBRACKET', 'RBRACE']
 
 def _build_lexer():
     lg = LexerGenerator()

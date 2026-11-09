@@ -2,3 +2,6 @@ exit 0
 debug = true
 log: writing settings
 7
+missing: other.json
+log: writing other
+7

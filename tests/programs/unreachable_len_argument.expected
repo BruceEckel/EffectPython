@@ -1,2 +1,2 @@
 exit 1
-error: line 5: len() needs a list or str, not int
+error: line 5: len() needs a list, dict, or str, not int

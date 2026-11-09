@@ -6,7 +6,7 @@ Milestone 9 the list and for rules (plan 1.9), from Milestone 10
 the loop rule for break and continue (plan 1.10) and the type rules
 for return values, loop and try merging, and [] aliasing, and from
 Milestone 11 the bool rule for and, or, not, if, and while, and elif
-(plan 1.11).
+(plan 1.11), and from Milestone 12 the dict and in rules (plan 1.12).
 
 Run with:  pypy2 -m pytest
 """
@@ -380,8 +380,8 @@ FAKE = ('class Fake(Handler[FileIO]):\n'
      "as FileIO.read does"),
     ('class Fake(Handler[FileIO]):\n    items: Nope\n' + FAKE[29:] + MAIN,
      InvalidProgram,
-     "line 9: field 'items' of handler class 'Fake' must be int, str, or "
-     "list[...], not Nope"),
+     "line 9: field 'items' of handler class 'Fake' must be int, str, "
+     "list[...], or dict[str, ...], not Nope"),
     ('class Fake(Handler[FileIO]):\n    writes: int = "x"\n' + FAKE[29:]
      + MAIN, InvalidProgram,
      "line 9: default of field 'writes' must be int, not str"),
@@ -1043,9 +1043,9 @@ def test_a_for_over_an_empty_list_leaves_its_name_untyped():
      'line 9: range() is allowed only as the iterable of a for '
      'statement'),
     ('def f() -> int:\n    for x in 5:\n        pass\n    return 0\n'
-     + MAIN, 'line 9: for needs a list or range(), not int'),
+     + MAIN, 'line 9: for needs a list, a dict, or range(), not int'),
     ('def f() -> int:\n    print(len(5))\n    return 0\n' + MAIN,
-     'line 9: len() needs a list or str, not int'),
+     'line 9: len() needs a list, dict, or str, not int'),
     ('def f() -> int:\n    print(len("a", "b"))\n    return 0\n' + MAIN,
      'line 9: len() takes 1 arguments (2 given)'),
     ('def f() -> int:\n    n = 1\n    return n[0]\n' + MAIN,
@@ -1590,3 +1590,74 @@ def test_a_pass_that_unbinds_a_name_is_followed_by_another():
         check_source(body)
     assert info.value.msg == ("line 15: name 'e' is unbound after the "
                               "except clause that bound it")
+
+# --- dict[str, T] and in (Milestone 12) --------------------------------------
+
+TOTAL = ('def total(d: dict[str, int]) -> int:\n    n = 0\n'
+         '    for k in d:\n        n = n + d[k] + 1\n    return n\n')
+
+@pytest.mark.parametrize('body', [
+    TOTAL + 'def main() -> int / []:\n    d = {}\n    d["a"] = 1\n'
+    '    print(total(d))\n    return 0\n',
+    TOTAL + 'def main() -> int / []:\n    print(total({}))\n    return 0\n',
+    'def main() -> int / []:\n    d = {"a": 1}\n    k = "a"\n'
+    '    print(k in d, k not in d, len(d) + 1)\n    return 0\n',
+    'def main() -> int / []:\n    print(1 in [1, 2], 3 not in [1, 2])\n'
+    '    return 0\n',
+    'def main() -> int / []:\n    b = "a" in {"a": "x"}\n'
+    '    if b:\n        pass\n    return 0\n',
+    'class Files(Handler[FileIO]):\n    files: dict[str, str] = {}\n'
+    '    def read(self, path: str) -> str:\n'
+    '        return self.files[path]\n'
+    '    def write(self, path: str, content: str) -> int:\n'
+    '        self.files[path] = content\n        return len(self.files)\n'
+    + MAIN,
+], ids=['refined-then-passed', 'empty-passed', 'dict-membership-len',
+        'list-membership', 'in-gives-bool', 'dict-field'])
+def test_accepts_dict_and_membership(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def main() -> int / []:\n    d = {"a": 1}\n    print(d[1])\n'
+     '    return 0\n',
+     'line 10: a dict key must be str, not int'),
+    ('def main() -> int / []:\n    d = {"a": 1}\n    d["b"] = "s"\n'
+     '    return 0\n',
+     'line 10: the list holds int; cannot assign str'),
+    ('def main() -> int / []:\n    d = {"a": "x"}\n    print(1 in d)\n'
+     '    return 0\n',
+     "line 10: 'd' holds str; cannot test int"),
+    ('def main() -> int / []:\n    print(1 in 2)\n    return 0\n',
+     'line 9: in needs a list or dict, not int'),
+    ('def main() -> int / []:\n    print({1: 2})\n    return 0\n',
+     'line 9: dict keys must be str, not int'),
+    ('def main() -> int / []:\n    print({"a": 1, "b": "s"})\n'
+     '    return 0\n',
+     'line 9: dict values must share a type: int and str'),
+    ('def main() -> int / []:\n    print({"a": [1]})\n    return 0\n',
+     'line 9: dict values must be int, str, or bool, not a list'),
+    ('def main() -> int / []:\n    print(str({"a": 1}))\n    return 0\n',
+     'line 9: str() needs an int, str, or bool, not dict[str, int]'),
+    ('def main() -> int / []:\n    print({"a": 1} == {"a": 1})\n'
+     '    return 0\n',
+     'line 9: unsupported operand types for ==: '
+     'dict[str, int] and dict[str, int]'),
+    ('def f(n: int) -> int:\n    return n\n'
+     'def main() -> int / []:\n    print(f({}))\n    return 0\n',
+     'line 11: argument 1 of f() must be int, not dict'),
+], ids=['int-key', 'wrong-value', 'in-wrong-key', 'in-int',
+        'literal-int-key', 'mixed-values', 'list-value', 'str-of-dict',
+        'dict-equality', 'empty-to-int'])
+def test_rejects_a_dict_or_membership_type_error(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+def test_an_instance_name_survives_a_second_pass_over_its_suite():
+    body = (HX + 'def main() -> int / []:\n    x = 1\n'
+            '    try:\n        with handle(X):\n            h = HX()\n'
+            '            with handle(h):\n'
+            '                print(perform(X.a()))\n'
+            '    except X.a as eff:\n        eff.resume(2)\n'
+            '    return 0\n')
+    check_source(body)

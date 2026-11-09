@@ -1,0 +1,7 @@
+# Runtime-only: the checker does not evaluate keys, so a key the dict
+# lacks is found at runtime, uncatchable like an index out of range.
+
+def main() -> int:
+    d = {"a": 1}
+    print(d["a"], d["b"])
+    return 0

@@ -1,5 +1,6 @@
 """Milestone 1 acceptance: the evaluator runs a recursive Fibonacci;
-from Milestone 11, the boolean operators and elif (plan 1.11).
+from Milestone 11, the boolean operators and elif (plan 1.11);
+from Milestone 12, dicts and in (plan 1.12).
 
 Run with:  pypy2 -m pytest
 These tests import no RPython modules, so they need no PYTHONPATH.
@@ -555,7 +556,7 @@ def test_for_loop(body, printed):
     ('    xs = [1, 2]\n    xs[-3] = 1\n', 'list index out of range'),
     ('    xs = []\n    print(xs[0])\n', 'list index out of range'),
     ('    n = 3\n    print(n[0])\n', 'int is not a list'),
-    ('    print(len(3))\n', 'len() needs a list or str, not int'),
+    ('    print(len(3))\n', 'len() needs a list, dict, or str, not int'),
 ], ids=['past the end', 'before the start', 'assignment before the start',
         'empty list', 'index an int', 'len of an int'])
 def test_list_runtime_errors(body, msg):
@@ -690,6 +691,47 @@ def test_an_elif_chain_runs_the_first_arm_whose_test_holds():
     ('    print(not "s")\n', 'not needs a bool, not str'),
 ], ids=['if', 'while', 'and-left', 'and-right', 'or-right', 'not'])
 def test_a_non_bool_test_or_operand_is_a_runtime_error(body, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(body + '    return 0\n')
+    assert info.value.msg == msg
+
+# --- dict[str, T] and in (Milestone 12) --------------------------------------
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print({"a": 1, "b": "x"}, {}, len({"a": 1}))',
+     ["{'a': 1, 'b': 'x'} {} 1"]),
+    ('d = {}\n'
+     '    d["a"] = 1\n'
+     '    d["a"] = d["a"] + 1\n'
+     '    print(d, d["a"])',
+     ["{'a': 2} 2"]),
+    ('d = {"a": 1}\n'
+     '    print("a" in d, "b" in d, "b" not in d)',
+     ["True False True"]),
+    ('print(2 in [1, 2], 3 in [1, 2], 3 not in [1, 2])',
+     ["True False True"]),
+    ('d = {"c": 1, "a": 2}\n'
+     '    d["b"] = 3\n'
+     '    for k in d:\n'
+     '        print(k, d[k])',
+     ["c 1", "a 2", "b 3"]),
+], ids=['print', 'store-and-read', 'in-dict', 'in-list',
+        'insertion-order'])
+def test_dict_operations(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n')
+    assert (exit_code, lines) == (0, printed)
+
+@pytest.mark.parametrize('body, msg', [
+    ('    d = {"a": 1}\n    print(d["b"])\n', "key 'b' not found"),
+    ('    d = {"a": 1}\n    print(d[1])\n',
+     'a dict key must be str, not int'),
+    ('    d = {"a": 1, "b": 2}\n    for k in d:\n        d["new"] = 1\n',
+     'dict changed size during iteration'),
+    ('    d = {"a": 1}\n    for k in d:\n        d["new"] = 1\n',
+     'dict changed size during iteration'),
+], ids=['missing-key', 'int-key', 'resized', 'resized-on-last-key'])
+def test_a_dict_misuse_is_a_runtime_error(body, msg):
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_main_body(body + '    return 0\n')
     assert info.value.msg == msg

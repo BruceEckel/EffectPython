@@ -3,7 +3,8 @@ Milestone 1 subset; from Milestone 5, handler classes too; from
 Milestone 6, exceptions; from Milestone 7, operation rows and throw;
 from Milestone 8, finally; from Milestone 9, lists and the
 for loop; from Milestone 10, break and continue; from Milestone 11,
-the boolean operators and elif (plan 1.11).
+the boolean operators and elif (plan 1.11); from Milestone 12, dicts
+and in (plan 1.12).
 
 Run with:  pypy2 -m pytest
 """
@@ -396,7 +397,7 @@ def test_line_numbers_of_handler_nodes():
      "line 2, column 14: a handler method's first parameter must be self"),
     ('class Fake(Handler[FileIO]):\n    writes: int = 1 + 2\n',
      'line 2, column 17: a field default must be an int or str literal, '
-     'or []'),
+     '[], or {}'),
     ('def main() -> int:\n    with open(f):\n        pass\n',
      'line 2, column 10: a with statement must use handle(...)'),
     ('class Fake(Handler[FileIO]):\n    def read(self) -> str: ...\n',
@@ -821,7 +822,7 @@ def test_unary_minus(source, expected):
      "line 2, column 24: a list field's default must be []"),
     ('class Fake(Handler[Log]):\n    count: int = True\n',
      'line 2, column 16: a field default must be an int or str literal, '
-     'or []'),
+     '[], or {}'),
 ], ids=['assign-call', 'attr-on-index', 'list-default', 'bool-default'])
 def test_list_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
@@ -909,4 +910,54 @@ def test_an_elif_carries_its_own_line():
 def test_boolean_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def main() -> int:\n' + source)
+    assert info.value.msg == msg
+
+# --- dict[str, T] and in (Milestone 12) --------------------------------------
+
+def test_braces_are_tokens():
+    assert kinds('{"a": 1}') == [
+        'LBRACE', 'STRING', 'COLON', 'INT', 'RBRACE', 'NEWLINE']
+
+@pytest.mark.parametrize('source, expected', [
+    ('{}', ('DictLiteral', [], [])),
+    ('{"a": 1, "b": 2}',
+     ('DictLiteral', [('StrLiteral', 'a'), ('StrLiteral', 'b')],
+      [('IntLiteral', 1), ('IntLiteral', 2)])),
+    ('{"a": 1,\n        "b": 2}',
+     ('DictLiteral', [('StrLiteral', 'a'), ('StrLiteral', 'b')],
+      [('IntLiteral', 1), ('IntLiteral', 2)])),
+], ids=['empty', 'two-entries', 'newline-inside'])
+def test_dict_literal_shapes(source, expected):
+    module = parse('def main() -> int:\n    print(%s)\n' % source)
+    call = module.functions[0].body[0].expr
+    assert shape(call.args[0]) == expected
+
+@pytest.mark.parametrize('source, expected', [
+    ('a in b', ('In', ('Name', 'a'), ('Name', 'b'), False)),
+    ('a not in b', ('In', ('Name', 'a'), ('Name', 'b'), True)),
+    ('not a in b',
+     ('Not', ('In', ('Name', 'a'), ('Name', 'b'), False))),
+], ids=['in', 'not-in', 'not-over-in'])
+def test_membership_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    statement = module.functions[0].body[0]
+    assert shape(statement) == ('ExprStmt', expected)
+
+def test_dict_type_on_a_parameter():
+    fn = parse('def f(d: dict[str, int]) -> int:\n    return 0\n'
+               ).functions[0]
+    assert fn.param_types == ['dict[str, int]']
+
+@pytest.mark.parametrize('source, msg', [
+    ('def f(d: dict[int, str]) -> int:\n    return 0\n',
+     'line 1, column 15: dict keys are str, not int'),
+    ('def f(d: dict) -> int:\n    return 0\n',
+     'line 1, column 10: dict needs a key and a value type: '
+     'dict[str, int], dict[str, str], or dict[str, bool]'),
+    ('class H(Handler[E]):\n    d: dict[str, int] = {"a": 1}\n',
+     "line 2, column 23: a dict field's default must be {}"),
+], ids=['int-key', 'bare-dict', 'field-default'])
+def test_dict_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
     assert info.value.msg == msg

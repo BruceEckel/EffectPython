@@ -1,0 +1,11 @@
+# Runtime-only: an if leaves k with two types, so the checker cannot
+# hold the key to a str; dict_key does.
+
+def main() -> int:
+    d = {"a": 1}
+    if 1 == 1:
+        k = 7
+    else:
+        k = "a"
+    print(d[k])
+    return 0

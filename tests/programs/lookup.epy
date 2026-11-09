@@ -1,0 +1,50 @@
+# Milestone 12: dict[str, T] (plan 1.12). A dict built in a loop and
+# printed in insertion order; in and d[k]; a {} refined by its first
+# store and passed to a dict[str, int] parameter; a dict field a method
+# stores into; and a dict shared with a clause, which adds a key while
+# the body is suspended, so the body's next read sees it.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Count(Effect):
+    def seen(word: str) -> int: ...
+
+class Lookup(Effect):
+    def get(key: str) -> int: ...
+
+class Tally(Handler[Count]):
+    counts: dict[str, int] = {}
+    def seen(self, word: str) -> int:
+        if word in self.counts:
+            self.counts[word] = self.counts[word] + 1
+        else:
+            self.counts[word] = 1
+        return self.counts[word]
+
+def total(d: dict[str, int]) -> int:
+    n = 0
+    for k in d:
+        n = n + d[k]
+    return n
+
+def main() -> int / []:
+    squares = {}
+    for i in range(4):
+        squares[str(i)] = i * i
+    print(squares, len(squares), total(squares))
+    print("2" in squares, "9" in squares, "9" not in squares)
+    tally = Tally()
+    with handle(tally):
+        for word in ["a", "b", "a", "c", "a"]:
+            perform(Count.seen(word))
+    print(tally.counts, tally.counts["a"])
+    table = {"x": 1}
+    try:
+        with handle(Lookup):
+            print(perform(Lookup.get("x")), "y" in table)
+            print(perform(Lookup.get("y")), table)
+    except Lookup.get as eff:
+        if eff.key not in table:
+            table[eff.key] = len(table) + 1
+        eff.resume(table[eff.key])
+    return 0

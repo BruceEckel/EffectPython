@@ -1,0 +1,19 @@
+# Runtime-only: the clause stores a new key while the body walks the
+# dict, and the walk finds the size changed before its next step, as
+# Python's for over a dict does.
+
+from effectpython import Effect, perform, handle
+
+class Ask(Effect):
+    def add(key: str) -> int: ...
+
+def main() -> int / []:
+    d = {"a": 1, "b": 2}
+    try:
+        with handle(Ask):
+            for k in d:
+                print(k, perform(Ask.add(k + k)))
+    except Ask.add as eff:
+        d[eff.key] = 0
+        eff.resume(len(d))
+    return 0

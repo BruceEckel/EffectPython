@@ -1,0 +1,2 @@
+exit 1
+error: line 7: in needs a list or dict, not int
