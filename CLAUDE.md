@@ -77,3 +77,11 @@ Do not pass `-O0`: it selects the refcounting GC, which cannot combine with `--c
 ## Workflow
 
 Commit when a unit of work is done, and push after committing.
+
+## Plan sections
+
+A new design section in `effectpython_implementation_plan.md` quotes an error message, a line count, an evaluation order, or a CPython behaviour
+only after probing it: the checker through a scratch script, the runtime through the binary, CPython through `python3 -I`.
+Before its milestone is implemented, the section gets a `verify-claims` pass against the code,
+and the corrections go in their own commit, so the record shows what the pass found.
+Every section so far had a wrong detail that reading the code would have caught, and 1.14 had a semantic error (the index of an augmented assignment).
