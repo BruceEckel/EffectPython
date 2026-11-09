@@ -905,7 +905,7 @@ The generated lexer gains a rule `FSTRING` for `f"..."` and `f'...'`, with the s
 `FSTRING_START`, then for each run of literal text an `FSTRING_MIDDLE` carrying it, and for each field `LBRACE`, the field's own tokens, `RBRACE`, then `FSTRING_END`.
 The field's tokens come from the generated lexer run over the field's text (`_lex`), with each position shifted to the field's place in the source (`_shifted`), so a message about a field names the right line and column, a keyword in a field is renamed with the rest, and a `LexingError` inside a field is "unexpected character" as it is elsewhere.
 `FSTRING` is in `RAW_ONLY`, so the parser's token list does not name it.
-Three errors belong to this pass, in Python's words: a `{` with no `}` before the closing quote is "f-string: expecting '}'", a `}` with no `{` is "f-string: single '}' is not allowed", and `{}` or `{ }` is "f-string: empty expression not allowed".
+Three errors belong to this pass, in the words of CPython 3.12 and later: a `{` with no `}` before the closing quote is "f-string: expecting '}'", a `}` with no `{` is "f-string: single '}' is not allowed", and `{}` or `{ }` is "f-string: valid expression required before '}'" (the first implementation used "f-string: empty expression not allowed", the wording of 3.11 and earlier; corrected 2026-11-09).
 A second `{` before the `}` is "f-string: nested '{' is not allowed", since a field holds one expression and the dialect's `{` would begin a dict literal.
 A format spec, a `!r` conversion, or an `=` inside a field needs no detecting: a `:`, a `!`, or an `=` is not part of an `expr`, so the lexer or the parser rejects it as it rejects the same character elsewhere.
 The grammar gains an atom:
@@ -920,7 +920,7 @@ fstring_parts : FSTRING_MIDDLE
 ```
 
 The `LBRACE` of a field and the `LBRACE` of a dict literal do not conflict: after `FSTRING_START` or `fstring_parts` the parser is not reading an expression, so no `atom` can begin there.
-The grammar keeps no empty production, as it has none today, and the parts accumulate in a `_FStringParts` box as `_DictItems` accumulates a dict literal's.
+The f-string productions add no empty production (`f""` has its own `atom` production instead), and the parts accumulate in a `_FStringParts` box as `_DictItems` accumulates a dict literal's.
 
 **AST.**
 One node, `FString(literals, exprs)`, an `Expr`, where `literals` is a list of `str` one longer than `exprs`, so the value is `literals[0]`, then `str` of `exprs[0]`, then `literals[1]`, and so on.
@@ -945,7 +945,7 @@ A `perform()` inside a field suspends the body in the middle of the f-string's e
 **What the programs gain.**
 `collector.epy` notes `f"squared {i}"`;
 `handler_class.epy` answers `f"missing: {path}"`, notes `f"writing {path}"`, and reads `f"{name}.json"`;
-`read_config.epy`, `counting_handler.epy`, `nested.epy`, and `two_handlers.epy` lose their `"contents of " + path` concatenations in the same way.
+`read_config.epy` and `counting_handler.epy` lose their `"contents of " + path` concatenations in the same way, `nested.epy` its `"select " + names`, `"rows for " + eff.sql`, and `"names from " + eff.path`, and `two_handlers.epy` its `"Good day, " + name` and `"Hi " + name`.
 `lookup.epy` keeps `squares[str(i)]`: `f"{i}"` says the same thing less clearly, and the program is where `str()` is shown.
 `list_ops.epy` keeps `str(7) + str(True) + str("s")`, which shows `str()` on each scalar.
 The acceptance program `formatting.epy` has fields of all three scalar types, an arithmetic expression and a comparison in a field, a subscript with the other quote kind (`f"{d['k']}"`), an f-string as a dict key and as the value of a `-> str` return, two adjacent fields, and a `perform(Log.note(...))` in the first and third fields of one f-string with a `print` in the function the second field calls, so the output shows the fields evaluated in order across two stacklet switches.
@@ -965,7 +965,7 @@ The acceptance program `formatting.epy` has fields of all three scalar types, an
     The samples print one value to a line and align no columns; a spec is a second mini-language with its own grammar and its own runtime.
     *The design leaves it out; a `:` in a field is a syntax error at the parser, with the parser's message for an unexpected `:`.*
 5.  *Whether the field's own tokens report positions in the source or in the field text.*
-    rply's `lexer.lex()` numbers positions from the start of the string it is given, so an unshifted position would name column 1 of line 1 for an error inside a field.
+    rply's `lexer.lex()` numbers positions from the start of the string it is given, so an unshifted position would name line 1 and the column within the field's text for an error inside a field.
     *The design shifts each token's `SourcePosition` by the field's index, line, and column in the source, which `_expand_fstring` knows from the `FSTRING` token's position, so every message names the program's line and column.*
 
 ---
@@ -1659,9 +1659,9 @@ EffectPython/
     *   *Designed and implemented 2026-11-08*, the five open questions settled as 1.13 recommends: no literal-brace escape, scalar fields alone, a token sequence from the lexer, no format specs, and positions shifted into the source.
         The one departure from the design as first written: the expansion sits in `raw_tokens()`, before `tokenize()`'s pass, so the field's tokens take the keyword renaming and the bracket tracking with every other token, and the grammar flattens `fstring_part` into four `fstring_parts` productions.
     *   *Implementation:* `lexer.py` gains the `FSTRING` rule before `NAME`, the tokens `FSTRING_START`, `FSTRING_MIDDLE`, and `FSTRING_END`, `RAW_ONLY`, and `_expand_fstring`, `_lex`, and `_shifted`, with the four f-string errors; `ast_nodes.py` gains `FString(literals, exprs)`; `parser.py` gains the two `atom` productions and `fstring_parts` with `_FStringParts`, the conflict check still clean; `checker.py` gains `check_fstring`; `interpreter.py` gains the `FString` branch of `eval_expr` and `is_scalar`, which `builtin()` shares.
-        `tests/test_parser.py` (29 tests), `tests/test_checker.py` (12), and `tests/test_interpreter.py` (13) each get a section; the two module docstrings name the new programs, which `tests/test_docstrings.py` checks; `TUTORIAL.md` section 1 introduces the f-string beside `str()`, with `tutorial_basics.epy` building its repeated word that way, and section 9's `str(i)` sentence names the field as the other form.
+        `tests/test_parser.py` (29 tests), `tests/test_checker.py` (12), and `tests/test_interpreter.py` (13) each get a section; the interpreter docstring names `unreachable_fstring_field.epy` and `runtime_fstring_field.epy`, which `tests/test_docstrings.py` checks; `TUTORIAL.md` section 1 introduces the f-string beside `str()`, with `tutorial_basics.epy` building its repeated word that way, and section 9's `str(i)` sentence names the field as the other form.
     *   *Acceptance test:*
         *   `formatting.epy`: fields of `int`, `str`, and `bool`; an arithmetic expression and a comparison in a field; `f"{d['k']}"`; an f-string as a dict key and as a `-> str` return value; two adjacent fields; and a `perform(Log.note(...))` in the first and third fields of one f-string around a call that prints, with the handler printing each note, so the output shows the fields evaluated left to right across two stacklet switches.
         *   `collector.epy` notes `f"squared {i}"`, and `handler_class.epy`, `read_config.epy`, `counting_handler.epy`, `nested.epy`, `two_handlers.epy`, and `tutorial_basics.epy` replace their `+` concatenations with f-strings; their recorded outputs did not change.
-        *   Reject `f"{xs}"` with `xs` a `list[int]` ("an f-string field needs an int, str, or bool, not list[int]"), `f"{"` ("f-string: expecting '}'"), `f"}"` ("f-string: single '}' is not allowed"), `f"{}"` ("f-string: empty expression not allowed"), `f"{{x}}"` ("f-string: nested '{' is not allowed"), and `f"{n:3}"` as a syntax error; accept `f""`, `f"text"`, `f"{a}{b}"`, `f'{d["k"]}'`, a `perform()` in a field with the effect in the row, and an f-string handed to a `str` parameter.
+        *   Reject `f"{xs}"` with `xs` a `list[int]` ("an f-string field needs an int, str, or bool, not list[int]"), `f"{"` ("f-string: expecting '}'"), `f"}"` ("f-string: single '}' is not allowed"), `f"{}"` ("f-string: valid expression required before '}'"), `f"{{x}}"` ("f-string: nested '{' is not allowed"), and `f"{n:3}"` as a syntax error; accept `f""`, `f"text"`, `f"{a}{b}"`, `f'{d["k"]}'`, a `perform()` in a field with the effect in the row, and an f-string handed to a `str` parameter.
         *   `runtime_fstring_field.epy` reaches "an f-string field needs an int, str, or bool, not list" through an unknown type, and `unreachable_fstring_field.epy` shows the checker stopping `f"{xs}"`.

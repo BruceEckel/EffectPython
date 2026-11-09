@@ -16,8 +16,8 @@ field's tokens come from the generated lexer run over the field's
 text, with each position shifted to the field's place in the source
 (plan 1.13). A field holds no brace and no quote of the enclosing
 kind; a { with no }, a } with no {, an empty field, and a { inside a
-field are the four f-string errors, in Python's words where Python
-has them.
+field are the four f-string errors, the first three in the words of
+CPython 3.12 and later.
 
 The whole file is lexed before parsing because RPython's next() built-in
 propagates StopIteration and RuntimeError alone: a LexingError raised
@@ -190,7 +190,8 @@ def _expand_fstring(tok):
         assert start >= 0
         field = text[start:k]
         if field.strip() == '':
-            raise _fstring_error(tok, j, "empty expression not allowed")
+            raise _fstring_error(
+                tok, j, "valid expression required before '}'")
         result.append(Token('LBRACE', '{', _shifted(pos, text, j)))
         result.extend(_lex(field, _shifted(pos, text, start)))
         result.append(Token('RBRACE', '}', _shifted(pos, text, k)))
