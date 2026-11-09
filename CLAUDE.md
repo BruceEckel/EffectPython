@@ -91,3 +91,6 @@ only after probing it: the checker through a scratch script, the runtime through
 Before its milestone is implemented, the section gets a `verify-claims` pass against the code,
 and the corrections go in their own commit, so the record shows what the pass found.
 Every section so far had a wrong detail that reading the code would have caught, and 1.14 had a semantic error (the index of an augmented assignment).
+After any change to `checker.py`'s fixpoints or to how a name's type changes across a suite,
+run `pypy2 tests/enumerate_programs.py 2 3` against a binary translated from the change before committing it,
+and record the counts in the commit message.
