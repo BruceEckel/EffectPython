@@ -828,6 +828,70 @@ The acceptance program `conditions.epy` has an effect `Log.note` performed insid
     Python's `not` sits above the comparison, so `not a == b` is `not (a == b)`; `not n + 1` is `not (n + 1)` either way, legal in Python and meaningless under the `bool` rule.
     *The design follows Python, so every accepted program parses as Python parses it, and leaves `not n + 1` to the checker: "not needs a bool, not int".*
 
+### 1.12 `dict[str, T]` (designed 2026-11-08)
+
+The fake handler that answers by path is the central sample, and it answers through an `if`/`elif` chain on the path (`handler_class.epy`), because the dialect has no mapping.
+This section adds a dictionary with `str` keys and values of one scalar type, with the operations the samples need and no more, on the pattern of 1.9's lists.
+
+**Syntax.**
+`{` and `}` become tokens (`LBRACE`, `RBRACE`).
+A dict literal is `{}` or `{<expr>: <expr>, ...}`, an atom beside the list literal.
+The type is written `dict[str, int]`, `dict[str, str]`, or `dict[str, bool]` wherever a type is written: `type : NAME LBRACKET NAME COMMA NAME RBRACKET`, with the first name `dict` and the key type `str`.
+The operations reuse what lists have: `d[k]` is an `Index`, `d[k] = v` an `IndexAssign`, `len(d)` a `Call`, and `for k in d` a `For`.
+One expression form is new: `<arith> in <arith>` and `<arith> not in <arith>`, an `In` node with a `negated` flag, in the `comparison` layer beside `cmpop`, since `in` is a comparison in Python's grammar.
+`in` tests a dict for a key and a list for an element, so `s in ["skip", "stop"]` reads as Python reads it.
+Nothing else: no `del`, no `.keys()`, `.values()`, `.items()`, or `.get()`, no `==` between dicts, and no dict as a value or an element (open questions 1, 2, and 4).
+
+**Checker.**
+`"dict[str, int]"`, `"dict[str, str]"`, and `"dict[str, bool]"` are type names, as the list types are, and `is_dict`, `value_of`, and `matches` extend to them.
+A literal's keys must be `str` and its values must share one type, "dict values must share a type: int and str";
+a value of unknown type makes the literal unknown, as it does a list literal, and a dict or a list value is rejected, "dict values must be int, str, or bool, not a dict".
+`{}` has the element-less type `"dict"`, which matches any dict type, and a name holding it takes the type of the first store `d[k] = v` (`check_index_assign`) or of the slot it is handed to (`hand_over`), and loses its type when assigned to another name, the rules a `[]` follows.
+`d[k]` requires a `str` key and has the value type; `d[k] = v` requires a `str` key and a value of the value type; `k in d` requires a `str` key for a dict and an element-typed value for a list, and is `bool`;
+`len(d)` is `int`; `for k in d` binds `k` to `str`.
+A field may be declared `dict[str, T]`, and its default, if any, is `{}` (open question 3).
+A typed slot refuses an unknown value, and a known type is the runtime type, as for every other type (2.2).
+
+**Runtime.**
+`W_Dict(items_w)` holds an RPython `dict` from `str` to `W_Root`, which RPython keeps in insertion order, so `for k in d` and `str()` follow the order of the stores as Python's do.
+`str()` gives Python's form, `{'a': 1, 'b': 'x'}`, with the key quoted as a `str` element of a list is.
+`d[k]` on a missing key is the runtime error "key 'k' not found", uncatchable like "list index out of range": the program tests with `in` first, and a key it did not test for is a bug, not a condition it planned for (open question 5).
+`exec_for` over a dict walks the keys and, before each step, compares the dict's length with the one it started with; a change is the runtime error "dict changed size during iteration", Python's `RuntimeError` for the same program (open question 6).
+`HandlerClass.construct` builds a fresh `W_Dict` for a `dict` field on every construction, through `default_value`, as it builds a fresh `W_List`.
+`In` evaluates both operands and asks the dict for the key or walks the list with `scalars_equal`.
+`list_value`, `list_index`, and `builtin` gain the dict cases, so a subscript on a value that is neither is "int is not a list or dict".
+Nothing in the handler runtime changes: a `W_Dict` is a value the body and a clause may share by reference, as a `W_List` is.
+
+**What the programs gain.**
+`FakeFileIO` holds `files: dict[str, str]` and answers `read` with `if path in self.files: return self.files[path]` and a `raise NotFound(path)` otherwise, which is the fake a reader expects and the shape the tutorial's exception section builds toward.
+A counting handler keeps `counts: dict[str, int]` by label, where today it keeps one `int`.
+`loop_exits.epy` writes `if s in ["skip", "stop"]:`.
+The acceptance program `lookup.epy` has a dict built in a loop, read in a clause while the body is suspended, and lengthened by the clause, so the body's next read sees the new key: the sharing claim of 1.9, for the new value.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether keys may be `int` as well as `str`.*
+    An RPython `dict` takes one key type, so `dict[int, T]` needs a second class or an `r_dict` keyed on `W_Root` with its own hash and equality.
+    *The design takes `str` keys alone: every sample keys on a name or a path, and a second class is a mechanism no program asks for.*
+2.  *Whether `d.get(k, default)`, `.keys()`, `.values()`, `.items()`, and `del d[k]` come along.*
+    Each is a method the parser would read as a `MethodCall`, as `append` is, and `.items()` needs a tuple or a second loop form.
+    *The design adds none: `in` followed by `d[k]` says what `.get()` says, `for k in d` with `d[k]` says what `.items()` says, and nothing a sample does removes a key.*
+3.  *Whether a handler field may be a dict.*
+    The fake filesystem is the use case, and a field is where its table lives.
+    *The design allows it, with `{}` as the sole default and a fresh dict per construction, as a list field has.*
+4.  *Whether dicts compare with `==`.*
+    Lists gained `==` because tests compared a result against a literal; a dict result is read key by key.
+    *The design leaves it out until a program compares two dicts.*
+5.  *Whether a missing key is a runtime error or a dialect exception.*
+    Python raises `KeyError`, which a `try` catches; the dialect's exceptions are declared classes, and a built-in one would need a name in every row that reads a dict.
+    *The design makes it a runtime error, as an index out of range is, and gives the program `in` to avoid it.*
+6.  *Whether a dict that changes size during a `for` is an error, as in Python, or walks a snapshot of its keys.*
+    A snapshot runs a program that Python stops; an error keeps the two in step.
+    *The design raises the error, checked before each step, so the handled-body case where a clause stores a new key while the body walks the dict fails the same way in both.*
+7.  *Whether `in` applies to lists as well.*
+    One node serves both, with the element type in place of the key type.
+    *The design includes lists, since `s in ["skip", "stop"]` is the form the loop samples want to write.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1476,3 +1540,13 @@ EffectPython/
         *   `conditions.epy`: `and`, `or`, and `not` in `if` and `while` tests and in a `return`; an `elif` chain of three arms plus `else`; a `perform(Log.note(...))` in the right operand of an `and` whose left operand is `False` and of an `or` whose left operand is `True`, with the handler printing each note, so the output shows the skipped operands were not performed; and a `return` of `a and b` from a function declared `-> bool`.
         *   Reject `1 and True` and `not "s"` with "and needs a bool, not int" and "not needs a bool, not str"; reject `if n:` with `n` an `int` with "if needs a bool, not int"; reject `a < b < c` as a syntax error and `not n + 1` with "not needs a bool, not int"; accept `not a == b`, `a and not b or c`, a `perform()` in either operand with the effect in the row, and an `elif` chain whose arms assign one name two types followed by a `print` of the name.
         *   `runtime_bool_operand.epy`: an `and` whose left operand has an unknown type and holds an `int`, reaching the runtime's "and needs a bool, not int".
+
+12. **Milestone 12: `dict[str, T]` (1.12)**
+    *   *Designed 2026-11-08*, with seven open questions and recommendations in 1.12.
+    *   *Implementation:* `lexer.py` gains `LBRACE` and `RBRACE`; `ast_nodes.py` gains `DictLiteral` and `In`; `parser.py` gains the dict literal atom, the two-parameter type form, and the `in` and `not in` comparisons; `checker.py` gains the dict types in `is_dict`, `value_of`, `matches`, `check_index`, the `IndexAssign` branch, `check_builtin`, the `For` branch, and `collect_field`, plus `In`; `model.py` gains `W_Dict`; `interpreter.py` gains the `DictLiteral` and `In` branches, the dict cases of `list_value`, `list_index`, `builtin`, `exec_for`, and `default_value`, and the two runtime errors.
+        `tests/test_parser.py`, `tests/test_checker.py`, and `tests/test_interpreter.py` each get a section; `TUTORIAL.md` section 6 shows the fake filesystem as a dict field and section 9 the dict beside the list.
+    *   *Acceptance test:*
+        *   `lookup.epy`: a `dict[str, int]` built in a `for`, printed in insertion order, read with `in` and `d[k]`, stored into a `dict[str, str]` handler field through a method, and read in a clause while the body is suspended, with a key the clause adds visible to the body's next read.
+        *   `handler_class.epy` answers `read` from a `files: dict[str, str]` field, raising `NotFound` for a path not in it, and `loop_exits.epy` tests membership with `in`.
+        *   Reject `{1: "a"}` ("dict keys must be str, not int"), `{"a": 1, "b": "s"}`, `d[1]` on a `dict[str, int]`, `d["a"] = "s"` on a `dict[str, int]`, `1 in d`, `{}` passed where an `int` is expected, a field `dict[int, str]`, and a dict literal holding a list; accept `{}` refined by its first store and then handed to a `dict[str, int]` parameter, `k in d` with `k` a `str`, `not in`, and `for k in d` reading `d[k]`.
+        *   `runtime_missing_key.epy` reaches "key 'x' not found", `runtime_dict_resized.epy` reaches "dict changed size during iteration" from a clause storing a key while the body walks the dict, and `unreachable_dict_key_type.epy` shows the checker stopping `d[1]`.
