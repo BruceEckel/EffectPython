@@ -971,9 +971,9 @@ The acceptance program `formatting.epy` has fields of all three scalar types, an
 ### 1.14 Augmented assignment (designed 2026-11-09)
 
 A survey of the 137 sample programs on 2026-11-09, made after f-strings went in, looked for every line where the dialect forces a form Python would not write.
-Of its 29 findings, fifteen lines in thirteen programs were `x = x + 1` for `x += 1`;
-`range()` took three of them, the loop counters of the stress programs, the same day, and a grep at `94fdb04` finds fourteen in twelve.
-Every handler that counts writes `self.writes = self.writes + 1` (`counting_handler.epy`), and the stress programs write `total = total + perform(Counter.tick(i))`.
+Of its 29 findings, the survey filed fifteen lines in thirteen programs under `x = x + 1` for `x += 1`, three of them the loop counters `range()` took the same day, and three more under the feature it saw first (a `sum()`, a `join()`, a `dict.get()`).
+A grep at `94fdb04` finds fifteen lines in twelve programs: fourteen with a name or a field as target and one, `lookup.epy`'s `self.counts[word]`, with a subscript.
+Every handler that counts writes `self.writes = self.writes + 1` (`counting_handler.epy`), and the stress programs write `total = total + perform(Counter.tick(i))` and `caught = caught + perform(Counter.tick(i))`.
 No other finding touched more than two programs.
 This section adds the augmented assignment statement for the dialect's five arithmetic operators: `+=`, `-=`, `*=`, `//=`, and `%=`.
 Today `x += 1` is a syntax error ("unexpected '='" at the `=`, since the lexer reads `+` and then `=`), so no accepted program changes meaning.
@@ -1001,6 +1001,8 @@ In Python the once-only rule is observable only through side effects in the targ
 in the dialect every `perform()` is a side effect a handler sees, so `d[perform(Ask.key())] += 1` must perform once, and a rewrite to `d[perform(Ask.key())] = d[perform(Ask.key())] + 1` would perform twice, with two notes in the handler's log where Python writes one.
 The rule also fixes when the target is read: before the value.
 If `v` performs and the clause assigns `xs[0]` before resuming, `xs[0] += v` stores the old element plus the resumed value, as Python does, since the read came first.
+What Python keeps from the target is the index value, not the position it named: `xs[-1] += v` with `xs = [1, 2]` and a `v` that appends `100` before returning `10` gives `[1, 2, 12]`, since `-1` names the new last element at the store, where a position held from the read would give `[1, 12, 100]`.
+A clause can append to a list it shares with the body (1.9), so the dialect must store through the index value as Python does.
 
 A name or a field as target has no such hazard: reading a name, or reading `self` and one of its fields, performs nothing and cannot fail at runtime in a checked program, so `x += v` means `x = x + v` and `self.n += v` means `self.n = self.n + v`, in evaluation order as well as in result (the `BinOp` reads its left operand before its right, and `AttrAssign` resolves `self` before the value).
 The parser builds those two forms directly: an `Assign` whose value is a `BinOp` over the `Name`, or an `AttrAssign` whose value is a `BinOp` over the `AttrRead`, as `elif` builds an `If` in the `orelse` of the `If` above it with no node of its own (1.11).
@@ -1013,31 +1015,31 @@ One node, `IndexAugAssign(op, target, index, value)`, a `Stmt`, beside `IndexAss
 The desugared forms need no new rule: a `Name` target must be bound (`require_bound`, "name 'x' is not defined", or the unbound-after-clause message), its type and the value's must be a pair `OPERATORS` allows for the operator (`check_operands`, "unsupported operand types for +: str and int"), and the result takes the left operand's type where known and the right's otherwise, as a `BinOp` does, so a name of unknown type becomes `int` after `x += 1` as it does after `x = x + 1`.
 A `str` target takes `+=` alone; a `bool`, a list, or a dict target takes none of the five, so `xs += [1]` is "unsupported operand types for +: list[int] and list[int]", the message `xs = xs + [1]` gives today, and `append` stays the form.
 A field target goes through `AttrAssign`'s rules: the target must be a handler instance, the field must exist, and the result must match the declared type, which it does whenever the operands pass, since the result has the field's type.
-`IndexAugAssign` takes `check_index`'s element or value type for the target and the index (so "a dict key must be str, not int", "a list index must be int, not str", and "int is not a list" are unchanged), types the value with its effects counted, and holds the pair to `check_operands` with the element type on the left, so `counts[word] += 1` on a `dict[str, str]` is "unsupported operand types for +: str and int".
-The store needs no further rule: the result has the element type where that is known, and where it is not, the container's type is unknown and the runtime checks the store.
+`IndexAugAssign` takes `check_index`'s element or value type for the target and the index (so "a dict key must be str, not int", "a list index must be int, not str", and "'n' is not a list" are unchanged), types the value with its effects counted, and holds the pair to `check_operands` with the element type on the left, so `counts[word] += 1` on a `dict[str, str]` is "unsupported operand types for +: str and int".
+The store needs no further rule: the result has the element type where that is known, and where it is not (a container of unknown type, or an element-less `[]` or `{}`, whose read fails at runtime), `binop` accepts `int` with `int` and `str` with `str` alone, so the stored value has the runtime type of the element it replaces.
 The first-store refinement of `{}` (1.12) does not apply, since a key must hold a value before anything can be added to it.
 Nothing changes in the fixpoints of 2.2: the statement rebinds its name as an assignment does (`rebind`), and `check_stmt` records the types after it as after any statement.
 
 **Runtime.**
 The desugared forms run through `Assign` and `AttrAssign` as they stand.
-`IndexAugAssign` evaluates the target, then the index, reads the element (`dict_key` and a missing key is "key 'k' not found"; `list_index` and an index out of range is "list index out of range", as a read gives), then evaluates the value, applies `binop`, and stores at the key or the index it computed, where `IndexAssign` evaluates its value first.
-A `perform()` in the value suspends the body with the target, the index, and the old element held in the interpreter's frame, as a `perform()` inside any expression does; the handler runtime does not change.
-No operation shortens a list (1.9 has `append` alone), so the index is still in range at the store.
+`IndexAugAssign` evaluates the target, then the index, reads the element (`dict_key` and a missing key is "key 'k' not found"; `list_index` and an index out of range is "list index out of range", as a read gives), then evaluates the value, applies `binop`, and stores through the key or the index value it holds, calling `list_index` again at the store so a negative index names the element it names then, where `IndexAssign` evaluates its value first.
+A `perform()` in the value suspends the body with the target, the index value, and the old element held in the interpreter's frame, as a `perform()` inside any expression does; the handler runtime does not change.
+No operation shortens a list (`list_method` accepts `append` alone), so the second `list_index` cannot fail where the first passed.
 `binop`'s runtime message, "unsupported operand types for +: str and int", stays reachable through an unknown type, as it is for `+`.
 
 **What the programs gain.**
-`counting_handler.epy`, `many_method_performs.epy`, `throw_in_method.epy`, `unreachable_constructor_arity.epy`, and `unwind_deep_body.epy` count with `self.n += 1`;
-`many_performs.epy`, `many_throws.epy`, and `perform_in_for.epy` accumulate with `total += perform(...)`;
+`counting_handler.epy`, `many_method_performs.epy`, `throw_in_method.epy`, `unreachable_constructor_arity.epy`, and `unwind_deep_body.epy` count with a field, `self.n += 1`, `self.calls += 1`, `self.writes += 1`, or `self.failures += 1`;
+`many_performs.epy`, `many_method_performs.epy`, `many_throws.epy`, and `perform_in_for.epy` accumulate with `total += perform(...)` or `caught += perform(...)`, and `many_throws.epy` counts its catches with `caught += 1`;
 `conditions.epy`, `loop_exits.epy`, and `tutorial_basics.epy` (`times -= 1`) step a counter;
 `lookup.epy` sums with `n += d[k]` and counts with `self.counts[word] += 1` in the branch its `in` test guards (the `else` branch's first store stays, since the dialect has no `.get()`, 1.12 open question 2).
-The acceptance program `augmented.epy` has each of the five operators on an `int` name, `+=` on a `str` name, `+=` on a field, `+=` on a list element and on a dict value, a `perform()` in the index of a dict target with a handler that notes each key, so the output shows one note per statement, and a `perform()` in the value of `xs[0] += ...` whose clause assigns `xs[0]` before resuming, so the output shows the element read before the value.
+The acceptance program `augmented.epy` has each of the five operators on an `int` name, `+=` on a `str` name, `+=` on a field, `+=` on a list element and on a dict value, a `perform()` in the index of a dict target with a handler that notes each key, so the output shows one note per statement, a `perform()` in the value of `xs[0] += ...` whose clause assigns `xs[0]` before resuming, so the output shows the element read before the value, and a `perform()` in the value of `xs[-1] += ...` whose clause appends before resuming, so the output shows the store through the index value.
 
 **Open questions (recommendations in italics).**
 
 1.  *Whether every target gets one `AugAssign(op, target, value)` node, or the name and field targets are built as the assignment they mean and the subscript alone gets a node.*
     One node is one statement kind in the AST and one branch in each of the checker and the runtime, but each branch dispatches on the target's shape, three ways, and repeats the three assignment rules.
     *The design builds the name and field forms as `Assign` and `AttrAssign`, since the two meanings coincide in order and in result, and adds `IndexAugAssign` where they do not: a node exists where the semantics differ, as `elif` has none.*
-2.  *Whether the operand message names the operator as written, `+=`, as Python's does ("unsupported operand type(s) for +=: 'str' and 'int'"), or the operation performed, `+`.*
+2.  *Whether the operand message names the operator as written, `+=`, as Python's does where it has one ("unsupported operand type(s) for +=: 'int' and 'str'" for `x += "a"`; a `str` on the left gets `can only concatenate str (not "int") to str` for `+` and `+=` alike), or the operation performed, `+`.*
     Naming `+=` needs a display form passed through `check_operands` and `binop`, and the desugared forms would need it threaded through the `BinOp`.
     *The design keeps `+`: the message names the operation that fails, one message serves the three forms, and the line number names the statement.*
 3.  *Whether `xs += [1]` extends a list, as in Python.*
@@ -1747,9 +1749,9 @@ EffectPython/
 14. **Milestone 14: augmented assignment (1.14)**
     *   *Designed 2026-11-09*, open questions pending: one node or a desugaring for name and field targets, `+` or `+=` in the operand message, `+=` on lists, and two operators or five, each with a recommendation in 1.14.
     *   *Implementation:* `lexer.py` gains the five `...EQUALS` rules before `DOUBLESLASH`; `parser.py` gains `simple_stmt : postfix augop expr` and `augop`, with the action building an `Assign` or an `AttrAssign` over a `BinOp` for a name or a field target and an `IndexAugAssign` for a subscript, the conflict check still clean; `ast_nodes.py` gains `IndexAugAssign(op, target, index, value)`; `checker.py` checks it with `check_index`, the value's type, and `check_operands`; `interpreter.py` evaluates the target and the index, reads the element, evaluates the value, and stores the `binop` result at the same key or index.
-        `tests/test_parser.py`, `tests/test_checker.py`, and `tests/test_interpreter.py` each get a section; `TUTORIAL.md` section 1 names the form beside the `times -= 1` its `tutorial_basics.epy` listing then shows, and the `counting_handler.epy` listing shows `self.writes += 1`, both through the programs the generator includes.
+        `tests/test_parser.py`, `tests/test_checker.py`, and `tests/test_interpreter.py` each get a section; `TUTORIAL.md` section 1 names the form beside the `times -= 1` its `tutorial_basics.epy` listing then shows, and the `counting_handler.epy` listing in section 6 shows `self.writes += 1`; both listings are copies that `tests/test_tutorial.py` holds to the program files, so they change with the programs.
     *   *Acceptance test:*
-        *   `augmented.epy`: the five operators on an `int` name; `+=` on a `str` name, a field, a list element, and a dict value; a dict target whose index performs, with a handler noting each key, so one note per statement shows the index evaluated once; and `xs[0] += perform(...)` whose clause assigns `xs[0]` before resuming, so the printed element is the old value plus the resumed one.
+        *   `augmented.epy`: the five operators on an `int` name; `+=` on a `str` name, a field, a list element, and a dict value; a dict target whose index performs, with a handler noting each key, so one note per statement shows the index evaluated once; `xs[0] += perform(...)` whose clause assigns `xs[0]` before resuming, so the printed element is the old value plus the resumed one; and `xs[-1] += perform(...)` whose clause appends before resuming, so the sum goes where Python puts it, in the appended element's place (`[1, 2, 12]` from `[1, 2]`, an appended `100`, and a resumed `10`).
         *   The twelve programs with an `x = x + v` line at `94fdb04` replace it; their recorded outputs do not change.
         *   Reject `x += 1` with `x` unbound ("name 'x' is not defined"), `s += 1` with `s` a `str` ("unsupported operand types for +: str and int"), `xs += [1]` ("unsupported operand types for +: list[int] and list[int]"), `flag += True` ("unsupported operand types for +: bool and bool"), `d[k] += 1` with `d` a `dict[str, str]`, `d[1] += 1` ("a dict key must be str, not int"), `f() += 1` ("cannot assign to this expression"), and a `perform()` in the value with no effect in the row; accept `s += "x"`, `self.n += 1`, `xs[i] += 1`, `d[k] += 1` with `d` a `dict[str, int]`, and `x //= 2`.
         *   `runtime_augmented_key.epy` reaches "key 'k' not found" from `d[k] += 1` on a missing key.
