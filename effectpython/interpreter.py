@@ -109,74 +109,115 @@ goes through the translated binary, in tests/test_runtime.py.
 Some EffectPythonRuntimeError branches below are unreachable from the
 translated binary, because checker.py rejects the program first. The
 branches stay because the unit tests build modules by hand and run
-them without the checker. tests/programs/unreachable_*.epy holds a
-program per branch, with rejected_missing_clause.epy for clause_for;
-test_runtime.py runs each against its .expected, so a branch the
-checker stops rejecting shows up there, while a branch without a
-program does not. The pairs, checker rule and runtime site: a call to
-a function that does not exist (check_call; call), a call with the
-wrong number of arguments (check_args; call_function), a module
-without main() (check_entry_point; entry_point), a perform() with no
-handler in scope (the row; perform), a clause binding read where
-none is bound and an eff.<attr> naming no parameter (require_binding
-and the AttrRead branch; binding and read_attr), a handle statement
-without a clause for an operation (check_handle; clause_for), a
-break or continue outside a loop (require_loop; call_function), a
-read of a name nothing bound (require_bound; Environment.lookup), a
-constructor call with too few or too many arguments
-(check_construction; HandlerClass.construct), a field assigned on a
-name that holds no instance (require_instance; Interpreter.instance),
-a field the class does not declare (require_field; field_index), a
-handle() argument that is not an instance or that fulfills an effect
-another argument fulfills (check_handle; install), a raise or an
-eff.throw() of a value that is not an exception (require_exception;
-exception_value), an exception constructor call with more than a str
-message (check_exception_call; construct_exception), an operator on
-operands of the wrong types (check_operands; binop and compare), a
+them without the checker. A program under tests/programs/ holds each
+one: test_runtime.py runs each against its .expected, so a branch the
+checker stops rejecting shows up there, and test_docstrings.py holds
+this list and the directory to each other. The pairs, checker rule,
+runtime site, and program: a call to a function that does not exist
+(check_call; call; unreachable_undefined_function.epy), a call with
+the wrong number of arguments (check_args; call_function;
+unreachable_arity.epy), a module without main() (check_entry_point;
+entry_point; unreachable_no_main.epy), a perform() with no handler in
+scope (the row; perform; unreachable_unhandled_perform.epy), a clause
+binding read where none is bound and an eff.<attr> naming no
+parameter (require_binding and the AttrRead branch; binding and
+read_attr; unreachable_unbound_binding.epy and
+unreachable_no_parameter.epy), a handle statement without a clause
+for an operation (check_handle; clause_for;
+rejected_missing_clause.epy), a break or continue outside a loop
+(require_loop; call_function; unreachable_break_outside_loop.epy), a
+read of a name nothing bound (require_bound; Environment.lookup;
+unreachable_finally_reads_returned_name.epy), a constructor call with
+too few or too many arguments (check_construction;
+HandlerClass.construct; unreachable_constructor_too_few.epy and
+unreachable_constructor_arity.epy), a field assigned on a name that
+holds no instance (require_instance; Interpreter.instance;
+unreachable_field_on_non_instance.epy), a field the class does not
+declare (require_field; field_index; unreachable_undeclared_field.epy),
+a handle() argument that is not an instance or that fulfills an
+effect another argument fulfills (check_handle; install;
+unreachable_handle_non_instance.epy and unreachable_two_handlers.epy),
+a raise or an eff.throw() of a value that is not an exception
+(require_exception; exception_value;
+unreachable_raise_non_exception.epy and
+unreachable_throw_non_exception.epy), an exception constructor call
+with more than a str message (check_exception_call;
+construct_exception; unreachable_exception_arity.epy and
+unreachable_exception_unknown_arg.epy), an operator on operands of
+the wrong types (check_operands; binop and compare;
+unreachable_operand_types.epy and unreachable_compare_types.epy), a
 subscript, an append, or a for on a value that is not a list
-(check_index, check_append, the For branch; list_value), an in test
-on a value that is neither a list nor a dict (check_membership;
-contains, through list_value), a non-integer index or range()
-argument (check_index, check_range; list_index and int_value), a
-non-str dict key (check_index, check_dict_literal; dict_key), a
-method other than append or an append
-with the wrong number of arguments (check_append; list_method), a
-built-in with the wrong number or type of argument (check_builtin;
-builtin), range() outside a for (check_call; call), and a non-bool
-operand of and, or, or not, or test of an if or a while
-(require_bool; truth). A RaisedException nobody catches, which
+(check_index, check_append, the For branch; list_value;
+unreachable_subscript_non_list.epy, unreachable_append_non_list.epy,
+and unreachable_for_non_list.epy), an in test on a value that is
+neither a list nor a dict (check_membership; contains, through
+list_value; unreachable_in_target.epy), a non-integer index or
+range() argument (check_index, check_range; list_index and
+int_value; unreachable_str_index.epy and
+unreachable_range_unknown.epy), a non-str dict key (check_index,
+check_dict_literal; dict_key; unreachable_dict_key_type.epy), a
+method other than append or an append with the wrong number of
+arguments (check_append; list_method; unreachable_list_method.epy and
+unreachable_append_arity.epy), a built-in with the wrong number or
+type of argument (check_builtin; builtin; unreachable_len_arity.epy,
+unreachable_len_argument.epy, and unreachable_str_argument.epy),
+range() outside a for (check_call; call; unreachable_range_call.epy),
+and a non-bool operand of and, or, or not, or test of an if or a
+while (require_bool; truth; unreachable_bool_operand.epy and
+unreachable_if_test.epy). A RaisedException nobody catches, which
 entry_point in targeteffectpython.py would report, is unreachable
-too, since main()'s empty row rejects it. The "unknown node" branches
+too, since main()'s empty row rejects it
+(unreachable_uncaught_exception.epy). The "unknown node" branches
 guard the dispatch and no parse reaches them.
 
 Each pair holds where the checker has a type for the value, and a
 type it holds is the type the value has at runtime: checker.py's
-docstring gives the rules (merge_types for the paths that meet,
-hand_over for a [], require_known for a typed slot, check_return and
-always_returns for a return). An unknown type, which a name two
-paths leave with two types has, as do a [] handed to another name, a
-literal with an unknown element, and an element read from a [] the
-checker never refined, reaches these branches as any untyped value
-does, where the operation is one the checker leaves to the runtime.
-Those cases are runtime-only, and tests/programs/runtime_*.epy
-reaches each: a read of a name, or an append on one, whose
+docstring gives the rules, and a program shows each holding where it
+once did not (merge_types for the paths that meet,
+unreachable_loop_carried_list.epy and
+unreachable_clause_deleted_read*.epy; hand_over for a [],
+unreachable_alias_param.epy and unreachable_nested_list.epy;
+require_known for a typed slot, unreachable_range_unknown.epy;
+check_return and always_returns for a return,
+unreachable_return_type.epy and unreachable_missing_return.epy). An
+unknown type, which a name two paths leave with two types has, as do
+a [] handed to another name, a literal with an unknown element, and
+an element read from a [] the checker never refined, reaches these
+branches as any untyped value does, where the operation is one the
+checker leaves to the runtime. Those cases are runtime-only, and a
+program reaches each: a read of a name, or an append on one, whose
 assignment comes earlier in the source but did not run, because it
 sits in a loop body that ran zero times or in one branch of an if
-(Environment.lookup, and the OpCall branch of eval_expr); an
-operator or a comparison, a subscript, append, for, or in target, a
-len() or str() argument, a list index, a dict key, a bool operand,
-or an if or while test whose type the checker could not see; integer
-division or modulo by zero; a list index out of range
-(list_index_error.epy); a key a dict lacks, and a dict a store
-resizes while a for walks it;
-and a recursion that outgrows the C stack, which RPython's stack
-check stops and the entry point (deep_recursion.epy) or
-run_body_callback (deep_recursion_in_body.epy) reports as "maximum
-recursion depth exceeded". A read of a name an except clause
-deleted, where the read comes earlier in the source, needs a loop or
-a resumed body to run after the clause, and a pass that unbinds a
-name is followed by another over the suite, which finds the read
-unbound (unreachable_clause_deleted_read*.epy).
+(Environment.lookup, and the OpCall branch of eval_expr;
+runtime_zero_trip_read.epy, runtime_if_branch_read.epy, and
+runtime_zero_trip_append.epy); an operator or a comparison
+(runtime_unknown_operand.epy, runtime_compare_unknown.epy,
+runtime_alias_append.epy, runtime_unknown_elements.epy, and the
+paths that leave a name with two types: runtime_zero_trip_retype.epy,
+runtime_break_carried.epy, runtime_try_midsuite.epy,
+runtime_clause_before_resume.epy, runtime_finally_after_return.epy,
+runtime_finally_midsuite.epy, runtime_finally_break.epy, and
+runtime_finally_unwind.epy), a subscript, append, for, or in target
+(runtime_subscript_unknown.epy, runtime_append_unknown_target.epy,
+and runtime_for_unknown.epy), a len() or str() argument
+(runtime_len_unknown.epy and runtime_str_unknown.epy), a list index
+(runtime_index_unknown.epy), a dict key
+(runtime_dict_key_unknown.epy), a bool operand
+(runtime_bool_operand.epy), or an if or while test
+(runtime_if_test.epy and runtime_while_test.epy) whose type the
+checker could not see; integer division or modulo by zero
+(runtime_division_by_zero.epy and runtime_modulo_by_zero.epy); a list
+index out of range (list_index_error.epy); a key a dict lacks
+(runtime_missing_key.epy), and a dict a store resizes while a for
+walks it (runtime_dict_resized.epy); and a recursion that outgrows
+the C stack, which RPython's stack check stops and the entry point
+(deep_recursion.epy) or run_body_callback
+(deep_recursion_in_body.epy) reports as "maximum recursion depth
+exceeded". A read of a name an except clause deleted, where the read
+comes earlier in the source, needs a loop or a resumed body to run
+after the clause, and a pass that unbinds a name is followed by
+another over the suite, which finds the read unbound
+(unreachable_clause_deleted_read*.epy).
 """
 import os
 try:
