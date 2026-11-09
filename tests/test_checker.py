@@ -8,16 +8,21 @@ for return values, loop and try merging, and [] aliasing, and from
 Milestone 11 the bool rule for and, or, not, if, and while, and elif
 (plan 1.11), from Milestone 12 the dict and in rules (plan 1.12),
 from Milestone 13 the f-string field rule (plan 1.13), and from
-Milestone 14 the augmented assignment rules (plan 1.14).
+Milestone 14 the augmented assignment rules (plan 1.14). The last
+tests read Checker.unknowns, the places an operand of unknown type
+passed the checker, counted on the last pass over a suite alone.
 
 Run with:  pypy2 -m pytest
 """
+import os
 import pytest
 
-from effectpython.checker import check
-from effectpython.errors import InvalidProgram, UnhandledEffectError
+from effectpython import checker
+from effectpython.checker import Checker, check
+from effectpython.errors import (EffectError, InvalidProgram,
+                                 UnhandledEffectError)
 from effectpython.parser import parse
-from support import read_program
+from support import PROGRAMS, read_program
 
 EFFECTS = '''\
 class FileIO(Effect):
@@ -1919,3 +1924,76 @@ def test_accepts_an_augmented_value_that_performs_a_declared_effect():
     body = (LOG + 'def f() -> int / [Log]:\n    xs = [1]\n'
             '    xs[0] += perform(Log.note("x"))\n    return 0\n' + MAIN)
     check_source(body)
+
+EITHER = ('def main() -> int:\n    if 1 == 1:\n        v = "a"\n'
+          '    else:\n        v = 1\n')
+
+def unknowns_in(source):
+    """The (line, kind) pairs the checker noted, as far as it got."""
+    try:
+        subject = Checker(parse(source))
+    except EffectError:
+        return []
+    try:
+        subject.check()
+    except EffectError:
+        pass
+    return [(site // checker.KINDS, site % checker.KINDS)
+            for site in subject.unknowns]
+
+@pytest.mark.parametrize('lines, expected', [
+    ('    print(v + 1)\n', [(6, checker.OPERANDS)]),
+    ('    if v:\n        print(1)\n', [(6, checker.BOOL)]),
+    ('    print(v[0])\n', [(6, checker.INDEX)]),
+    ('    print(len(v))\n', [(6, checker.BUILTIN)]),
+    ('    print(v[0] + v[1])\n',
+     [(6, checker.INDEX), (6, checker.INDEX), (6, checker.OPERANDS)]),
+], ids=['operands', 'bool', 'index', 'builtin', 'three-on-a-line'])
+def test_notes_an_operand_of_unknown_type(lines, expected):
+    source = EITHER + lines + '    return 0\n'
+    assert unknowns_in(source) == expected
+
+@pytest.mark.parametrize('lines, expected', [
+    ('    xs = []\n    for i in range(2):\n        if i > 0:\n'
+     '            print(xs[0] == "a")\n        xs.append("a")\n', []),
+    ('    w = 1\n    for i in range(2):\n        print(v + 1)\n'
+     '        w = "a"\n', [(8, checker.OPERANDS)]),
+    ('    w = 1\n    u = 1\n    for j in range(2):\n'
+     '        for i in range(2):\n            print(v + 1)\n'
+     '            w = "a"\n        u = "a"\n',
+     [(10, checker.OPERANDS)]),
+], ids=['resolved-by-the-last-pass', 'met-on-every-pass', 'nested'])
+def test_counts_the_last_pass_over_a_loop_body(lines, expected):
+    source = EITHER + lines + '    return 0\n'
+    assert unknowns_in(source) == expected
+
+@pytest.mark.parametrize('name, expected', [
+    ('runtime_clause_after_assign.epy', [(17, checker.OPERANDS)]),
+    ('runtime_finally_unwind.epy', [(20, checker.OPERANDS)]),
+])
+def test_counts_the_last_pass_over_a_handle_statement(name, expected):
+    assert unknowns_in(read_program(name)) == expected
+
+@pytest.mark.parametrize('emptied, expected', [
+    ('', []),
+    ('        xs = []\n', [(7, checker.OPERANDS)]),
+], ids=['both-checks-known', 'second-check-alone'])
+def test_counts_either_check_of_a_finally_suite_once(emptied, expected):
+    source = ('def main() -> int:\n    xs = []\n    try:\n'
+              '        xs = ["a"]\n' + emptied + '    finally:\n'
+              '        print(xs[0] == "a")\n    return 0\n')
+    assert unknowns_in(source) == expected
+
+def test_counts_a_finally_suite_unknown_on_both_checks_once():
+    source = (EITHER + '    try:\n        print(1)\n    finally:\n'
+              '        print(v + 1)\n    return 0\n')
+    assert unknowns_in(source) == [(9, checker.OPERANDS)]
+
+def ordinary_programs():
+    return sorted(name for name in os.listdir(PROGRAMS)
+                  if name.endswith('.epy')
+                  and not name.startswith('runtime_'))
+
+@pytest.mark.parametrize('name', ordinary_programs())
+def test_an_ordinary_sample_has_no_unknown_operand(name):
+    assert unknowns_in(read_program(name)) == []

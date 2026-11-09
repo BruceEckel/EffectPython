@@ -165,6 +165,21 @@ with "'break' outside loop" or "'continue' not properly in loop"
 (plan 1.10). The count is loop_depth, which check_loop_body
 increments around every loop suite and check_function resets.
 
+Where an operator, a test, a subscript, or len() or str() meets an
+operand of unknown type, the checker lets it pass and the runtime
+judges it. Checker.unknowns records each such place as
+line * KINDS + kind, for a test or a script to read; nothing prints
+it. A suite checked more than once would count more than once, and a
+pass before the last may meet an unknown the last one resolves, so
+each pass of check_loop_body and of check_handle notes the length of
+the list when it starts and, when another pass follows, cuts the
+list back to it (_drop_unknowns): an inner loop's last pass is
+dropped with the outer pass around it. The two checks of a finally
+suite are both paths that run, and neither starts from wider types
+than the other, since a [] one boundary refined may reach the end
+unrefined, so both count, less what the second repeats
+(_drop_repeats).
+
 The checker dispatches by isinstance over the ast_nodes classes, as
 the evaluator does, so adding a node means adding a branch in both.
 """
@@ -184,6 +199,11 @@ OPERATORS = {
 }
 BUILTINS = ["print", "len", "str", "range"]
 EXCEPTION = "Exception"
+OPERANDS = 0
+BOOL = 1
+INDEX = 2
+BUILTIN = 3
+KINDS = 4
 
 def is_list(type_name):
     return type_name == LIST or type_name.startswith("list[")
@@ -418,6 +438,31 @@ class Checker(object):
         self.handles = []     # Pending of each enclosing handle statement
         self.fn = None        # the FunctionDef being checked
         self.what = ""        # "function" or "method"
+        self.unknowns = []    # line * KINDS + kind, per unknown operand
+
+    def _note_unknown(self, kind, lineno):
+        self.unknowns.append(lineno * KINDS + kind)
+
+    def _drop_unknowns(self, mark):
+        """Forget what a pass noted when another pass follows it."""
+        assert mark >= 0
+        del self.unknowns[mark:]
+
+    def _drop_repeats(self, first, second):
+        """Of what the second check of a suite noted, from second on,
+        keep what the first, from first to second, did not."""
+        assert first >= 0
+        assert second >= first
+        seen = {}
+        for site in self.unknowns[first:second]:
+            seen[site] = True
+        fresh = []
+        for site in self.unknowns[second:]:
+            if site not in seen:
+                fresh.append(site)
+        del self.unknowns[second:]
+        for site in fresh:
+            self.unknowns.append(site)
 
     def check(self):
         self.collect_declarations()
@@ -780,6 +825,7 @@ class Checker(object):
         exits = before.copy()
         self.loop_exits.append(exits)
         while True:
+            mark = len(self.unknowns)
             unbound = scope.unbound.copy()
             if name is not None:
                 self.bind_element(scope, name, element)
@@ -791,6 +837,7 @@ class Checker(object):
             if (same_types(after, before)
                     and same_names(scope.unbound, unbound)):
                 break
+            self._drop_unknowns(mark)
             before = after
             scope.types = after.copy()
         self.loop_exits.pop()
@@ -846,6 +893,7 @@ class Checker(object):
             raise InvalidProgram(
                 lineno, "a list index must be int, not %s" % actual)
         if type_name == UNKNOWN:
+            self._note_unknown(INDEX, lineno)
             return UNKNOWN
         return element_of(type_name)
 
@@ -1061,10 +1109,13 @@ class Checker(object):
             scope.types = into_finally
             for name in returned:
                 scope.unbound[name] = True
+            first = len(self.unknowns)
             self.check_block(stmt.finalbody, scope, effects)
             scope.unbound = unbound
             scope.types = after
+            second = len(self.unknowns)
             self.check_block(stmt.finalbody, scope, effects)
+            self._drop_repeats(first, second)
         else:
             scope.types = after
 
@@ -1196,6 +1247,7 @@ class Checker(object):
         entry_unbound = scope.unbound.copy()
         pending = Pending({}, {})
         while True:
+            mark = len(self.unknowns)
             changed = pending.changed.copy()
             carried = pending.carried.copy()
             scope.unbound = entry_unbound.copy()
@@ -1207,6 +1259,7 @@ class Checker(object):
             if (same_types(changed, pending.changed)
                     and same_names(carried, pending.carried)):
                 break
+            self._drop_unknowns(mark)
             pending = Pending(changed, carried)
         scope.types = after
         for name in body_effects.names:
@@ -1447,7 +1500,9 @@ class Checker(object):
         """An if or while test and an operand of and, or, or not must
         be bool where the type is known (plan 1.11), with the
         runtime's words."""
-        if actual != UNKNOWN and actual != "bool":
+        if actual == UNKNOWN:
+            self._note_unknown(BOOL, lineno)
+        elif actual != "bool":
             raise InvalidProgram(
                 lineno, "%s needs a bool, not %s" % (what, actual))
 
@@ -1456,6 +1511,7 @@ class Checker(object):
         binop() or compare() accepts is the runtime error, reported
         early with the runtime's words."""
         if left == UNKNOWN or right == UNKNOWN:
+            self._note_unknown(OPERANDS, lineno)
             return
         if is_list(left) and is_list(right):
             if (matches(left, right) or matches(right, left)) and op in OPERATORS[LIST]:
@@ -1502,6 +1558,8 @@ class Checker(object):
                 expr.lineno, "%s() takes 1 arguments (%d given)" %
                 (expr.func, len(expr.args)))
         actual = self.type_of(expr.args[0], scope, effects)
+        if actual == UNKNOWN:
+            self._note_unknown(BUILTIN, expr.lineno)
         if expr.func == "len":
             if (actual == UNKNOWN or actual == "str" or is_list(actual)
                     or is_dict(actual)):
