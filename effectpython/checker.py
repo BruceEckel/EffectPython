@@ -5,45 +5,55 @@ Pass 1 collects the effect declarations, the exception classes, the
 handler classes, and the function signatures, so a function body can
 call a function defined later or itself, and checks each handler
 class against the effect it fulfills: one method per operation with
-the operation's signature after self, and fields of type int or str
-(plan 1.5) or list[int], list[str], or list[bool] (plan 1.9).
-Pass 2 walks each function and method body and infers the effects it
-may perform: a perform() contributes its effect, a call contributes
-the callee's declared row, and a handle block removes the effects it
-names or fulfills from its body's set and adds whatever its clauses
-and its handlers' methods perform. The result must be a subset of the
-declared row, or the function fails with an UnhandledEffectError.
-Pass 3 requires a main() with an empty row.
+the operation's signature after self (check_signature), and typed
+fields. Pass 2 walks each function and method body and infers the
+effects it may perform: a perform() contributes its effect, a call
+contributes the callee's declared row, and a handle block removes
+the effects it names or fulfills from its body's set and adds
+whatever its clauses and its handlers' methods perform. The result
+must be a subset of the declared row, or the function fails with an
+UnhandledEffectError. Pass 3 requires a main() with an empty row.
 
 An exception class sits in the same set as an effect (plan 1.6). A
-raise contributes the class of its value, a try/except removes the classes its
-clauses catch from its suite's set and adds whatever the clauses
-perform or raise, and a handler method's row carries its exceptions
-to the function that installs the handler. A row may therefore name
-exception classes beside effects, and main()'s empty row makes an
-exception nobody catches a static error.
+raise contributes the class of its value, a try/except removes the
+classes its clauses catch from its suite's set and adds whatever the
+clauses perform or raise, and main()'s empty row makes an exception
+nobody catches a static error. An operation's row names the
+exception classes a handler may throw into the body with eff.throw()
+(plan 1.7), so a perform() contributes those classes beside its
+effect, and eff.throw() must name one of them. A handler method's
+row carries its exceptions to the function that installs the
+handler, less the classes its operation's row declares, which a
+method raising one of them delivers to the perform instead.
 
-An operation's row names the exception classes a handler may throw
-into the body with eff.throw() (plan 1.7), so a perform() contributes
-those classes beside its effect, and eff.throw() must name one of
-them. A handler method that raises one of them delivers it to the
-perform, so those classes are left out of what the method's row
-carries to the installing function.
-
-Along the way the checker types expressions far enough to check the
-arguments of perform(), resume(), ordinary calls, and constructor
-calls against the declared parameter types. A type is a type name; a
+A type is a type name, and the checker types every expression. A
 handler class name is the type of its instances, so a name holding
-one may be passed to handle() and its fields read, and an exception
-class name is the type of the name an except clause binds. The empty
-string stands for a type the checker cannot determine, and an unknown
-type matches anything (matches). An operator whose operands both
-have known types must have a pair the interpreter supports
-(OPERATORS), so the runtime's "unsupported operand types" error is
-reached through an operand of unknown type. A name that two paths
-leave with two types is unknown (merge_types, below). For two lists
-the checker also requires one element type, which the runtime does
-not: it compares them and finds the elements unequal.
+one may be passed to handle() and its fields read; an exception
+class name is the type of the name an except clause binds; and
+"list[int]", "list[str]", and "list[bool]" are the list types (plan
+1.9), the element being one of the three scalars, so a list literal
+or an append refuses a list element. A field is int, str, or one of
+the list types (plan 1.5, 1.9). The empty string stands for a type
+the checker cannot determine, and an unknown type matches anything
+(matches). "list" is the type of [] alone: it matches any list type,
+and a literal with an element of unknown type has the unknown type,
+so nothing refines it as a [] is refined. A for over a list binds its
+name to the element type, and over range() to int. len(), str(), and
+range() are built-in names beside print, and a function cannot take
+one of them. For two lists the checker requires one element type,
+which the runtime does not: it compares them and finds the elements
+unequal.
+
+An operator whose operands both have known types must have a pair
+the interpreter supports (OPERATORS), so the runtime's "unsupported
+operand types" error is reached through an operand of unknown type.
+The operands of and, or, and not, and the test of an if or a while,
+must be bool where their types are known (require_bool, plan 1.11),
+with the runtime's words: "and needs a bool, not int". The three
+operators give bool. Both operands of and and or are typed and their
+effects counted, though the runtime may skip the right one, since
+the row must cover whatever it would perform. An elif is a nested if
+from the parser on, so check_if merges each arm in turn.
 
 A known type is the type the value has at runtime. The one way it
 could be wrong was an unknown value handed to a typed slot: a
@@ -56,6 +66,11 @@ unknown type (require_known), as "argument 1 of f() must be int, but
 with no known type. A value of unknown type may still be printed,
 measured with len(), converted with str(), indexed, iterated,
 compared, and used as an operand, where the runtime keeps the check.
+A name holding [] that a statement hands to a slot of type list[T]
+takes list[T], since the receiver may append to it (hand_over). One
+assigned to another name loses its type: the checker does not track
+which names share a list, so an append through either name would
+leave the other with a stale type.
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -66,89 +81,61 @@ whose finally qualifies or whose suite and clauses all do, or a
 handle whose body qualifies and whose clauses each qualify or end by
 resuming it. A loop never qualifies, so a function that returns from
 inside one needs a return after it. A handler method's return type
-equals its operation's (check_signature), so the rule covers the
-value a perform() gets from a method.
-
-A name holding [] that a statement hands to a parameter, a field, a
-return, or a resume() of type list[T] takes list[T], since the
-receiver may append to it (hand_over). One assigned to another name
-loses its type: the checker does not track which names share a list,
-so an append through either name would leave the other with a stale
-type. A list cannot be an element of a list (plan 1.9), which keeps
-xss[0] from being a second name for a list, and a literal with an
-element of unknown type has the unknown type, so nothing refines it
-as a [] is refined.
+equals its operation's, so the rule covers the value a perform()
+gets from a method.
 
 A read of a name that nothing has bound earlier in the function's
 source is rejected, and so is a read of the name a try statement's
 except clause bound, after the clause, until something binds it
 again, since the clause deletes its name when it ends
 (require_bound). The walk follows source order, as the typing does,
-and does not ask whether the clause would run. A clause that ends in
-a return is the exception: the code after the try cannot follow it,
-so the name keeps the type and the state it had before, while the
-try's own finally suite, which does follow it, sees the name unbound
-(check_try). An effect
-clause (except E.op as eff) leaves its name as the runtime does
-(check_effect_clause). After the handle statement the name is
+and does not ask whether the clause would run: a name one path bound
+counts as bound, and the first pass over a loop or a handled body
+uses the types before it, so a statement there that is right only
+through a later reassignment, or through a clause's, is rejected on
+that pass. A clause that ends in a return is the exception to the
+deletion: the code after the try cannot follow it, so the name keeps
+the type and the state it had before, while the try's own finally
+suite, which does follow it, sees the name unbound (check_try). An
+effect clause (except E.op as eff) leaves its name as the runtime
+does (check_effect_clause): after the handle statement the name is
 unbound when nothing bound it before, and otherwise has the type it
 had before.
 
 Where two paths meet, the types they left are merged (merge_types):
 a name they leave with two types, or that one path alone binds, is
 unknown, while a [] that one path refined to list[T] keeps the
-refinement (merged). A name one path bound still counts as bound,
-since the source-order rule reads bindings, not paths. The branches
-of an if are two such paths (check_if). A loop body is checked from
-the types before the loop, what it leaves at its end and at each
-break or continue is merged with them, and it is checked again from
-the merged types until nothing changes (check_loop_body), so the
-code after the loop sees a name the body gives another type as
-unknown, and a type the body can carry into a later iteration is
-unknown on the next pass over the body. A try's clauses start from
-the types at every statement boundary of its suite, the first
-included, since the exception may arrive after any statement
-(check_suite), and the code after the try sees the suite's end
-merged with the end of every clause that does not return
+refinement (merged). The branches of an if are two such paths
+(check_if). A loop body is checked from the types before the loop,
+what it leaves at its end and at each break or continue is merged
+with them, and it is checked again from the merged types until
+nothing changes (check_loop_body), so the code after the loop sees a
+name the body gives another type as unknown, and a type the body can
+carry into a later iteration is unknown on the next pass over the
+body. The name a for binds is the exception to the one-path rule:
+afterwards it has the element type merged with the type it had
+before, or the element type alone when it had none, since an unbound
+name fails at runtime whatever its type (check_loop). A try's
+clauses start from the types at every statement boundary of its
+suite, the first included, since the exception may arrive after any
+statement (check_suite), and the code after the try sees the suite's
+end merged with the end of every clause that does not return
 (check_try), while a finally suite is checked from every boundary of
 the suite and of each clause, since it runs on every path out of
 them, and then from the continuing paths for the code after it. A
-for over a list binds its name on the path through the body alone,
-so afterwards the name has the element type merged with the type it
-had before (check_loop). A handle statement's clauses start from
-every boundary
-of its body, where a perform() may suspend it, and since the body
-runs on from any boundary of a clause where resume() may stand, the
-body and clauses are checked again from the entry widened with those
-until it is stable (check_handle, check_handle_suites). The first
-pass over a loop or a handled body uses the types before it, so a
-statement there that is right only through a later reassignment,
-or through a clause's, is rejected on that pass.
-
-Lists (plan 1.9) are types like the others: "list[int]", "list[str]",
-and "list[bool]" are type names. "list" is the type of a literal
-whose element type nothing fixes: [], or one whose elements all have
-unknown types. It matches any list type as an unknown type matches
-anything (matches). A for over a list binds its name to the element
-type, and over range() to int. len(), str(), and range() are
-built-in names beside print, and a function cannot take one of them.
+handle statement's clauses start from every boundary of its body,
+where a perform() may suspend it, and since the body runs on from
+any boundary of a clause where resume() may stand, the body and
+clauses are checked again from the entry widened with those until it
+is stable (check_handle, check_handle_suites).
 
 A break or continue outside a loop of the same function is rejected
 with "'break' outside loop" or "'continue' not properly in loop"
 (plan 1.10). The count is loop_depth, which check_loop_body
 increments around every loop suite and check_function resets.
 
-The operands of and, or, and not, and the test of an if or a while,
-must be bool where their types are known (require_bool, plan 1.11),
-with the runtime's words: "and needs a bool, not int". The result
-of the three operators is bool. Both operands of and and or are
-typed and their effects counted, though the runtime may skip the
-right one, since the row must cover whatever it would perform. An
-elif is a nested if to the checker, so check_if merges each arm in
-turn.
-
-The checker dispatches by isinstance over the ast_nodes classes, as the
-evaluator does, so adding a node means adding a branch in both.
+The checker dispatches by isinstance over the ast_nodes classes, as
+the evaluator does, so adding a node means adding a branch in both.
 """
 from effectpython import ast_nodes as ast
 from effectpython.errors import InvalidProgram, UnhandledEffectError
@@ -689,7 +676,8 @@ class Checker(object):
         merge what the body left with them, and check again from the
         merged types until nothing changes, so the body is checked
         against the types a name can have on any iteration and the
-        code after the loop sees a name the body reassigns as unknown.
+        code after the loop sees a name the body gives another type as
+        unknown.
         A break or continue may stand anywhere under a loop in the
         same function, a handle body or a clause included, since the
         runtime carries it out of a stacklet as it carries a return
@@ -773,12 +761,16 @@ class Checker(object):
             element = element_of(type_name)
         self.check_args(["value"], [element], args, "append()", lineno,
                         scope, effects)
+        actual = self.type_of(args[0], scope, effects)
+        if is_list(actual):
+            raise InvalidProgram(
+                lineno, "list elements must be int, str, or bool, not a "
+                "list")
         if type_name == LIST and isinstance(target, ast.Name):
-            element = self.type_of(args[0], scope, effects)
-            if element == UNKNOWN:
+            if actual == UNKNOWN:
                 scope.types[target.id] = UNKNOWN
             else:
-                scope.types[target.id] = "list[%s]" % element
+                scope.types[target.id] = "list[%s]" % actual
         return "None"
 
     def check_raise(self, stmt, scope, effects):
@@ -1004,11 +996,14 @@ class Checker(object):
         """One check of the body and the clauses from the entry types,
         giving the types after the statement. A clause runs while the
         body is suspended at any of its performs, so it starts from the
-        entry types merged with the body's end types, and the body runs
-        on from whatever the clause assigned, which is why check_handle
-        checks again from the widened entry until it stops changing.
-        The statement ends after the body, or after a clause that does
-        not resume or return, so those paths are merged."""
+        types at every boundary of the body, and the body runs on from
+        whatever the clause assigned, which is why check_handle checks
+        again from the widened entry until it stops changing. The
+        statement ends after the body or after a clause, so its end
+        merges the body's end, the end of every clause that does not
+        end in a return (a resuming one included, since a resume that
+        is not the last statement returns into the clause), and every
+        clause boundary."""
         scope.types = entry.copy()
         clause_entry = self.check_suite(stmt.body, scope, body_effects)
         after = scope.types

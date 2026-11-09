@@ -1445,8 +1445,11 @@ def test_accepts_a_name_widened_by_a_loop_finally_or_literal(body):
     ('def main() -> int / []:\n    ys = [1]\n    zs = [ys]\n'
      '    return 0\n',
      'line 10: list elements must be int, str, or bool, not a list'),
+    ('def main() -> int / []:\n    ys = [1]\n    zs = []\n'
+     '    zs.append(ys)\n    return 0\n',
+     'line 11: list elements must be int, str, or bool, not a list'),
 ], ids=['for-same-type', 'finally-every-path', 'finally-clause-name',
-        'nested-empty', 'nested-name'])
+        'nested-empty', 'nested-name', 'nested-append'])
 def test_rejects_a_loop_name_finally_read_or_nested_list(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(body)
