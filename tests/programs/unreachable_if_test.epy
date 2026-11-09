@@ -1,0 +1,8 @@
+# The runtime's "if needs a bool" (truth) is unreachable where the
+# checker knows the type: require_bool rejects the test.
+
+def main() -> int:
+    n = 3
+    if n:
+        print("truthy")
+    return 0

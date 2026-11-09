@@ -1,0 +1,2 @@
+exit 1
+error: and needs a bool, not int

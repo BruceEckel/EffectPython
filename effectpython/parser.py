@@ -5,9 +5,11 @@ classes with operation stubs, Handler[Effect] classes with field
 declarations and methods, exception classes, function definitions
 with typed parameters, a return type, and an optional effect row;
 return, raise, assignment, attribute assignment, expression, pass,
-if/else, while, for, try/except/finally, and handle statements; int,
-str, bool, and list literals, names, arithmetic, comparisons, calls,
-indexing, attribute reads, and attribute calls.
+if/elif/else, while, for, try/except/finally, and handle statements;
+int, str, bool, and list literals, names, arithmetic, comparisons,
+and, or, and not in Python's precedence, calls, indexing, attribute
+reads, and attribute calls. An elif builds an If alone in the else
+suite of the one above it, as CPython's AST does (plan 1.11).
 
 perform and handle are names in Python, not keywords, so the grammar
 reads them as calls and the productions check them: perform(X) must
@@ -501,8 +503,22 @@ def if_stmt(p):
     return ast.If(_expr(p[1]), _stmts(p[3]), [], _line(p[0]))
 
 @pg.production('if_stmt : IF expr COLON suite ELSE COLON suite')
+@pg.production('elif_part : ELIF expr COLON suite ELSE COLON suite')
 def if_else_stmt(p):
     return ast.If(_expr(p[1]), _stmts(p[3]), _stmts(p[6]), _line(p[0]))
+
+@pg.production('if_stmt : IF expr COLON suite elif_part')
+@pg.production('elif_part : ELIF expr COLON suite elif_part')
+def if_elif_stmt(p):
+    """An elif is an if alone in the else suite, as CPython's AST has
+    it, so nothing below the parser knows the keyword (plan 1.11)."""
+    rest = p[4]
+    assert isinstance(rest, ast.If)
+    return ast.If(_expr(p[1]), _stmts(p[3]), [rest], _line(p[0]))
+
+@pg.production('elif_part : ELIF expr COLON suite')
+def elif_stmt(p):
+    return ast.If(_expr(p[1]), _stmts(p[3]), [], _line(p[0]))
 
 @pg.production('for_stmt : FOR NAME IN expr COLON suite')
 def for_stmt(p):
@@ -631,14 +647,28 @@ def except_clause(p):
 
 # --- Expressions -------------------------------------------------------------
 
-@pg.production('expr : arith')
+@pg.production('expr : or_test')
+@pg.production('or_test : and_test')
+@pg.production('and_test : not_test')
+@pg.production('not_test : comparison')
+@pg.production('comparison : arith')
 @pg.production('arith : term')
 @pg.production('term : postfix')
 @pg.production('postfix : atom')
 def pass_through_expr(p):
     return p[0]
 
-@pg.production('expr : arith cmpop arith')
+@pg.production('or_test : or_test OR and_test')
+@pg.production('and_test : and_test AND not_test')
+def bool_op(p):
+    left = _expr(p[0])
+    return ast.BoolOp(_text(p[1]), left, _expr(p[2]), left.lineno)
+
+@pg.production('not_test : NOT not_test')
+def not_op(p):
+    return ast.Not(_expr(p[1]), _line(p[0]))
+
+@pg.production('comparison : arith cmpop arith')
 def compare(p):
     left = _expr(p[0])
     return ast.Compare(_text(p[1]), left, _expr(p[2]), left.lineno)

@@ -1,0 +1,6 @@
+# The runtime's "and needs a bool" (truth) is unreachable where the
+# checker knows the type: require_bool rejects the operand.
+
+def main() -> int:
+    print(1 and True)
+    return 0

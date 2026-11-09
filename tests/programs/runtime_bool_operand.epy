@@ -1,0 +1,10 @@
+# Runtime-only: an if leaves v with two types, so the checker cannot
+# hold the and to a bool operand; truth does.
+
+def main() -> int:
+    if 1 == 1:
+        v = 1
+    else:
+        v = True
+    print(v and True)
+    return 0

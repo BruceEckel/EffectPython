@@ -20,8 +20,12 @@ def small(n: int) -> bool:
         return True
     return False
 
+def between(n: int, lo: int, hi: int) -> bool:
+    return lo <= n and n < hi
+
 def main() -> int / []:
     print(repeat("hello", 3))
     print(parity(7), parity(10))
     print(3 * 4 + 10 // 3, 7 == 7, small(30))
+    print(between(5, 1, 10), not small(3) or between(3, 1, 10))
     return 0

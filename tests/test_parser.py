@@ -2,7 +2,8 @@
 Milestone 1 subset; from Milestone 5, handler classes too; from
 Milestone 6, exceptions; from Milestone 7, operation rows and throw;
 from Milestone 8, finally; from Milestone 9, lists and the
-for loop; from Milestone 10, break and continue.
+for loop; from Milestone 10, break and continue; from Milestone 11,
+the boolean operators and elif (plan 1.11).
 
 Run with:  pypy2 -m pytest
 """
@@ -846,4 +847,66 @@ def test_loop_exit_statement(keyword, node):
 def test_loop_exit_keyword_cannot_be_assigned(keyword, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def main() -> int:\n    %s = 1\n' % keyword)
+    assert info.value.msg == msg
+
+# --- and, or, not, and elif (Milestone 11) -----------------------------------
+
+def test_boolean_operators_and_elif_are_keywords():
+    assert kinds('a and not b or c elif') == [
+        'NAME', 'AND', 'NOT', 'NAME', 'OR', 'NAME', 'ELIF', 'NEWLINE']
+
+@pytest.mark.parametrize('source, expected', [
+    ('a and b or c',
+     ('BoolOp', 'or', ('BoolOp', 'and', ('Name', 'a'), ('Name', 'b')),
+      ('Name', 'c'))),
+    ('a or b and c',
+     ('BoolOp', 'or', ('Name', 'a'),
+      ('BoolOp', 'and', ('Name', 'b'), ('Name', 'c')))),
+    ('not a == b',
+     ('Not', ('Compare', '==', ('Name', 'a'), ('Name', 'b')))),
+    ('a and not b',
+     ('BoolOp', 'and', ('Name', 'a'), ('Not', ('Name', 'b')))),
+    ('(a or b) and c',
+     ('BoolOp', 'and', ('BoolOp', 'or', ('Name', 'a'), ('Name', 'b')),
+      ('Name', 'c'))),
+    ('not not a', ('Not', ('Not', ('Name', 'a')))),
+], ids=['and-before-or', 'or-after-and', 'not-over-compare',
+        'not-in-and', 'parentheses', 'not-not'])
+def test_boolean_operator_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    statement = module.functions[0].body[0]
+    assert shape(statement) == ('ExprStmt', expected)
+
+def print_body(text):
+    return [('ExprStmt', ('Call', 'print', [('StrLiteral', text)]))]
+
+@pytest.mark.parametrize('source, expected', [
+    ('if a:\n        print("1")\n'
+     '    elif b:\n        print("2")\n'
+     '    else:\n        print("3")\n',
+     ('If', ('Name', 'a'), print_body('1'),
+      [('If', ('Name', 'b'), print_body('2'), print_body('3'))])),
+    ('if a:\n        print("1")\n'
+     '    elif b:\n        print("2")\n'
+     '    elif c:\n        print("3")\n',
+     ('If', ('Name', 'a'), print_body('1'),
+      [('If', ('Name', 'b'), print_body('2'),
+        [('If', ('Name', 'c'), print_body('3'), [])])])),
+], ids=['elif-else', 'two-elifs'])
+def test_elif_nests_an_if_in_the_else(source, expected):
+    module = parse('def main() -> int:\n    %s' % source)
+    assert shape(module.functions[0].body[0]) == expected
+
+def test_an_elif_carries_its_own_line():
+    statement = parse('def main() -> int:\n    if a:\n        pass\n'
+                      '    elif b:\n        pass\n').functions[0].body[0]
+    assert (statement.lineno, statement.orelse[0].lineno) == (2, 4)
+
+@pytest.mark.parametrize('source, msg', [
+    ('    print(a < b < c)\n', "line 2, column 17: unexpected '<'"),
+    ('    and = 1\n', "line 2, column 5: unexpected 'and'"),
+], ids=['chained-compare', 'and-as-name'])
+def test_boolean_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n' + source)
     assert info.value.msg == msg

@@ -1,4 +1,5 @@
-"""Milestone 1 acceptance: the evaluator runs a recursive Fibonacci.
+"""Milestone 1 acceptance: the evaluator runs a recursive Fibonacci;
+from Milestone 11, the boolean operators and elif (plan 1.11).
 
 Run with:  pypy2 -m pytest
 These tests import no RPython modules, so they need no PYTHONPATH.
@@ -634,3 +635,61 @@ def test_break_outside_a_loop_is_a_runtime_error():
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_main_body('    break\n    return 0\n')
     assert info.value.msg == 'break or continue outside a loop'
+
+# --- and, or, not, and elif (Milestone 11) -----------------------------------
+
+@pytest.mark.parametrize('source, printed', [
+    ('True and False', 'False'),
+    ('True and True', 'True'),
+    ('True or False', 'True'),
+    ('False or False', 'False'),
+    ('not True', 'False'),
+    ('not 1 == 2', 'True'),
+], ids=['and-false', 'and-true', 'or-true', 'or-false', 'not',
+        'not-compare'])
+def test_boolean_operator_values(source, printed):
+    exit_code, lines = run_main_body('    print(%s)\n    return 0\n' % source)
+    assert (exit_code, lines) == (0, [printed])
+
+NOISY = 'def noisy() -> bool:\n    print("ran")\n    return True\n'
+
+@pytest.mark.parametrize('source, printed', [
+    ('False and noisy()', ['False']),
+    ('True or noisy()', ['True']),
+    ('True and noisy()', ['ran', 'True']),
+    ('False or noisy()', ['ran', 'True']),
+], ids=['and-stops', 'or-stops', 'and-continues', 'or-continues'])
+def test_the_right_operand_runs_only_when_the_left_does_not_decide(
+        source, printed):
+    exit_code, lines = run_main_body(
+        '    print(%s)\n    return 0\n' % source, NOISY)
+    assert (exit_code, lines) == (0, printed)
+
+def test_an_elif_chain_runs_the_first_arm_whose_test_holds():
+    exit_code, lines = run_main_body(
+        '    for n in range(3):\n'
+        '        pick(n)\n'
+        '    return 0\n',
+        'def pick(n: int) -> None:\n'
+        '    if n == 0:\n'
+        '        print("if")\n'
+        '    elif n == 1:\n'
+        '        print("elif")\n'
+        '    else:\n'
+        '        print("else")\n')
+    assert (exit_code, lines) == (0, ["if", "elif", "else"])
+
+@pytest.mark.parametrize('body, msg', [
+    ('    n = 1\n    if n:\n        pass\n',
+     'if needs a bool, not int'),
+    ('    n = 1\n    while n:\n        n = 0\n',
+     'while needs a bool, not int'),
+    ('    print(1 and True)\n', 'and needs a bool, not int'),
+    ('    print(True and 1)\n', 'and needs a bool, not int'),
+    ('    print(False or "s")\n', 'or needs a bool, not str'),
+    ('    print(not "s")\n', 'not needs a bool, not str'),
+], ids=['if', 'while', 'and-left', 'and-right', 'or-right', 'not'])
+def test_a_non_bool_test_or_operand_is_a_runtime_error(body, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(body + '    return 0\n')
+    assert info.value.msg == msg

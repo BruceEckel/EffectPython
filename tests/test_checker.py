@@ -2,9 +2,11 @@
 from Milestone 5 the handler class rules (plan 1.5), from Milestone 6
 the exception rules (plan 1.6), from Milestone 7 the throw rules
 (plan 1.7), from Milestone 8 the finally rules (plan 1.8), from
-Milestone 9 the list and for rules (plan 1.9), and from Milestone 10
+Milestone 9 the list and for rules (plan 1.9), from Milestone 10
 the loop rule for break and continue (plan 1.10) and the type rules
-for return values, loop and try merging, and [] aliasing.
+for return values, loop and try merging, and [] aliasing, and from
+Milestone 11 the bool rule for and, or, not, if, and while, and elif
+(plan 1.11).
 
 Run with:  pypy2 -m pytest
 """
@@ -1521,3 +1523,56 @@ def test_rejects_a_value_of_unknown_type_at_a_typed_slot(body, msg):
 ], ids=['print', 'empty-list', 'len-and-str', 'operator'])
 def test_accepts_a_value_of_unknown_type_where_no_slot_is_typed(body):
     check_source(body)
+
+# --- and, or, not, and elif (Milestone 11) -----------------------------------
+
+BOOLS = ('def main() -> int / []:\n'
+         '    a = True\n    b = False\n    c = True\n')
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    print(True and False)\n    return 0\n',
+    'def main() -> int / []:\n    print(not 1 == 2)\n    return 0\n',
+    BOOLS + '    print(a and not b or c)\n    return 0\n',
+    'def main() -> int / []:\n    i = 0\n'
+    '    while i < 3 and i != 5:\n        i = i + 1\n    return 0\n',
+    'def f(a: bool, b: bool) -> bool:\n    return a and b\n' + MAIN,
+    'def main() -> int / []:\n    n = 1\n    if n == 0:\n        x = 1\n'
+    '    elif n == 1:\n        x = "s"\n    else:\n        x = 2\n'
+    '    print(x + 1)\n    print(x + "a")\n    return 0\n',
+    'def f() -> bool / [FileIO]:\n'
+    '    return True and perform(FileIO.read("a")) == "x"\n' + MAIN,
+], ids=['literals', 'not-compare', 'names', 'while-test', 'return-bool',
+        'elif-merges', 'perform-in-right-operand'])
+def test_accepts_bool_operands_and_tests(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def main() -> int / []:\n    print(1 and True)\n    return 0\n',
+     'line 9: and needs a bool, not int'),
+    ('def main() -> int / []:\n    print(True or "s")\n    return 0\n',
+     'line 9: or needs a bool, not str'),
+    ('def main() -> int / []:\n    print(not "s")\n    return 0\n',
+     'line 9: not needs a bool, not str'),
+    ('def main() -> int / []:\n    n = 1\n    if n:\n        pass\n'
+     '    return 0\n',
+     'line 10: if needs a bool, not int'),
+    ('def main() -> int / []:\n    n = 1\n    while n:\n        n = 0\n'
+     '    return 0\n',
+     'line 10: while needs a bool, not int'),
+    ('def main() -> int / []:\n    n = 1\n    if n == 0:\n        pass\n'
+     '    elif n:\n        pass\n    return 0\n',
+     'line 12: if needs a bool, not int'),
+], ids=['and-int', 'or-str', 'not-str', 'if-int', 'while-int', 'elif-int'])
+def test_rejects_a_non_bool_operand_or_test(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+def test_an_effect_in_a_right_operand_counts_for_the_function():
+    with pytest.raises(UnhandledEffectError) as info:
+        check_source('def f() -> bool:\n'
+                     '    return False and perform(FileIO.read("a")) == "x"\n'
+                     + MAIN)
+    assert info.value.msg == (
+        "line 8: function 'f' performs FileIO (line 9) without "
+        "declaring it in its effect row")

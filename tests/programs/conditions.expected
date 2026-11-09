@@ -1,0 +1,10 @@
+exit 0
+A B C F
+True False True
+3
+False
+True
+note: reached by and
+True
+note: reached by or
+True

@@ -1,0 +1,44 @@
+# Milestone 11: and, or, not, and elif (plan 1.11). The operands are
+# bool, and the right operand of an and or an or is evaluated only
+# when the left one has not decided the result: Log.note in a skipped
+# operand is never performed, and the handler's output shows which
+# ones ran.
+
+from effectpython import Effect, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> bool: ...
+
+def grade(n: int) -> str:
+    if n >= 90:
+        return "A"
+    elif n >= 80:
+        return "B"
+    elif n >= 70:
+        return "C"
+    else:
+        return "F"
+
+def between(n: int, lo: int, hi: int) -> bool:
+    return lo <= n and n < hi
+
+def probe(label: str) -> bool / [Log]:
+    return perform(Log.note(label))
+
+def main() -> int / []:
+    print(grade(95), grade(85), grade(75), grade(5))
+    print(between(5, 1, 10), between(10, 1, 10), not between(0, 1, 10))
+    i = 0
+    while i < 10 and not i == 3:
+        i = i + 1
+    print(i)
+    try:
+        with handle(Log):
+            print(False and probe("skipped by and"))
+            print(True or probe("skipped by or"))
+            print(True and probe("reached by and"))
+            print(False or probe("reached by or"))
+    except Log.note as eff:
+        print("note:", eff.text)
+        eff.resume(True)
+    return 0

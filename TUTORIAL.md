@@ -28,7 +28,7 @@ so a line number in an error message counts from the file's first line, a few li
 
 The dialect is a proof of concept, and you will notice what it lacks sooner than what it has.
 The values are `int`, `str`, and `bool`, with `True` and `False` as the literals, and a `list` of one of those three.
-There are no dicts or tuples, no string methods, no slicing, no `else` on a loop, and no `else` or bare `except:` on a `try`.
+There are no dicts or tuples, no string methods, no slicing, no chained comparisons, no `else` on a loop, and no `else` or bare `except:` on a `try`.
 The built-ins are `print`, which takes any number of arguments and separates them with spaces, as Python does, `len`, and `str`.
 Every parameter and return type is written out, and the checker reads them.
 Those limits are the size of the project, not design choices, and they do not get in the way of the effects.
@@ -54,10 +54,14 @@ def small(n: int) -> bool:
         return True
     return False
 
+def between(n: int, lo: int, hi: int) -> bool:
+    return lo <= n and n < hi
+
 def main() -> int / []:
     print(repeat("hello", 3))
     print(parity(7), parity(10))
     print(3 * 4 + 10 // 3, 7 == 7, small(30))
+    print(between(5, 1, 10), not small(3) or between(3, 1, 10))
     return 0
 ```
 
@@ -65,6 +69,7 @@ def main() -> int / []:
 hello hello hello
 odd even
 15 True False
+True True
 ```
 
 The syntax is Python 3, and a Python 3 parser accepts the file.
@@ -73,6 +78,8 @@ The `/ []` after `main`'s return type is an *effect row*, the list of effects th
 `main()` must have an empty one, and a function with no row written has an empty row too.
 And the annotations are required, not optional:
 every value has a type the checker knows, so the arithmetic here is `int`, a comparison and `small` are `bool`, and `repeat` builds a `str`.
+`and`, `or`, and `not` combine `bool` values as Python's do, with the same precedence and the same short circuit, and take `bool` operands alone:
+`if n:` on an `int` is a checker error, `if needs a bool, not int`, where Python would test the number for zero.
 
 ## 2. An effect and a handler
 
@@ -393,7 +400,12 @@ class Log(Effect):
 
 class FakeFileIO(Handler[FileIO]):
     def read(self, path: str) -> str:
-        return "contents of " + path
+        if path == "settings.json":
+            return "debug = true"
+        elif path == "app.json":
+            return "name = demo"
+        else:
+            return "contents of " + path
     def write(self, path: str, content: str) -> int / [Log]:
         perform(Log.note("writing " + path))
         return 7
@@ -418,13 +430,14 @@ def main() -> int / []:
 ```
 
 ```text tests/programs/handler_class.expected
-contents of settings.json
+debug = true
 log: writing settings
 7
 ```
 
 A method takes the operation's parameters after `self` and returns the operation's return type;
 returning is how a method resumes the body.
+`read` answers by path through an `if`/`elif`/`else` chain, which is how a fake handler stands in for a small filesystem.
 `with handle(FakeFileIO()):` installs an instance for the block, and no `try` is needed,
 since the class supplies every clause.
 A method that performs effects of its own declares them in a row, as `write` declares `Log`,

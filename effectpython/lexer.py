@@ -29,6 +29,7 @@ KEYWORDS = {
     'as': 'AS', 'with': 'WITH', 'from': 'FROM', 'import': 'IMPORT',
     'True': 'TRUE', 'False': 'FALSE', 'finally': 'FINALLY',
     'for': 'FOR', 'in': 'IN', 'break': 'BREAK', 'continue': 'CONTINUE',
+    'and': 'AND', 'or': 'OR', 'not': 'NOT', 'elif': 'ELIF',
 }
 
 # Order matters: a longer operator precedes any prefix of it

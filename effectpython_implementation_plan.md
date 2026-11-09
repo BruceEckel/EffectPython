@@ -752,7 +752,7 @@ and `dispatch`'s `try` around a clause or a method unwinds the suspended body be
 `call_function` turns a signal that reaches it into the runtime error "break or continue outside a loop", which the checker makes unreachable from the binary.
 `tests/programs/break_in_handled_body.epy` exercises both crossings.
 
-### 1.11 `and`, `or`, `not`, and `elif` (designed 2026-11-08)
+### 1.11 `and`, `or`, `not`, and `elif` (designed and implemented 2026-11-08, open questions settled as recommended)
 
 Every condition in the 117 sample programs is a single comparison or a literal, and a branch that needs a third arm nests an `if` in the `else`,
 because the grammar has no boolean operators and no `elif`.
@@ -771,7 +771,7 @@ comparison : arith | arith cmpop arith
 ```
 
 so `not a == b` reads as `not (a == b)`, `a and not b or c` as `(a and (not b)) or c`, and parentheses override as they do today.
-A comparison still does not chain (`a < b < c` stays a syntax error), and `not` applies to a comparison, not to an `arith`, so `not n + 1` is a syntax error where Python parses it as `not (n + 1)`; the same program with parentheses means the same in both.
+A comparison still does not chain (`a < b < c` stays a syntax error), and `not n + 1` parses as Python parses it, `not (n + 1)`, which the checker then rejects for its `int` operand.
 `elif` extends `if_stmt`:
 
 ```
@@ -824,9 +824,9 @@ The acceptance program `conditions.epy` has an effect `Log.note` performed insid
 3.  *Whether `elif` is parser sugar or a node of its own.*
     A dedicated `Elif` node would give the checker and the evaluator a chain to walk and the error messages an `elif` to name.
     *The design folds it into nested `If` nodes, as CPython does, so nothing below the parser changes; a message about a condition names the line, which is the `elif`'s.*
-4.  *Whether `not` applies to an `arith` or to a comparison.*
-    Python's `not` sits above the comparison, so `not a == b` is `not (a == b)` either way; the difference is `not n + 1`, legal in Python and meaningless under the `bool` rule.
-    *The design puts `not` above the comparison and lets `not n + 1` be a syntax error, which the checker would reject anyway.*
+4.  *Whether `not` sits above the comparison, as in Python, or above an `arith`.*
+    Python's `not` sits above the comparison, so `not a == b` is `not (a == b)`; `not n + 1` is `not (n + 1)` either way, legal in Python and meaningless under the `bool` rule.
+    *The design follows Python, so every accepted program parses as Python parses it, and leaves `not n + 1` to the checker: "not needs a bool, not int".*
 
 ---
 
@@ -836,7 +836,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from <module> import <names>`, accepted and ignored whatever the module
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
@@ -847,6 +847,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `if <expr>: <suite>`, with an optional `else: <suite>`
     *   `while <expr>: <suite>` (added 2026-10-30 for `tests/programs/many_performs.epy`)
     *   `break` and `continue`, a `Break` and a `Continue` node, anywhere under a `while` or `for` in the same function (1.10; Milestone 10, 2026-11-07)
+    *   `and`, `or`, and `not`, a `BoolOp` and a `Not` node, in three grammar layers above a comparison with Python's precedence; and `elif`, which builds an `If` alone in the `orelse` of the `If` above it, with no node of its own (1.11; Milestone 11, 2026-11-08)
     *   `for <name> in <expr>: <suite>`, a `For` node, or a `ForRange` node when the expression is a call to `range` (1.9; Milestone 9, 2026-11-07)
     *   indexed assignment `<expr>[<expr>] = <expr>`, an `IndexAssign` node; one production reads every assignment and sorts the target into `Assign`, `AttrAssign`, or `IndexAssign` (1.9; Milestone 9, 2026-11-07)
     *   `try: with handle(<Effects>): <suite> except <Effect>.<op> as <name>: <suite>`
@@ -905,6 +906,7 @@ The static analyzer runs in three passes over the AST before execution:
             one assigned to another name loses its type, since the checker does not track which names share a list; a list is no element of a list (1.9, open question 5), which keeps `xss[0]` from naming one twice; and a literal with an element of unknown type is unknown, so nothing refines it as `[]` is refined.
             An `append` on a name of unknown type passes, as an unknown type does everywhere.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
+        *   `BoolOp` and `Not` (1.11; Milestone 11, 2026-11-08) have the type `bool`, and their operands, like the test of an `IfNode` or a `While`, must be `bool` where the type is known, else "and needs a bool, not int" (`require_bool`); both operands' effects count, though the runtime may skip the right one.
         *   Lists (1.9; Milestone 9, 2026-11-07): a `ListLiteral` has the type `list[T]` of its elements, which must share one type, or the element-less `list` when it is empty, which `matches` accepts for any list type; `Index` has the element type and needs an `int` index; `IndexAssign` and `append` need a value of the element type, and a name holding `[]` takes the element type of its first `append`; `len()` of a list or `str` is `int`, `str()` of a scalar is `str`, and `range()` outside a `for` is rejected; `For` binds its name to the iterable's element type and `ForRange` to `int`, each an assignment for the `Name` rule, and both union the suite's effects; `==` and `!=` are the operators of a list type; and `len`, `str`, and `range` join `print` as names a function cannot take.
     *   **Signature Check:** After checking a function's body, if $\text{Effects}(\text{body}) \not\subseteq \text{declared\_effect\_row}$, raise a compile-time `UnhandledEffectError` listing the undeclared effects and their source line numbers.
 3.  **Pass 3 — Entrypoint Verification:**
@@ -1466,10 +1468,11 @@ EffectPython/
         `tests/programs/unreachable_*.epy` holds a program per runtime error branch the checker makes unreachable, and `runtime_*.epy` one per runtime-only error, so a branch the checker stops rejecting fails in `test_runtime.py`; a branch without a program would not, so the list in `interpreter.py`'s docstring is checked by reading.
 
 11. **Milestone 11: `and`, `or`, `not`, and `elif` (1.11)**
-    *   *Designed 2026-11-08*, with four open questions and recommendations in 1.11.
+    *   *Designed and implemented 2026-11-08*, the four open questions settled as 1.11 recommends: `bool` operands, `bool` tests for `if` and `while`, `elif` as nested `If` nodes, and `not` above the comparison as in Python.
+        `conditions.epy` shows the short circuit holding across the stacklet boundary, and `tutorial_basics.epy` and `handler_class.epy` use `and`, `not`, `or`, and an `elif` chain in the tutorial's sections 1 and 6.
     *   *Implementation:* `lexer.py` gains the four keywords; `ast_nodes.py` gains `BoolOp` and `Not`; `parser.py` gains the `or_test`, `and_test`, and `not_test` layers and the `elif_part` production, with the conflict check `pypy2 -W error::rply.errors.ParserGeneratorWarning -c "from effectpython.parser import parse"` still clean; `checker.py` types the two nodes, requiring `bool` operands where known, and requires a `bool` test for `if` and `while` where the type is known; `interpreter.py` evaluates `BoolOp` with a short circuit and `Not`, and reports a non-`bool` operand or test as a runtime error with the checker's words.
         `tests/test_parser.py`, `tests/test_checker.py`, and `tests/test_interpreter.py` each get a section, and `TUTORIAL.md` section 1 shows the operators and section 6 an `elif` chain in a fake handler.
     *   *Acceptance test:*
         *   `conditions.epy`: `and`, `or`, and `not` in `if` and `while` tests and in a `return`; an `elif` chain of three arms plus `else`; a `perform(Log.note(...))` in the right operand of an `and` whose left operand is `False` and of an `or` whose left operand is `True`, with the handler printing each note, so the output shows the skipped operands were not performed; and a `return` of `a and b` from a function declared `-> bool`.
-        *   Reject `1 and True` and `not "s"` with "and needs a bool, not int" and "not needs a bool, not str"; reject `if n:` with `n` an `int` with "if needs a bool, not int"; reject `a < b < c` and `not n + 1` as syntax errors; accept `not a == b`, `a and not b or c`, a `perform()` in either operand with the effect in the row, and an `elif` chain whose arms assign one name two types followed by a `print` of the name.
+        *   Reject `1 and True` and `not "s"` with "and needs a bool, not int" and "not needs a bool, not str"; reject `if n:` with `n` an `int` with "if needs a bool, not int"; reject `a < b < c` as a syntax error and `not n + 1` with "not needs a bool, not int"; accept `not a == b`, `a and not b or c`, a `perform()` in either operand with the effect in the row, and an `elif` chain whose arms assign one name two types followed by a `print` of the name.
         *   `runtime_bool_operand.epy`: an `and` whose left operand has an unknown type and holds an `int`, reaching the runtime's "and needs a bool, not int".

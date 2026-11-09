@@ -1,4 +1,4 @@
 exit 0
-contents of settings.json
+debug = true
 log: writing settings
 7

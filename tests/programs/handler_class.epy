@@ -13,7 +13,12 @@ class Log(Effect):
 
 class FakeFileIO(Handler[FileIO]):
     def read(self, path: str) -> str:
-        return "contents of " + path
+        if path == "settings.json":
+            return "debug = true"
+        elif path == "app.json":
+            return "name = demo"
+        else:
+            return "contents of " + path
     def write(self, path: str, content: str) -> int / [Log]:
         perform(Log.note("writing " + path))
         return 7

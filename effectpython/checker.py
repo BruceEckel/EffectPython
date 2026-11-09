@@ -138,6 +138,15 @@ with "'break' outside loop" or "'continue' not properly in loop"
 (plan 1.10). The count is loop_depth, which check_loop_body
 increments around every loop suite and check_function resets.
 
+The operands of and, or, and not, and the test of an if or a while,
+must be bool where their types are known (require_bool, plan 1.11),
+with the runtime's words: "and needs a bool, not int". The result
+of the three operators is bool. Both operands of and and or are
+typed and their effects counted, though the runtime may skip the
+right one, since the row must cover whatever it would perform. An
+elif is a nested if to the checker, so check_if merges each arm in
+turn.
+
 The checker dispatches by isinstance over the ast_nodes classes, as the
 evaluator does, so adding a node means adding a branch in both.
 """
@@ -561,7 +570,8 @@ class Checker(object):
         if isinstance(stmt, ast.Return):
             self.check_return(stmt, scope, effects)
         elif isinstance(stmt, ast.If):
-            self.type_of(stmt.test, scope, effects)
+            self.require_bool(self.type_of(stmt.test, scope, effects),
+                              "if", stmt.lineno)
             self.check_if(stmt, scope, effects)
         elif isinstance(stmt, ast.While):
             self.check_loop_body(stmt.test, stmt.body, scope, effects)
@@ -690,7 +700,8 @@ class Checker(object):
         self.loop_exits.append(exits)
         while True:
             if test is not None:
-                self.type_of(test, scope, effects)
+                self.require_bool(self.type_of(test, scope, effects),
+                                  "while", test.lineno)
             self.check_block(body, scope, effects)
             after = merge_types(merge_types(before, scope.types), exits)
             if same_types(after, before):
@@ -1089,6 +1100,16 @@ class Checker(object):
             if left == UNKNOWN:
                 return right
             return left
+        elif isinstance(expr, ast.BoolOp):
+            self.require_bool(self.type_of(expr.left, scope, effects),
+                              expr.op, expr.lineno)
+            self.require_bool(self.type_of(expr.right, scope, effects),
+                              expr.op, expr.lineno)
+            return "bool"
+        elif isinstance(expr, ast.Not):
+            self.require_bool(self.type_of(expr.operand, scope, effects),
+                              "not", expr.lineno)
+            return "bool"
         elif isinstance(expr, ast.Compare):
             left = self.type_of(expr.left, scope, effects)
             right = self.type_of(expr.right, scope, effects)
@@ -1157,6 +1178,14 @@ class Checker(object):
             return "None"
         else:
             raise InvalidProgram(expr.lineno, "unknown expression node")
+
+    def require_bool(self, actual, what, lineno):
+        """An if or while test and an operand of and, or, or not must
+        be bool where the type is known (plan 1.11), with the
+        runtime's words."""
+        if actual != UNKNOWN and actual != "bool":
+            raise InvalidProgram(
+                lineno, "%s needs a bool, not %s" % (what, actual))
 
     def check_operands(self, op, left, right, lineno):
         """Both operand types known and not a pair the interpreter's

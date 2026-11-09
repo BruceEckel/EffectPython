@@ -378,6 +378,26 @@ class BinOp(Expr):
         self.left = left    # Expr
         self.right = right  # Expr
 
+class BoolOp(Expr):
+    """left and right, or left or right (plan 1.11). The right operand
+       is evaluated only when the left one does not decide the result,
+       so an effect or an exception in it may not occur."""
+    _attrs_ = ['op', 'left', 'right']
+
+    def __init__(self, op, left, right, lineno=0):
+        Node.__init__(self, lineno)
+        self.op = op        # str: "and" or "or"
+        self.left = left    # Expr
+        self.right = right  # Expr
+
+class Not(Expr):
+    """not operand (plan 1.11)"""
+    _attrs_ = ['operand']
+
+    def __init__(self, operand, lineno=0):
+        Node.__init__(self, lineno)
+        self.operand = operand  # Expr
+
 class Compare(Expr):
     """left op right, where op is one of < <= > >= == !="""
     _attrs_ = ['op', 'left', 'right']

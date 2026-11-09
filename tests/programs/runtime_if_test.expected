@@ -1,0 +1,2 @@
+exit 1
+error: if needs a bool, not str

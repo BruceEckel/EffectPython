@@ -84,6 +84,14 @@ mailbox it swallows it, and another frame's Unwind it re-raises,
 which carries an outer abandonment through every body nested inside
 the abandoned one.
 
+and, or, and not (plan 1.11) take bool operands and give a W_Bool
+(truth); and and or evaluate the right operand only when the left
+has not decided the result, so an effect in a skipped operand is not
+performed. A perform() inside an operand suspends the body in the
+middle of the expression, on its stacklet, as one inside a call's
+argument does. An elif is a nested If from the parser on, as in
+CPython's AST.
+
 Lists and the for loop (plan 1.9) add values, not mechanism. A W_List
 is shared by reference, so exec_for walks the one the iterable
 evaluates to by index against its live length, and a clause that
@@ -128,7 +136,9 @@ typed: a subscript, an append, or a for on a value that is not a list
 (list_value), a non-integer index (list_index), a method other than
 append and an append with the wrong number of arguments
 (list_method), and a built-in with the wrong number or type of
-argument (builtin), plus range() outside a for (call). The "unknown
+argument (builtin), plus range() outside a for (call); and a non-bool
+operand of and, or, or not, or test of an if or a while, where the
+checker knows the type (require_bool, in truth). The "unknown
 node" branches guard the dispatch and no parse reaches them. The
 claims hold where the checker holds a type for the value, and a type
 it holds is the type the value has at runtime: a return value has
@@ -161,11 +171,11 @@ tests/programs/runtime_*.epy reaches each: a read, an append, or a
 call on a name whose assignment comes earlier in the source but did
 not run, because it sits in a loop body that ran zero times or in
 one branch of an if (Environment.lookup and the OpCall branch of
-eval_expr); an operator, a for, a len() or str() argument, or a list
-index whose type the checker could not see; integer division or
-modulo by zero; a list
-index out of range (list_index_error.epy); and a recursion that
-outgrows the C stack,
+eval_expr); an operator, a for, a len() or str() argument, a list
+index, a bool operand, or an if or while test whose type the checker
+could not see; integer division or modulo by zero; a list index out
+of range (list_index_error.epy); and a recursion that outgrows the C
+stack,
 which RPython's stack check stops and run_body_callback or the entry
 point reports as "maximum recursion depth exceeded"
 (deep_recursion.epy). A read of a name an except clause deleted,
@@ -413,12 +423,12 @@ class Interpreter(object):
                 raise ReturnSignal(w_None)
             raise ReturnSignal(self.eval_expr(stmt.value, env))
         elif isinstance(stmt, ast.If):
-            if self.eval_expr(stmt.test, env).is_true():
+            if truth(self.eval_expr(stmt.test, env), "if"):
                 self.exec_block(stmt.body, env)
             else:
                 self.exec_block(stmt.orelse, env)
         elif isinstance(stmt, ast.While):
-            while self.eval_expr(stmt.test, env).is_true():
+            while truth(self.eval_expr(stmt.test, env), "while"):
                 if self.exec_pass(stmt.body, env):
                     break
         elif isinstance(stmt, ast.Break):
@@ -793,6 +803,15 @@ class Interpreter(object):
             w_left = self.eval_expr(expr.left, env)
             w_right = self.eval_expr(expr.right, env)
             return self.binop(expr.op, w_left, w_right)
+        elif isinstance(expr, ast.BoolOp):
+            left = truth(self.eval_expr(expr.left, env), expr.op)
+            if left != (expr.op == "and"):
+                return wrap_bool(left)
+            return wrap_bool(truth(self.eval_expr(expr.right, env),
+                                   expr.op))
+        elif isinstance(expr, ast.Not):
+            return wrap_bool(not truth(self.eval_expr(expr.operand, env),
+                                       "not"))
         elif isinstance(expr, ast.Compare):
             w_left = self.eval_expr(expr.left, env)
             w_right = self.eval_expr(expr.right, env)
@@ -1055,6 +1074,15 @@ def clause_catching(stmt, w_exception):
                 or clause.name == "Exception"):
             return clause
     return None
+
+def truth(w, what):
+    """The bool an if or while test, or an operand of and, or, or not,
+    must be (plan 1.11); the checker makes the error unreachable where
+    it knows the type."""
+    if not isinstance(w, W_Bool):
+        raise EffectPythonRuntimeError(
+            "%s needs a bool, not %s" % (what, type_name(w)))
+    return w.val
 
 def type_name(w):
     if isinstance(w, W_Int):
