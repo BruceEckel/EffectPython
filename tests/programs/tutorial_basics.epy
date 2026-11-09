@@ -6,7 +6,7 @@ def repeat(word: str, times: int) -> str:
     text = word
     while times > 1:
         text = f"{text} {word}"
-        times = times - 1
+        times -= 1
     return text
 
 def parity(n: int) -> str:

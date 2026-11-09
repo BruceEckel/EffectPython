@@ -16,7 +16,7 @@ class Tally(Handler[Count]):
     counts: dict[str, int] = {}
     def seen(self, word: str) -> int:
         if word in self.counts:
-            self.counts[word] = self.counts[word] + 1
+            self.counts[word] += 1
         else:
             self.counts[word] = 1
         return self.counts[word]
@@ -24,7 +24,7 @@ class Tally(Handler[Count]):
 def total(d: dict[str, int]) -> int:
     n = 0
     for k in d:
-        n = n + d[k]
+        n += d[k]
     return n
 
 def main() -> int / []:

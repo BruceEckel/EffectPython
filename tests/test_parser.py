@@ -4,7 +4,8 @@ Milestone 6, exceptions; from Milestone 7, operation rows and throw;
 from Milestone 8, finally; from Milestone 9, lists and the
 for loop; from Milestone 10, break and continue; from Milestone 11,
 the boolean operators and elif (plan 1.11); from Milestone 12, dicts
-and in (plan 1.12); from Milestone 13, f-strings (plan 1.13).
+and in (plan 1.12); from Milestone 13, f-strings (plan 1.13);
+from Milestone 14, augmented assignment (plan 1.14).
 
 Run with:  pypy2 -m pytest
 """
@@ -1052,6 +1053,63 @@ def test_an_fstring_carries_the_line_of_its_start():
     ('f"{n +}"', "line 2, column 11: unexpected '}'"),
 ], ids=['format-spec', 'self-documenting', 'incomplete-expr'])
 def test_fstring_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    %s\n' % source)
+    assert info.value.msg == msg
+
+# --- augmented assignment (Milestone 14) -------------------------------------
+
+@pytest.mark.parametrize('source, expected', [
+    ('x += 1', ['NAME', 'PLUSEQUALS', 'INT']),
+    ('x -= 1', ['NAME', 'MINUSEQUALS', 'INT']),
+    ('x *= 1', ['NAME', 'STAREQUALS', 'INT']),
+    ('x //= 1', ['NAME', 'DOUBLESLASHEQUALS', 'INT']),
+    ('x %= 1', ['NAME', 'PERCENTEQUALS', 'INT']),
+    ('x // y', ['NAME', 'DOUBLESLASH', 'NAME']),
+    ('a -> b', ['NAME', 'ARROW', 'NAME']),
+    ('x == y', ['NAME', 'EQ', 'NAME']),
+], ids=['plus', 'minus', 'star', 'doubleslash', 'percent',
+        'floor-divide', 'arrow', 'equality'])
+def test_augmented_tokens(source, expected):
+    assert kinds(source) == expected + ['NEWLINE']
+
+@pytest.mark.parametrize('op', ['+', '-', '*', '//', '%'])
+def test_a_name_target_builds_an_assign_over_a_binop(op):
+    module = parse('def main() -> int:\n    x %s= v\n' % op)
+    assert shape(module.functions[0].body[0]) == (
+        'Assign', 'x', ('BinOp', op, ('Name', 'x'), ('Name', 'v')))
+
+def test_a_field_target_builds_an_attr_assign_over_a_binop():
+    module = parse('def main() -> int:\n    self.n += 1\n')
+    assert shape(module.functions[0].body[0]) == (
+        'AttrAssign', 'self', 'n',
+        ('BinOp', '+', ('AttrRead', 'self', 'n'), ('IntLiteral', 1)))
+
+@pytest.mark.parametrize('source, expected', [
+    ('xs[i] += v',
+     ('IndexAugAssign', '+', ('Name', 'xs'), ('Name', 'i'),
+      ('Name', 'v'))),
+    ('d["k"] //= 2',
+     ('IndexAugAssign', '//', ('Name', 'd'), ('StrLiteral', 'k'),
+      ('IntLiteral', 2))),
+], ids=['list', 'dict'])
+def test_a_subscript_target_builds_an_index_aug_assign(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    assert shape(module.functions[0].body[0]) == expected
+
+@pytest.mark.parametrize('source', [
+    'x += 1', 'self.n += 1', 'xs[i] += 1',
+], ids=['name', 'field', 'subscript'])
+def test_an_augmented_assignment_carries_its_line(source):
+    module = parse('def main() -> int:\n    pass\n    %s\n' % source)
+    assert module.functions[0].body[1].lineno == 3
+
+@pytest.mark.parametrize('source, msg', [
+    ('f() += 1', 'line 2, column 9: cannot assign to this expression'),
+    ('1 += 1', 'line 2, column 7: cannot assign to this expression'),
+    ('x + = 1', "line 2, column 9: unexpected '='"),
+], ids=['call', 'literal', 'split-operator'])
+def test_augmented_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def main() -> int:\n    %s\n' % source)
     assert info.value.msg == msg

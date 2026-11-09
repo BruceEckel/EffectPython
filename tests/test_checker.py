@@ -6,7 +6,9 @@ Milestone 9 the list and for rules (plan 1.9), from Milestone 10
 the loop rule for break and continue (plan 1.10) and the type rules
 for return values, loop and try merging, and [] aliasing, and from
 Milestone 11 the bool rule for and, or, not, if, and while, and elif
-(plan 1.11), and from Milestone 12 the dict and in rules (plan 1.12).
+(plan 1.11), from Milestone 12 the dict and in rules (plan 1.12),
+from Milestone 13 the f-string field rule (plan 1.13), and from
+Milestone 14 the augmented assignment rules (plan 1.14).
 
 Run with:  pypy2 -m pytest
 """
@@ -1794,4 +1796,78 @@ def test_an_fstring_field_that_performs_counts_for_the_row():
 def test_accepts_an_fstring_field_that_performs_a_declared_effect():
     body = (LOG + 'def f() -> str / [Log]:\n'
             '    return f"{perform(Log.note(\'x\'))}"\n' + MAIN)
+    check_source(body)
+
+# --- augmented assignment (Milestone 14) ------------------------------------
+
+def aug_main(lines):
+    return 'def main() -> int / []:\n' + lines + '    return 0\n'
+
+@pytest.mark.parametrize('lines', [
+    '    x = 1\n    x += 1\n',
+    '    x = 1\n    x -= 1\n',
+    '    x = 1\n    x *= 2\n',
+    '    x = 5\n    x //= 2\n',
+    '    x = 5\n    x %= 2\n',
+    '    s = "a"\n    s += "b"\n',
+    '    xs = [1]\n    xs[0] += 1\n',
+    '    d = {"k": 1}\n    d["k"] += 1\n',
+    '    for i in range(3):\n        i += 1\n',
+    '    i = 0\n    while i < 3:\n        i += 1\n',
+], ids=['int-add', 'int-sub', 'int-mul', 'int-floordiv', 'int-mod',
+        'str-add', 'list-item', 'dict-value', 'for-variable',
+        'while-counter'])
+def test_accepts_an_augmented_assignment_of_matching_types(lines):
+    check_source(aug_main(lines))
+
+def test_accepts_an_augmented_assignment_to_a_handler_field():
+    body = (LOG + 'class Tally(Handler[Log]):\n    n: int = 0\n'
+            '    def note(self, text: str) -> int:\n'
+            '        self.n += 1\n        return self.n\n' + MAIN)
+    check_source(body)
+
+def test_an_augmented_floor_division_leaves_the_name_an_int():
+    body = aug_main('    x = 5\n    x //= 2\n    y = x + "a"\n')
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == (
+        'line 11: unsupported operand types for +: int and str')
+
+@pytest.mark.parametrize('lines, msg', [
+    ('    x += 1\n', "line 9: name 'x' is not defined"),
+    ('    s = "a"\n    s += 1\n',
+     'line 10: unsupported operand types for +: str and int'),
+    ('    s = "a"\n    s -= "a"\n',
+     'line 10: unsupported operand types for -: str and str'),
+    ('    xs = [1]\n    xs += [1]\n',
+     'line 10: unsupported operand types for +: list[int] and list[int]'),
+    ('    flag = True\n    flag += True\n',
+     'line 10: unsupported operand types for +: bool and bool'),
+    ('    d = {"a": "x"}\n    d["a"] += 1\n',
+     'line 10: unsupported operand types for +: str and int'),
+    ('    d = {"a": 1}\n    d[1] += 1\n',
+     'line 10: a dict key must be str, not int'),
+    ('    xs = [1]\n    xs["a"] += 1\n',
+     'line 10: a list index must be int, not str'),
+    ('    n = 1\n    n[0] += 1\n', "line 10: 'n' is not a list"),
+], ids=['unbound-name', 'str-plus-int', 'str-minus', 'list-plus',
+        'bool-plus', 'dict-value-type', 'dict-key-type', 'list-index-type',
+        'not-a-list'])
+def test_rejects_an_augmented_assignment_the_runtime_would_refuse(lines, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(aug_main(lines))
+    assert info.value.msg == msg
+
+def test_an_augmented_value_that_performs_counts_for_the_row():
+    body = (LOG + 'def f() -> int:\n    xs = [1]\n'
+            '    xs[0] += perform(Log.note("x"))\n    return 0\n' + MAIN)
+    with pytest.raises(UnhandledEffectError) as info:
+        check_source(body)
+    assert info.value.msg == (
+        "line 10: function 'f' performs Log (line 12) without declaring "
+        "it in its effect row")
+
+def test_accepts_an_augmented_value_that_performs_a_declared_effect():
+    body = (LOG + 'def f() -> int / [Log]:\n    xs = [1]\n'
+            '    xs[0] += perform(Log.note("x"))\n    return 0\n' + MAIN)
     check_source(body)

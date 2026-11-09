@@ -1,0 +1,63 @@
+# Milestone 14: augmented assignment (plan 1.14). A name or a field
+# target means the assignment it abbreviates. A subscript target is
+# evaluated once, before the value, so an index that performs notes
+# one key per statement; the element is read before the value, so a
+# clause that assigns it during the value's perform loses; and the
+# store goes through the index value, so xs[-1] names the element
+# appended during the value's perform, as in Python.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Ask(Effect):
+    def key() -> str: ...
+    def amount(n: int) -> int: ...
+    def grow(n: int) -> int: ...
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Tally(Handler[Log]):
+    notes: int = 0
+    def note(self, text: str) -> int:
+        self.notes += 1
+        print("note:", text)
+        return self.notes
+
+def main() -> int / []:
+    x = 7
+    x += 3
+    x -= 1
+    x *= 2
+    x //= 4
+    x %= 3
+    s = "a"
+    s += "b"
+    s += "c"
+    tally = Tally()
+    with handle(tally):
+        perform(Log.note("one"))
+        perform(Log.note("two"))
+    print(x, s, tally.notes)
+    xs = [1, 2]
+    xs[0] += 10
+    xs[-1] += 5
+    counts = {"a": 1, "b": 1}
+    counts["a"] += 2
+    print(xs, counts)
+    try:
+        with handle(Ask):
+            counts[perform(Ask.key())] += 10
+            counts[perform(Ask.key())] += 100
+            xs[0] += perform(Ask.amount(10))
+            xs[-1] += perform(Ask.grow(10))
+            print(xs, counts)
+    except Ask.key as eff:
+        print("key asked")
+        eff.resume("b")
+    except Ask.amount as eff:
+        xs[0] = 1000
+        eff.resume(eff.n)
+    except Ask.grow as eff:
+        xs.append(100)
+        eff.resume(eff.n)
+    return 0

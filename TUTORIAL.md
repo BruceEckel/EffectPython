@@ -40,7 +40,7 @@ def repeat(word: str, times: int) -> str:
     text = word
     while times > 1:
         text = f"{text} {word}"
-        times = times - 1
+        times -= 1
     return text
 
 def parity(n: int) -> str:
@@ -80,6 +80,8 @@ And the annotations are required, not optional:
 every value has a type the checker knows, so the arithmetic here is `int`, a comparison and `small` are `bool`, and `repeat` builds a `str`.
 An f-string such as `f"{text} {word}"` builds a `str` from its fields, each an `int`, a `str`, or a `bool`, with no format specs;
 `"a" + str(n)` says the same thing the long way, and the two agree on every value.
+`times -= 1` is `times = times - 1`, and `+=`, `*=`, `//=`, and `%=` abbreviate the other operators the same way;
+on a list element or a dict value, `xs[i] += 1`, the target is evaluated once, as in Python.
 `and`, `or`, and `not` combine `bool` values as Python's do, with the same precedence and the same short circuit, and take `bool` operands alone:
 `if n:` on an `int` is a checker error, `if needs a bool, not int`, where Python would test the number for zero.
 
@@ -466,7 +468,7 @@ class CountingFileIO(Handler[FileIO]):
     def read(self, path: str) -> str:
         return f"contents of {path}"
     def write(self, path: str, content: str) -> int:
-        self.writes = self.writes + 1
+        self.writes += 1
         return self.writes
 
 def save(name: str) -> int / [FileIO]:
@@ -713,7 +715,7 @@ class NotFound(Exception): ...
 class MissingFiles(Handler[FileIO]):
     failures: int = 0
     def read(self, path: str) -> str / [NotFound]:
-        self.failures = self.failures + 1
+        self.failures += 1
         raise NotFound(path)
 
 def load(path: str) -> str / [FileIO]:
@@ -838,7 +840,7 @@ class Tally(Handler[Count]):
     counts: dict[str, int] = {}
     def seen(self, word: str) -> int:
         if word in self.counts:
-            self.counts[word] = self.counts[word] + 1
+            self.counts[word] += 1
         else:
             self.counts[word] = 1
         return self.counts[word]
@@ -846,7 +848,7 @@ class Tally(Handler[Count]):
 def total(d: dict[str, int]) -> int:
     n = 0
     for k in d:
-        n = n + d[k]
+        n += d[k]
     return n
 
 def main() -> int / []:

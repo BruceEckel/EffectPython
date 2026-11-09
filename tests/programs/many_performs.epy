@@ -14,7 +14,7 @@ def main() -> int / []:
         with handle(Counter):
             total = 0
             for i in range(10000):
-                total = total + perform(Counter.tick(i))
+                total += perform(Counter.tick(i))
             print(total)
     except Counter.tick as eff:
         eff.resume(eff.n % 10)

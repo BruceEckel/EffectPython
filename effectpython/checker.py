@@ -48,7 +48,11 @@ list binds its name to the element type, over a dict to str, and
 over range() to int. len(), str(), and range() are built-in names
 beside print, and a function cannot take one of them. An f-string
 is str, and each of its fields is int, str, or bool, as str() takes
-(check_fstring). For two lists
+(check_fstring). An augmented assignment to a name or a field
+arrives as the assignment it means, so x += 1 needs x bound and
+the pair x, 1 under OPERATORS; xs[i] op= v is an IndexAugAssign,
+whose element type and value go to check_operands with the element
+on the left (check_index_aug_assign, plan 1.14). For two lists
 the checker requires one element type, which the runtime does not:
 it compares them and finds the elements unequal; dicts have no
 operator.
@@ -675,6 +679,8 @@ class Checker(object):
             self.hand_over(stmt.value, expected, scope)
         elif isinstance(stmt, ast.IndexAssign):
             self.check_index_assign(stmt, scope, effects)
+        elif isinstance(stmt, ast.IndexAugAssign):
+            self.check_index_aug_assign(stmt, scope, effects)
         elif isinstance(stmt, ast.ExprStmt):
             self.type_of(stmt.expr, scope, effects)
         elif isinstance(stmt, ast.Pass):
@@ -853,6 +859,17 @@ class Checker(object):
                 scope.set_type(target.id, UNKNOWN)
             else:
                 scope.set_type(target.id, "dict[str, %s]" % actual)
+
+    def check_index_aug_assign(self, stmt, scope, effects):
+        """xs[i] op= v or d[k] op= v: the element or value type on the
+        left and the value on the right must be a pair the operator
+        takes. The result has the element's type, so the store needs
+        no rule of its own, and {} gets no refinement, since a key
+        must hold a value before anything is added to it."""
+        element = self.check_index(stmt.target, stmt.index, stmt.lineno,
+                                   scope, effects)
+        actual = self.type_of(stmt.value, scope, effects)
+        self.check_operands(stmt.op, element, actual, stmt.lineno)
 
     def check_fstring(self, expr, scope, effects):
         """Each field is int, str, or bool, as str() takes, or unknown,

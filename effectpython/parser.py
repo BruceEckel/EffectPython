@@ -30,7 +30,10 @@ left of an attribute read, and so of an attribute assignment, where
 the dialect allows nothing else. An index target may be any postfix
 expression, so f()[0] = 2 parses. One production reads every
 assignment, and the target's shape picks Assign, AttrAssign, or
-IndexAssign. A type is a name or list[name] whose element is int,
+IndexAssign. An augmented assignment x += v builds the Assign or
+AttrAssign it means, over a BinOp, for a name or a field target;
+a subscript target gives an IndexAugAssign, since its target and
+index are evaluated once (plan 1.14). A type is a name or list[name] whose element is int,
 str, or bool; a bare list is rejected, since it needs an element
 type. A for whose iterable is a call to range becomes a ForRange,
 and a unary minus is folded into the literal it negates or into
@@ -526,6 +529,24 @@ def assign(p):
                                target.lineno)
     raise _error(p[1], "cannot assign to this expression")
 
+@pg.production('simple_stmt : postfix augop expr')
+def aug_assign(p):
+    target = _expr(p[0])
+    op = _text(p[1])[:-1]
+    value = _expr(p[2])
+    if isinstance(target, ast.Name):
+        return ast.Assign(
+            target.id, ast.BinOp(op, target, value, target.lineno),
+            target.lineno)
+    if isinstance(target, ast.AttrRead):
+        return ast.AttrAssign(
+            target.target, target.attr,
+            ast.BinOp(op, target, value, target.lineno), target.lineno)
+    if isinstance(target, ast.Index):
+        return ast.IndexAugAssign(op, target.target, target.index, value,
+                                  target.lineno)
+    raise _error(p[1], "cannot assign to this expression")
+
 @pg.production('simple_stmt : expr')
 def expr_stmt(p):
     expr = _expr(p[0])
@@ -743,6 +764,11 @@ def binop(p):
 @pg.production('mulop : STAR')
 @pg.production('mulop : DOUBLESLASH')
 @pg.production('mulop : PERCENT')
+@pg.production('augop : PLUSEQUALS')
+@pg.production('augop : MINUSEQUALS')
+@pg.production('augop : STAREQUALS')
+@pg.production('augop : DOUBLESLASHEQUALS')
+@pg.production('augop : PERCENTEQUALS')
 def operator(p):
     return p[0]
 

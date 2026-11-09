@@ -11,7 +11,7 @@ class Counter(Effect):
 class Modulo(Handler[Counter]):
     calls: int = 0
     def tick(self, n: int) -> int:
-        self.calls = self.calls + 1
+        self.calls += 1
         return n % 10
 
 def main() -> int / []:
@@ -19,7 +19,7 @@ def main() -> int / []:
     with handle(modulo):
         total = 0
         for i in range(10000):
-            total = total + perform(Counter.tick(i))
+            total += perform(Counter.tick(i))
         print(total)
     print(modulo.calls)
     return 0

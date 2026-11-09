@@ -18,7 +18,7 @@ def main() -> int / []:
         with handle(Ask):
             total = 0
             for i in range(3):
-                total = total + perform(Ask.value(i))
+                total += perform(Ask.value(i))
             print("total", total)
             for s in seen:
                 print("seen", s)

@@ -15,7 +15,7 @@ class Count(Effect):
 class Counter(Handler[Count]):
     n: int = 0
     def tick(self) -> int:
-        self.n = self.n + 1
+        self.n += 1
         return self.n
 
 def descend(depth: int) -> int / [Abort, Count]:

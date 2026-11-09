@@ -16,9 +16,9 @@ def main() -> int / []:
             caught = 0
             for i in range(10000):
                 try:
-                    caught = caught + perform(Counter.tick(i))
+                    caught += perform(Counter.tick(i))
                 except Odd:
-                    caught = caught + 1
+                    caught += 1
             print(caught)
     except Counter.tick as eff:
         eff.throw(Odd())

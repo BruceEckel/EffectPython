@@ -16,7 +16,7 @@ class NotFound(Exception): ...
 class MissingFiles(Handler[FileIO]):
     failures: int = 0
     def read(self, path: str) -> str / [NotFound]:
-        self.failures = self.failures + 1
+        self.failures += 1
         raise NotFound(path)
 
 def load(path: str) -> str / [FileIO]:

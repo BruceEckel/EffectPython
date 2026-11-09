@@ -30,7 +30,7 @@ def main() -> int / []:
     print(between(5, 1, 10), between(10, 1, 10), not between(0, 1, 10))
     i = 0
     while i < 10 and not i == 3:
-        i = i + 1
+        i += 1
     print(i)
     try:
         with handle(Log):

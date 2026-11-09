@@ -13,7 +13,7 @@ class CountingFileIO(Handler[FileIO]):
     def read(self, path: str) -> str:
         return f"contents of {path}"
     def write(self, path: str, content: str) -> int:
-        self.writes = self.writes + 1
+        self.writes += 1
         return self.writes
 
 def save(name: str) -> int / [FileIO]:

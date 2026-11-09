@@ -12,7 +12,7 @@ def first_over(xs: list[int], limit: int) -> int:
 def main() -> int:
     n = 0
     while True:
-        n = n + 1
+        n += 1
         if n % 2 == 0:
             continue
         if n > 7:

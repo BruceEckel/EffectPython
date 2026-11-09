@@ -28,7 +28,11 @@ expression it is a MethodCall. len(), str(), and range() are Call
 nodes recognized by name, as print is. An FString (plan 1.13)
 evaluates its fields left to right and joins their str() with its
 literal text, so a perform() in a field suspends the body in the
-middle of the expression, as one in an argument does. A W_Dict
+middle of the expression, as one in an argument does. An augmented
+assignment to a name or a field is the Assign or AttrAssign the
+parser built; a subscript target is an IndexAugAssign, which
+exec_index_aug_assign evaluates in Python's order, the read before
+the value and the store through the index value (plan 1.14). A W_Dict
 (plan 1.12) is
 shared the same way, over an RPython dict from str to W_Root, which
 keeps insertion order; exec_for_dict walks its keys and stops with
@@ -215,7 +219,8 @@ and runtime_fstring_field.epy), a list index
 checker could not see; integer division or modulo by zero
 (runtime_division_by_zero.epy and runtime_modulo_by_zero.epy); a list
 index out of range (list_index_error.epy); a key a dict lacks
-(runtime_missing_key.epy), and a dict a store resizes while a for
+(runtime_missing_key.epy, and runtime_augmented_key.epy through the
+read of d[k] += 1), and a dict a store resizes while a for
 walks it (runtime_dict_resized.epy); and a recursion that outgrows
 the C stack, which RPython's stack check stops and the entry point
 (deep_recursion.epy) or run_body_callback
@@ -494,6 +499,8 @@ class Interpreter(object):
             else:
                 w_list = list_value(w_target)
                 w_list.items_w[list_index(w_list, w_index)] = w_value
+        elif isinstance(stmt, ast.IndexAugAssign):
+            self.exec_index_aug_assign(stmt, env)
         elif isinstance(stmt, ast.For):
             self.exec_for(stmt, env)
         elif isinstance(stmt, ast.ForRange):
@@ -511,6 +518,29 @@ class Interpreter(object):
             pass
         else:
             raise EffectPythonRuntimeError("unknown statement node")
+
+    def exec_index_aug_assign(self, stmt, env):
+        """xs[i] op= v or d[k] op= v in Python's order: the target, the
+        index, the read, then the value, and the store through the
+        index value, so a negative index names the last element at
+        the store even when v's perform let a clause append (plan
+        1.14). A missing key or an index out of range fails at the
+        read, as a subscript does."""
+        w_target = self.eval_expr(stmt.target, env)
+        w_index = self.eval_expr(stmt.index, env)
+        if isinstance(w_target, W_Dict):
+            key = dict_key(w_index)
+            if key not in w_target.items_w:
+                raise EffectPythonRuntimeError("key '%s' not found" % key)
+            w_old = w_target.items_w[key]
+            w_value = self.eval_expr(stmt.value, env)
+            w_target.items_w[key] = self.binop(stmt.op, w_old, w_value)
+            return
+        w_list = list_value(w_target)
+        w_old = w_list.items_w[list_index(w_list, w_index)]
+        w_value = self.eval_expr(stmt.value, env)
+        w_new = self.binop(stmt.op, w_old, w_value)
+        w_list.items_w[list_index(w_list, w_index)] = w_new
 
     def exec_for(self, stmt, env):
         """Walk the list by index against its live length, as Python

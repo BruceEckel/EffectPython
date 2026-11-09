@@ -200,6 +200,20 @@ class IndexAssign(Stmt):
         self.index = index    # Expr
         self.value = value    # Expr
 
+class IndexAugAssign(Stmt):
+    """target[index] op= value (plan 1.14). A name or a field target
+       is built as the Assign or AttrAssign it means; a subscript gets
+       its own node because the target and the index are evaluated
+       once, before the value."""
+    _attrs_ = ['op', 'target', 'index', 'value']
+
+    def __init__(self, op, target, index, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.op = op          # str, one of + - * // %
+        self.target = target  # Expr
+        self.index = index    # Expr
+        self.value = value    # Expr
+
 class ExprStmt(Stmt):
     """An expression evaluated for its side effect, such as print(x)."""
     _attrs_ = ['expr']

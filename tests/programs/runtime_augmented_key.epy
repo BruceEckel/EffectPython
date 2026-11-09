@@ -1,0 +1,10 @@
+# Runtime-only: d[k] += 1 reads d[k] before adding, and the checker
+# does not evaluate keys, so a key the dict lacks fails at that read
+# with the message a subscript gives.
+
+def main() -> int:
+    d = {"a": 1}
+    d["a"] += 1
+    d["b"] += 1
+    print(d)
+    return 0

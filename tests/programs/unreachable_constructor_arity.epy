@@ -10,7 +10,7 @@ class Log(Effect):
 class Counter(Handler[Log]):
     n: int = 0
     def note(self, text: str) -> int:
-        self.n = self.n + 1
+        self.n += 1
         return self.n
 
 def main() -> int:

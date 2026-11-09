@@ -1,7 +1,8 @@
 """Milestone 1 acceptance: the evaluator runs a recursive Fibonacci;
 from Milestone 11, the boolean operators and elif (plan 1.11);
 from Milestone 12, dicts and in (plan 1.12); from Milestone 13,
-f-strings (plan 1.13).
+f-strings (plan 1.13); from Milestone 14, augmented assignment
+(plan 1.14).
 
 Run with:  pypy2 -m pytest
 These tests import no RPython modules, so they need no PYTHONPATH.
@@ -802,4 +803,83 @@ def test_a_non_scalar_fstring_field_is_a_runtime_error(value, msg):
         '    return 0\n')
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_main_body(body)
+    assert info.value.msg == msg
+
+# --- augmented assignment (Milestone 14) -------------------------------------
+
+@pytest.mark.parametrize('statement, printed', [
+    ('x = 7\n'
+     '    x += 3\n'
+     '    x -= 1\n'
+     '    x *= 2\n'
+     '    x //= 4\n'
+     '    x %= 3\n'
+     '    print(x)',
+     ["1"]),
+    ('s = "a"\n'
+     '    s += "b"\n'
+     '    print(s)',
+     ["ab"]),
+    ('xs = [1, 2]\n'
+     '    xs[0] += 10\n'
+     '    xs[-1] += 5\n'
+     '    print(xs)',
+     ["[11, 7]"]),
+    ('d = {"k": 1}\n'
+     '    d["k"] += 2\n'
+     '    print(d)',
+     ["{'k': 3}"]),
+], ids=['int-operators', 'str', 'list-element', 'dict-value'])
+def test_augmented_assignment(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n')
+    assert (exit_code, lines) == (0, printed)
+
+PICK_AND_VAL = (
+    'def pick() -> int:\n'
+    '    print("pick")\n'
+    '    return 0\n'
+    'def val() -> int:\n'
+    '    print("val")\n'
+    '    return 1\n')
+
+@pytest.mark.parametrize('statement, printed', [
+    ('xs[pick()] += 1', ["pick", "[2]"]),
+    ('xs[pick()] += val()', ["pick", "val", "[2]"]),
+], ids=['index-once', 'index-before-value'])
+def test_the_index_is_evaluated_once_and_before_the_value(
+        statement, printed):
+    body = ('    xs = [1]\n    ' + statement +
+            '\n    print(xs)\n    return 0\n')
+    exit_code, lines = run_main_body(body, PICK_AND_VAL)
+    assert (exit_code, lines) == (0, printed)
+
+def test_the_element_is_read_before_the_value_is_evaluated():
+    functions = (
+        'def bump(xs: list[int]) -> int:\n'
+        '    xs[0] = 1000\n'
+        '    return 10\n')
+    exit_code, lines = run_main_body(
+        '    xs = [1]\n    xs[0] += bump(xs)\n    print(xs)\n'
+        '    return 0\n', functions)
+    assert (exit_code, lines) == (0, ["[11]"])
+
+def test_the_store_goes_through_the_index_value():
+    functions = (
+        'def grow(xs: list[int]) -> int:\n'
+        '    xs.append(100)\n'
+        '    return 10\n')
+    exit_code, lines = run_main_body(
+        '    xs = [1, 2]\n    xs[-1] += grow(xs)\n    print(xs)\n'
+        '    return 0\n', functions)
+    assert (exit_code, lines) == (0, ["[1, 2, 12]"])
+
+@pytest.mark.parametrize('body, msg', [
+    ('    d = {"a": 1}\n    d["b"] += 1\n', "key 'b' not found"),
+    ('    xs = [1]\n    xs[3] += 1\n', 'list index out of range'),
+    ('    x = 1\n    x //= 0\n', 'integer division by zero'),
+], ids=['missing-key', 'index-out-of-range', 'division-by-zero'])
+def test_an_augmented_assignment_misuse_is_a_runtime_error(body, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(body + '    return 0\n')
     assert info.value.msg == msg
