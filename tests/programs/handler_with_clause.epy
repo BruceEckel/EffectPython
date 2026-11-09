@@ -12,7 +12,7 @@ class DBQuery(Effect):
 
 class FakeFileIO(Handler[FileIO]):
     def read(self, path: str) -> str:
-        return "contents of " + path
+        return f"contents of {path}"
     def write(self, path: str, content: str) -> int:
         return 7
 

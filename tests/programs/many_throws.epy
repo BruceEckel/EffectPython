@@ -13,14 +13,12 @@ class Odd(Exception): ...
 def main() -> int / []:
     try:
         with handle(Counter):
-            i = 0
             caught = 0
-            while i < 10000:
+            for i in range(10000):
                 try:
                     caught = caught + perform(Counter.tick(i))
                 except Odd:
                     caught = caught + 1
-                i = i + 1
             print(caught)
     except Counter.tick as eff:
         eff.throw(Odd())

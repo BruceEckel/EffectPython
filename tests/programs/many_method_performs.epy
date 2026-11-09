@@ -17,11 +17,9 @@ class Modulo(Handler[Counter]):
 def main() -> int / []:
     modulo = Modulo()
     with handle(modulo):
-        i = 0
         total = 0
-        while i < 10000:
+        for i in range(10000):
             total = total + perform(Counter.tick(i))
-            i = i + 1
         print(total)
     print(modulo.calls)
     return 0

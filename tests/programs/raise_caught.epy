@@ -13,7 +13,7 @@ def find(path: str) -> str / [NotFound]:
         raise NotFound()
     if path == "settings.json":
         raise NotFound(path)
-    return "contents of " + path
+    return f"contents of {path}"
 
 def main() -> int / []:
     try:

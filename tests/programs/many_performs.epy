@@ -12,11 +12,9 @@ class Counter(Effect):
 def main() -> int / []:
     try:
         with handle(Counter):
-            i = 0
             total = 0
-            while i < 10000:
+            for i in range(10000):
                 total = total + perform(Counter.tick(i))
-                i = i + 1
             print(total)
     except Counter.tick as eff:
         eff.resume(eff.n % 10)
