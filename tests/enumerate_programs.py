@@ -3,8 +3,12 @@ small alphabet and run through the checker and then the binary.
 
 A typed slot refuses a value of unknown type, so a program the
 checker accepts had every take_int(x) and take_list(xs) at a known
-type, and take_int adding 1 turns a wrong known type into a runtime
-error (plan 2.2, retyping at the performs). triples() yields every
+type, and take_int subtracting 1 turns a wrong known type into a
+runtime error "for -:". No other statement in the alphabet subtracts,
+so that operator tells a wrong known type from an operation on a name
+of unknown type (xs[0] += v after a perform widened xs), which the
+checker leaves to the runtime by design and run() counts apart (plan
+2.2, retyping at the performs). triples() yields every
 ordering of an assignment, a perform point, and a typed read with one
 Log clause, which test_enumeration.py runs with the suite; bodies(n)
 yields every body of n statements from the wider alphabet with a Log
@@ -36,11 +40,11 @@ class Ask(Effect):
     def get() -> int: ...
 
 def take_int(n: int) -> int:
-    return n + 1
+    return n - 1
 
 def take_list(xs: list[int]) -> int:
     if len(xs) > 0:
-        return xs[0] + 1
+        return xs[0] - 1
     return 0
 
 def f() -> int / [Log]:
@@ -55,9 +59,10 @@ def main() -> int / []:
 ASSIGNS = ['x = 1', 'x = "s"', 'xs.append(1)']
 POINTS = ['perform(Log.note("a"))', 'f()']
 READS = ['take_int(x)', 'take_list(xs)']
-BODY = ASSIGNS + POINTS + READS + ['perform(Ask.get())']
-CLAUSE_ASSIGNS = [None, 'x = "s"', 'x = 1', 'xs = ["s"]']
-TYPE_ERRORS = ['unsupported operand', 'is not a list']
+BODY = ASSIGNS + POINTS + READS + [
+    'perform(Ask.get())', 'xs[0] += perform(Log.note("a"))', 'xs[0] += f()']
+CLAUSE_ASSIGNS = [None, 'x = "s"', 'x = 1', 'xs = ["s"]', 'xs[0] = 7']
+TYPE_ERRORS = ['for -:', 'is not a list']
 
 def clause(name, op, assign, resume_first):
     lines = ['    except %s as %s:' % (op, name)]
@@ -103,10 +108,12 @@ def accepted(text):
     return True
 
 def run(binary, texts, directory):
-    """The accepted programs and, among them, the ones the binary
-    rejects with a type error, each with its output."""
+    """The accepted programs, the ones among them that fail at a typed
+    slot (each with its output), and the count that fail elsewhere at
+    runtime, on a name the checker left unknown."""
     passed = []
     failures = []
+    runtime_only = 0
     for i, text in enumerate(texts):
         if not accepted(text):
             continue
@@ -117,17 +124,22 @@ def run(binary, texts, directory):
                                 stderr=subprocess.STDOUT)
         output = proc.communicate()[0]
         passed.append(text)
-        if proc.returncode != 0 and any(
-                words in output for words in TYPE_ERRORS):
+        if proc.returncode == 0:
+            continue
+        if any(words in output for words in TYPE_ERRORS):
             failures.append(text + output)
-    return passed, failures
+        else:
+            runtime_only += 1
+    return passed, failures, runtime_only
 
 def main(argv):
     low, high = int(argv[1]), int(argv[2])
     texts = itertools.chain(*[bodies(n) for n in range(low, high + 1)])
     directory = tempfile.mkdtemp()
-    passed, failures = run('./effectpython-c', texts, directory)
-    print 'accepted %d, type errors %d' % (len(passed), len(failures))
+    passed, failures, runtime_only = run('./effectpython-c', texts,
+                                         directory)
+    print 'accepted %d, typed-slot failures %d, runtime-only %d' % (
+        len(passed), len(failures), runtime_only)
     for failure in failures:
         print failure
     return len(failures)
