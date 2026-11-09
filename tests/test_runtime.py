@@ -1,16 +1,14 @@
 """Milestone 3 harness: every tests/programs/*.epy through the binary.
 
 Stacklets cannot run untranslated on the PyPy host, so this module
-translates targeteffectpython.py once per session into a scratch
-directory and runs each program through the result. The expected
-output sits beside each program in <name>.expected: its first line
-is "exit <code>", and the rest is the program's stdout.
+runs each program through the binary that conftest.py's fixture
+translates once per session (or names through EFFECTPYTHON_BINARY).
+The expected output sits beside each program in <name>.expected: its
+first line is "exit <code>", and the rest is the program's stdout.
 
 Run with:  pypy2 -m pytest tests/test_runtime.py
 Translation takes about 40 seconds, so the other test modules stay
-separate for quick runs. Setting EFFECTPYTHON_BINARY to the path of a
-binary translated earlier skips the translation and runs the
-programs through that binary instead.
+separate for quick runs.
 
 A program written ahead of its milestone is a strict xfail in NOT_YET
 until the runtime runs it.
@@ -18,32 +16,10 @@ until the runtime runs it.
 import glob
 import os
 import subprocess
-import sys
 import pytest
 from support import PROGRAMS
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RPYTHON = os.path.expanduser(
-    '~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython')
 NOT_YET = {}
-
-@pytest.fixture(scope='session')
-def binary(tmp_path_factory):
-    prebuilt = os.environ.get('EFFECTPYTHON_BINARY')
-    if prebuilt:
-        return prebuilt
-    # The driver copies the binary into the working directory under the
-    # --output name, so the scratch directory must be the cwd
-    scratch = str(tmp_path_factory.mktemp('translate'))
-    proc = subprocess.Popen(
-        [sys.executable, RPYTHON, '--batch', '--continuation',
-         '--output=effectpython-c',
-         os.path.join(ROOT, 'targeteffectpython.py')],
-        cwd=scratch, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    log = proc.communicate()[0]
-    if proc.returncode != 0:
-        pytest.fail('translation failed:\n' + log[-4000:])
-    return os.path.join(scratch, 'effectpython-c')
 
 def read_expected(path):
     with open(path) as f:

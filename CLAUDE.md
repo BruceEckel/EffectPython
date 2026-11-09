@@ -58,10 +58,16 @@ PYTHONPATH=~/pypy/pypy2.7-v8.0.1-src pypy2 targeteffectpython.py tests/programs/
 # Translate (about 15 seconds for a small target)
 pypy2 ~/pypy/pypy2.7-v8.0.1-src/rpython/bin/rpython --batch --continuation \
     --output=effectpython-c targeteffectpython.py
+
+# Checker soundness over every handled-body program of 2 to 4 statements
+# (130,816 programs, about eight minutes; needs ./effectpython-c from HEAD)
+pypy2 tests/enumerate_programs.py 2 4
 ```
 
 `--batch` makes a failed translation print instead of opening pdb.
 Do not pass `-O0`: it selects the refcounting GC, which cannot combine with `--continuation`.
+`pypy2 -m pytest` translates into a temporary directory and leaves `./effectpython-c` as it was,
+so after a change to the host code the binary at the root is stale until you translate again.
 
 ## Translation gotchas
 
