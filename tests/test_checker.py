@@ -1744,6 +1744,54 @@ def test_rejects_a_clause_change_fed_back_into_the_body(body, msg):
         check_source(body)
     assert info.value.msg == msg
 
+# --- retyping at the performs (2026-11-09) -----------------------------------
+
+NOTES = 'def notes() -> int / [Log]:\n    return perform(Log.note("a"))\n'
+
+@pytest.mark.parametrize('body', [
+    PASSES + handled('            take_int(x)\n'
+                     '            perform(Log.note("a"))\n', '        x = "s"\n'),
+    PASSES + 'def take_list(xs: list[int]) -> int:\n    return 0\n'
+    'def main() -> int / []:\n    xs = []\n    xs.append(1)\n    try:\n'
+    '        with handle(Log):\n            take_list(xs)\n'
+    '            perform(Log.note("a"))\n            print(len(xs))\n'
+    '    except Log.note as eff:\n        xs = ["s"]\n        eff.resume(0)\n'
+    '    return 0\n',
+    PASSES + 'def f() -> int / [Boom]:\n    return 0\n'
+    'def g() -> int / [Boom]:\n    x = 0\n    try:\n'
+    '        with handle(Log):\n            x = 1\n            f()\n'
+    '            take_int(x)\n            perform(Log.note("a"))\n'
+    '    except Log.note as eff:\n        x = "s"\n        eff.resume(0)\n'
+    '    return 0\n'
+    'def main() -> int / []:\n    return 0\n',
+], ids=['read-before-perform', 'list-before-perform', 'exception-row'])
+def test_accepts_a_read_before_the_first_perform_point(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    (PASSES + handled('            x = 1\n            take_int(x)\n'
+                      '            perform(Log.note("a"))\n'
+                      '            take_int(x)\n', '        x = "s"\n'),
+     "line 20: argument 1 of take_int() must be int, "
+     "but 'x' has no known type"),
+    (PASSES + NOTES + handled('            x = 1\n            notes()\n'
+                              '            take_int(x)\n', '        x = "s"\n'),
+     "line 21: argument 1 of take_int() must be int, "
+     "but 'x' has no known type"),
+    (PASSES + GET + 'def main() -> int / []:\n    x = 0\n    try:\n'
+     '        with handle(Log, Ask):\n            perform(Log.note("a"))\n'
+     '            perform(Ask.get())\n    except Log.note as eff:\n'
+     '        x = 1\n        eff.resume(0)\n        take_int(x)\n'
+     '    except Ask.get as eff:\n        x = "s"\n        eff.resume(0)\n'
+     '    return 0\n',
+     "line 24: argument 1 of take_int() must be int, "
+     "but 'x' has no known type"),
+], ids=['after-body-assign', 'call-with-row', 'after-resume'])
+def test_rejects_a_read_after_a_perform_point_a_clause_retypes(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
 # --- f-strings (Milestone 13) ------------------------------------------------
 
 LOG = 'class Log(Effect):\n    def note(text: str) -> int: ...\n'

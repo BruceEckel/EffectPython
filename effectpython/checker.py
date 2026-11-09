@@ -143,14 +143,22 @@ it runs on every path out of them, and then from the continuing
 paths, types and bound names both, for the code after it. A handle
 statement's clauses start from every boundary of its body, where a
 perform() may suspend it, and the body runs on from any boundary of
-a clause where resume() may stand, so the body and clauses are
-checked again from the entry widened with the types the clauses gave
-the names they retyped (scope.written) and with the names they
-unbound, until it is stable; the body's own end state is not fed
-back, since a resume does not restart the body (check_handle,
-check_handle_suites). This places a clause's retyping at the body's
-entry rather than at its performs, so a read of the name before the
-first perform() is held to the widened type too.
+a clause where resume() may stand. What the clauses did on one pass
+(Pending: the names they retyped, through scope.written, with the
+merge of their types, and the names they unbound) is applied on the
+next pass at every perform point of the body and of the clauses,
+where a clause may run before the suspended code continues: a
+perform(), a call to a function whose row names an effect, and a
+clause's resume() or throw() (widen_at_perform). The passes repeat
+until the clauses change nothing more (check_handle,
+check_handle_suites). Widening at the perform rather than at the
+body's entry keeps a read before the first perform() at the type
+the body gave the name, and a read after it at the widened type,
+whatever the body assigned in between: until 2026-11-09 the entry
+rule let a body assignment after the entry hide the clause's
+retyping (tests/programs/runtime_clause_after_assign.epy). The
+body's own end state is not fed back, since a resume does not
+restart the body.
 
 A break or continue outside a loop of the same function is rejected
 with "'break' outside loop" or "'continue' not properly in loop"
@@ -371,6 +379,16 @@ class Scope(object):
         self.types[name] = type_name
         self.written[name] = True
 
+class Pending(object):
+    """What the clauses of a handle statement did on the pass before
+    the one being checked: the names they retyped, with the merge of
+    their types, and the names they left unbound. The body and the
+    clauses take these at every perform point (widen_at_perform)."""
+
+    def __init__(self, changed, carried):
+        self.changed = changed  # variable name -> type name
+        self.carried = carried  # variable name -> True
+
 class HandlerInfo(object):
     """A handler class as Pass 1 records it: its fields in declaration
     order, with the count that a constructor call must supply, and the
@@ -397,6 +415,7 @@ class Checker(object):
         self.loop_depth = 0   # loops around the statement being checked
         self.boundaries = []  # types at each statement boundary, per suite
         self.loop_exits = []  # types at each break or continue, per loop
+        self.handles = []     # Pending of each enclosing handle statement
         self.fn = None        # the FunctionDef being checked
         self.what = ""        # "function" or "method"
 
@@ -586,6 +605,7 @@ class Checker(object):
         self.loop_depth = 0
         self.boundaries = []
         self.loop_exits = []
+        self.handles = []
         self.fn = fn
         self.what = what
         self.check_block(fn.body, scope, effects)
@@ -832,14 +852,17 @@ class Checker(object):
     def check_index_assign(self, stmt, scope, effects):
         """xs[i] = v or d[k] = v: the value must have the element or the
         value type, and the first store into a name holding {} gives it
-        the dict type, as the first append gives a [] its type."""
+        the dict type, as the first append gives a [] its type. The
+        value is typed first, as the runtime evaluates it first, so a
+        clause that rebinds the container during the value's perform
+        is seen at the target."""
+        actual = self.type_of(stmt.value, scope, effects)
         element = self.check_index(stmt.target, stmt.index, stmt.lineno,
                                    scope, effects)
         kind = kind_of(self.type_of(stmt.target, scope, EffectSet()))
         slot = "an element"
         if kind == "dict":
             slot = "a value"
-        actual = self.type_of(stmt.value, scope, effects)
         self.require_known(stmt.value, actual, element,
                            "%s of the %s must be %s" % (slot, kind, element),
                            stmt.lineno)
@@ -1171,29 +1194,44 @@ class Checker(object):
         body_effects = EffectSet()
         entry = scope.types.copy()
         entry_unbound = scope.unbound.copy()
+        pending = Pending({}, {})
         while True:
-            changed = {}
-            carried = {}
+            changed = pending.changed.copy()
+            carried = pending.carried.copy()
+            scope.unbound = entry_unbound.copy()
+            self.handles.append(pending)
             after = self.check_handle_suites(stmt, fulfilled, entry, scope,
                                              effects, body_effects, changed,
                                              carried)
-            widened = entry.copy()
-            for name in changed:
-                if name in widened:
-                    widened[name] = merged(widened[name], changed[name])
-            stable = same_types(widened, entry)
-            for name in carried:
-                if name not in entry_unbound:
-                    entry_unbound[name] = True
-                    stable = False
-            if stable:
+            self.handles.pop()
+            if (same_types(changed, pending.changed)
+                    and same_names(carried, pending.carried)):
                 break
-            entry = widened
-            scope.unbound = entry_unbound.copy()
+            pending = Pending(changed, carried)
         scope.types = after
         for name in body_effects.names:
             if name not in stmt.effects and name not in fulfilled:
                 effects.add(name, body_effects.linenos[name])
+
+    def widen_at_perform(self, scope):
+        """A perform() suspends the body, and before it continues a
+        clause of any enclosing handle statement may run, so each
+        name a clause retyped on the previous pass takes the merge of
+        its type here and the clause's, and each name a clause unbound
+        is unbound, unless it is a live clause binding, which the
+        runtime restores when the clause that rebound it ends; a read
+        typed after this point in evaluation order sees the change. A
+        clause's resume() or throw() and a call to a function whose
+        row names an effect are points too, since the body runs on
+        and the callee performs (plan 2.2)."""
+        for pending in self.handles:
+            for name in pending.changed:
+                if name in scope.types:
+                    scope.types[name] = merged(scope.types[name],
+                                               pending.changed[name])
+            for name in pending.carried:
+                if name not in scope.bindings:
+                    scope.unbound[name] = True
 
     def check_handle_suites(self, stmt, fulfilled, entry, scope, effects,
                             body_effects, changed, carried):
@@ -1201,11 +1239,12 @@ class Checker(object):
         giving the types after the statement. A clause runs while the
         body is suspended at any of its performs, so it starts from the
         types at every boundary of the body, and the body runs on from
-        whatever the clause assigned, which is why check_handle checks
-        again from an entry widened with what the clauses changed until
-        it stops changing: changed collects the names a clause retyped
-        (scope.written) with their type at any clause boundary, and
-        carried the names a clause left unbound. The body's own end
+        whatever the clause assigned, which widen_at_perform applies
+        at every perform point from the previous pass's Pending, and
+        check_handle checks again until nothing more changes: changed
+        collects the names a clause retyped (scope.written) with their
+        type at any clause boundary, and carried the names a clause
+        left unbound, each accumulated over the passes. The body's own end
         state is not fed back, since a resume continues the body where
         it stopped and does not restart it. The statement ends after
         the body or after a clause, so its end merges the body's end,
@@ -1347,6 +1386,7 @@ class Checker(object):
             effects.add(expr.effect, expr.lineno)
             for name in op.row:
                 effects.add(name, expr.lineno)
+            self.widen_at_perform(scope)
             return op.return_type
         elif isinstance(expr, ast.OpCall):
             if expr.effect in scope.types:
@@ -1385,6 +1425,7 @@ class Checker(object):
                     % (expr.target, binding.effect, binding.op.name,
                        expected, actual))
             self.hand_over(expr.value, expected, scope)
+            self.widen_at_perform(scope)
             return "None"
         elif isinstance(expr, ast.Throw):
             binding = self.require_binding(scope, expr.target,
@@ -1397,6 +1438,7 @@ class Checker(object):
                     expr.lineno, "%s.%s does not declare %s, so "
                     "%s.throw() cannot deliver it" %
                     (binding.effect, binding.op.name, name, expr.target))
+            self.widen_at_perform(scope)
             return "None"
         else:
             raise InvalidProgram(expr.lineno, "unknown expression node")
@@ -1447,6 +1489,10 @@ class Checker(object):
                         fn.name + "()", expr.lineno, scope, effects)
         for name in fn.effect_row:
             effects.add(name, expr.lineno)
+        for name in fn.effect_row:
+            if name in self.effects:
+                self.widen_at_perform(scope)
+                break
         return fn.return_type
 
     def check_builtin(self, expr, scope, effects):

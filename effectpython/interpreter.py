@@ -206,8 +206,9 @@ runtime_alias_append.epy, runtime_unknown_elements.epy, and the
 paths that leave a name with two types: runtime_zero_trip_retype.epy,
 runtime_break_carried.epy, runtime_try_midsuite.epy,
 runtime_clause_before_resume.epy, runtime_finally_after_return.epy,
-runtime_finally_midsuite.epy, runtime_finally_break.epy, and
-runtime_finally_unwind.epy), a subscript, append, for, or in target
+runtime_finally_midsuite.epy, runtime_finally_break.epy,
+runtime_finally_unwind.epy, and runtime_clause_after_assign.epy),
+a subscript, append, for, or in target
 (runtime_subscript_unknown.epy, runtime_append_unknown_target.epy,
 and runtime_for_unknown.epy), a len() or str() argument or an
 f-string field (runtime_len_unknown.epy, runtime_str_unknown.epy,

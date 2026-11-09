@@ -1,0 +1,21 @@
+# Runtime-only: the body gives x an int after the handle statement
+# begins, performs, and reads x, while the clause assigns x a str
+# before resuming. The checker widens x at the perform to no known
+# type (plan 2.2), so the read is checked at runtime, where x is "s".
+
+from effectpython import Effect, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def main() -> int / []:
+    x = "a"
+    try:
+        with handle(Log):
+            x = 1
+            perform(Log.note("a"))
+            print(x + 1)
+    except Log.note as eff:
+        x = "s"
+        eff.resume(0)
+    return 0
