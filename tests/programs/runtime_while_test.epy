@@ -1,0 +1,11 @@
+# Runtime-only: an if leaves v with two types, so the checker cannot
+# hold the while test to a bool; truth does.
+
+def main() -> int:
+    if 1 == 1:
+        v = 5
+    else:
+        v = True
+    while v:
+        print("x")
+    return 0

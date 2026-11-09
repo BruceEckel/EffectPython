@@ -1,108 +1,101 @@
 """The AST evaluator (plan Milestone 1).
 
 eval_expr returns a W_Root for every expression; exec_stmt runs one
-statement. A return statement unwinds to the enclosing call through
-ReturnSignal, an RPython exception, and break and continue unwind to
-the enclosing loop's exec_pass through BreakSignal and ContinueSignal
-(plan 1.10); the three share the base ControlSignal, which is what
-the handler runtime looks for. Each call gets a fresh Environment, so
-locals are lexically scoped to the call that created them.
+statement. Dispatch is by isinstance over the node classes in
+ast_nodes, as the checker's is, so adding a node means a branch in
+both. Each call gets a fresh Environment, so locals are lexically
+scoped to the call that created them. A return statement unwinds to
+the enclosing call through ReturnSignal, an RPython exception, and
+break and continue unwind to the enclosing loop's exec_pass through
+BreakSignal and ContinueSignal (plan 1.10); the three share the base
+ControlSignal, which the handler runtime looks for.
 
-Dispatch is by isinstance over the node classes in ast_nodes. The checker
-walks the same classes the same way.
-
-The effect runtime (plan 3.3 and 3.4) runs each handle statement's body
-in its own stacklet. A HandlerFrame is the mailbox between the two
-sides, since a stacklet switch carries no value: perform() stores the
-payload and switches to the handler side, which runs the matching
-clause; eff.resume() stores the value and switches back. The body is a
-suite, so eff.resume() evaluates to None once the body finishes. An
-exception the body raises is stored in the frame and re-raised on the
-handler side inside the eff.resume() call that resumed it, or at the
-handle statement if the body never performed or was last resumed
-from the dispatch loop (a tail resume, a tail throw, or a handler
-method), so the rest of the clause does not run. A clause runs in the
-function's own environment with its binding defined for the clause's
-duration. Afterwards the binding is restored to its earlier value, or
-removed when it had none, which is not what Python does for
-`except ... as e`. The restore keeps a clause that runs nested inside
-another clause's resume() from overwriting the outer clause's
-binding. The checker mirrors this (check_effect_clause). A clause
-whose last statement is a resume() on its own binding does not nest:
-dispatch() switches into the body from its loop, so any number of
-sequential performs handled that way use constant stack.
-
-A handler class (plan 1.5) adds no mechanism to that. A handle
-statement evaluates its constructor calls and looks up its instance
-names before installing the frame, and the frame maps each fulfilled
-effect to its W_HandlerInstance. When the body performs an operation
-of a fulfilled effect, dispatch() calls the method as a function with
-the instance as self and the payload's arguments, and switches into
-the body with the returned value along the tail-resume path, so a
-method cannot resume the body twice, and it abandons the body by
-raising an exception the operation's row does not name.
+Several constructs add values, not mechanism. and, or, and not (plan
+1.11) take bool operands and give a W_Bool (truth); and and or
+evaluate the right operand only when the left has not decided the
+result, so an effect in a skipped operand is not performed, and a
+perform() inside an operand suspends the body in the middle of the
+expression, on its stacklet, as one inside a call's argument does.
+An elif is a nested If from the parser on, as in CPython's AST. A
+W_List (plan 1.9) is shared by reference, so exec_for walks the one
+the iterable evaluates to by index against its live length, and a
+clause that appends to that list while the body is suspended
+lengthens the walk. A for over range() is a ForRange the parser
+folds, and counts in an RPython local. xs.append(v) on a name is the
+OpCall the parser builds for Effect.op(...), told apart by the name
+being bound, since an effect is never a value; on any other
+expression it is a MethodCall. len(), str(), and range() are Call
+nodes recognized by name, as print is. A field default is evaluated
+per construction, so the [] a list field declares gives each
+instance a list of its own.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
 it, and a Try statement catches it around its suite and runs the
-first clause that names the exception's class or Exception. The four
-meetings with the handlers follow from where the RPython exception
-travels. Raised in a handled body, it takes the path of any body
-error: through the frame to the handler side, and out of the handle
-statement or the enclosing resume(). Raised in a clause or a handler
-method, it leaves dispatch() and the handle statement after the body
-is unwound (plan 1.8, below), unless a method raises a class its
-operation declares, which is thrown into the body (plan 1.7, below).
-A Try inside the body sits on the body's stack slice, which the
-stacklet keeps across a perform, so it catches what the body raises
-after a resume. It does not catch what a clause or method raises,
-because that exception travels on the handler side, unless a method
-raises a class its operation declares, which plan 1.7 below delivers
-at the perform site.
+first clause that names the exception's class or Exception. Where it
+meets the handlers follows from where the RPython exception travels,
+below.
 
-eff.throw(exc) (plan 1.7) is the second way to switch into the body:
-switch_into() stores the exception in the frame instead of a value,
-and perform() raises it when the switch returns, so the exception
-starts on the body's stack at the perform site and a Try around the
-perform catches it. A handler method whose operation declares the
-class delivers its exception the same way (answer_with_method). A
-tail eff.throw(...) switches from the dispatch loop as a tail resume
-does, and any other eff.throw(...) nests through throw().
-
-Abandoning a body (plan 1.8) is the third way to switch into it. A
+The effect runtime (plan 3.3 and 3.4) runs each handle statement's
+body in its own stacklet. A HandlerFrame is the mailbox between the
+two sides, since a stacklet switch carries no value: perform()
+stores the payload and switches to the handler side, which runs the
+matching clause, and the clause switches back in one of three ways.
+eff.resume(v) stores the value, and perform() returns it; the body
+is a suite, so eff.resume() evaluates to None once the body
+finishes. eff.throw(exc) (plan 1.7) stores the exception, and
+perform() raises it, so it starts on the body's stack at the perform
+site and a Try around the perform catches it. Abandoning the body
+(plan 1.8) stores an Unwind, an EffectError the dialect cannot name,
+and perform() raises it, so it runs every finally suite on the way
+out of the body's stacklet while no except clause can catch it; a
 clause that ends without resuming, a return, break, or continue that
 leaves a clause, and an exception that leaves a clause or a method
-with the body still suspended all unwind it: the dispatch loop switches in with an
-Unwind, an EffectError the dialect cannot name, and perform() raises
-it, so it runs every finally suite on the way out of the body's
-stacklet while no except clause can catch it. exec_try runs its
+with the body still suspended all abandon it. exec_try runs its
 finally under an RPython try/finally, so a finally that performs is
 answered by the same loop, and one that raises an exception or
 returns replaces the unwinding, as Python's does. The body therefore
 always runs to completion; when the loop finds its own Unwind in the
 mailbox it swallows it, and another frame's Unwind it re-raises,
 which carries an outer abandonment through every body nested inside
-the abandoned one.
+the abandoned one. A clause runs in the function's own environment
+with its binding defined for the clause's duration, and afterwards
+the binding is restored to its earlier value, or removed when it had
+none, which is not what Python does for `except ... as e`; the
+restore keeps a clause that runs nested inside another clause's
+resume() from overwriting the outer clause's binding, and the
+checker mirrors it (check_effect_clause). A switch that is the
+clause's last statement on its own binding, a tail resume or a tail
+throw, is made by dispatch() from its loop rather than nested inside
+the clause, so any number of sequential performs handled that way
+use constant stack; any other resume() or throw() nests.
 
-and, or, and not (plan 1.11) take bool operands and give a W_Bool
-(truth); and and or evaluate the right operand only when the left
-has not decided the result, so an effect in a skipped operand is not
-performed. A perform() inside an operand suspends the body in the
-middle of the expression, on its stacklet, as one inside a call's
-argument does. An elif is a nested If from the parser on, as in
-CPython's AST.
+A handler class (plan 1.5) adds no mechanism to that. A handle
+statement evaluates its constructor calls and looks up its instance
+names before installing the frame, and the frame maps each fulfilled
+effect to its W_HandlerInstance. When the body performs an operation
+of a fulfilled effect, dispatch() calls the method as a function
+with the instance as self and the payload's arguments
+(answer_with_method), and switches into the body along the tail
+path: with the returned value, so a method cannot resume the body
+twice; with the exception, when the method raises a class its
+operation's row declares, delivered at the perform site as a throw
+is; and with an Unwind when it raises any other exception, which
+then leaves the handle statement.
 
-Lists and the for loop (plan 1.9) add values, not mechanism. A W_List
-is shared by reference, so exec_for walks the one the iterable
-evaluates to by index against its live length, and a clause that
-appends to that list while the body is suspended lengthens the walk.
-A for over range() is a ForRange the parser folds, and counts in an
-RPython local. xs.append(v) on a name is the OpCall the parser builds
-for Effect.op(...), told apart by the name being bound, since an
-effect is never a value; on any other expression it is a MethodCall.
-len(), str(), and range() are Call nodes recognized by name, as
-print is. A field default is evaluated per construction, so the [] a
-list field declares gives each instance a list of its own.
+Where an exception surfaces, then, follows from the side it travels
+on. One the body raises, after a resume or before any perform, is
+stored in the frame and re-raised on the handler side: inside the
+eff.resume() call that resumed the body, so the rest of the clause
+does not run, or at the handle statement when the body never
+performed or was last resumed from the dispatch loop. One a clause
+or a method raises travels on the handler side, abandons the
+suspended body as above, and leaves the handle statement, unless it
+is a method's declared class, which goes into the body instead. A
+Try inside the body sits on the body's stack slice, which the
+stacklet keeps across a perform, so it catches what the body raises
+after a resume and what a throw or a declared class delivers, and
+not what a clause or a method raises otherwise.
 
 rstacklet runs only translated, so the import below is guarded: the
 unit tests import this module without RPython on the path and never
@@ -110,79 +103,71 @@ execute a handle statement. Every runtime error that depends on it
 goes through the translated binary, in tests/test_runtime.py.
 
 Some EffectPythonRuntimeError branches below are unreachable from the
-translated binary, because checker.py rejects the program first: a call
-to a function that does not exist (check_call), a call with the wrong
-number of arguments (check_args), a module without main()
-(check_entry_point), a perform() with no handler in scope, a clause
-binding read where none is bound, an eff.<attr> naming no parameter,
-a handle statement without a clause for an operation (clause_for), a
-break or continue outside a loop (call_function), and the handler
-instance errors: a constructor call with too few or too many
-arguments (check_construction, in HandlerClass.construct), a field
-assigned on a name that holds no instance (require_instance, in
-Interpreter.instance), a field the class does not declare
-(require_field, in field_index), and a handle() argument that is not
-an instance or that fulfills an effect another argument fulfills
-(check_handle, in install); and the exception errors: a raise or an
-eff.throw() of a value that is not an exception (check_raise,
-require_exception), an exception constructor call with more than a
-str message where the checker knows the argument's type
-(check_exception_call, in construct_exception), and a RaisedException
-that reaches entry_point, since main()'s empty row makes the checker
-reject an exception nobody catches; and an operator on operands of
-the wrong types where the checker knows both types (check_operands,
-in binop and compare); and the list errors on a value the checker
-typed: a subscript, an append, or a for on a value that is not a list
-(list_value), a non-integer index (list_index), a method other than
-append and an append with the wrong number of arguments
-(list_method), and a built-in with the wrong number or type of
-argument (builtin), plus range() outside a for (call); and a non-bool
-operand of and, or, or not, or test of an if or a while, where the
-checker knows the type (require_bool, in truth). The "unknown
-node" branches guard the dispatch and no parse reaches them. The
-claims hold where the checker holds a type for the value, and a type
-it holds is the type the value has at runtime: a return value has
-the declared return type (check_return,
-always_returns); a name that two paths leave with two types is
-unknown (merge_types), the paths being the branches of an if, the
-end and every break or continue of a loop body and the zero-trip
-path of a for, the statement boundaries of a try suite and of its
-clauses, which a finally suite follows, and the boundaries of a
-handled body and its clauses, with a loop body and a handled body
-checked again from the merged types; a [] handed to another name
-loses its type, while one handed to a list[T] parameter, field,
-return, or resume() takes it (hand_over); a list is no element of a
-list; and a literal with an element of unknown type is unknown. An
-unknown type reaches these branches as any untyped value does: an
-element read from a [] the checker never refined, or a name two
-paths left with two types, and no further, since a typed slot (a
-parameter, return, field, constructor argument, resume(), append, or
-indexed assignment) refuses a value of unknown type (require_known),
-so the receiver never holds a declared type for a value the checker
-did not see. The branches stay because the unit tests build modules
-by hand and run them without the checker.
-tests/programs/unreachable_*.epy holds a program per branch that the
-checker rejects, with rejected_missing_clause.epy for the clause_for
-branch; test_runtime.py runs each against its .expected, so a branch
-the checker stops
-rejecting shows up there, while a branch without a program does not.
-The cases the checker does not see are runtime-only, and
-tests/programs/runtime_*.epy reaches each: a read, an append, or a
-call on a name whose assignment comes earlier in the source but did
-not run, because it sits in a loop body that ran zero times or in
-one branch of an if (Environment.lookup and the OpCall branch of
-eval_expr); an operator, a for, a len() or str() argument, a list
-index, a bool operand, or an if or while test whose type the checker
-could not see; integer division or modulo by zero; a list index out
-of range (list_index_error.epy); and a recursion that outgrows the C
-stack,
-which RPython's stack check stops and run_body_callback or the entry
-point reports as "maximum recursion depth exceeded"
-(deep_recursion.epy). A read of a name an except clause deleted,
-where the read comes earlier in the source, needs a loop or a
-resumed body to run after the clause, and the second pass over
-either finds the name unbound
-(unreachable_clause_deleted_read.epy).
+translated binary, because checker.py rejects the program first. The
+branches stay because the unit tests build modules by hand and run
+them without the checker. tests/programs/unreachable_*.epy holds a
+program per branch, with rejected_missing_clause.epy for clause_for;
+test_runtime.py runs each against its .expected, so a branch the
+checker stops rejecting shows up there, while a branch without a
+program does not. The pairs, checker rule and runtime site: a call to
+a function that does not exist (check_call; call), a call with the
+wrong number of arguments (check_args; call_function), a module
+without main() (check_entry_point; entry_point), a perform() with no
+handler in scope (the row; perform), a clause binding read where
+none is bound and an eff.<attr> naming no parameter (require_binding
+and the AttrRead branch; binding and read_attr), a handle statement
+without a clause for an operation (check_handle; clause_for), a
+break or continue outside a loop (require_loop; call_function), a
+read of a name nothing bound (require_bound; Environment.lookup), a
+constructor call with too few or too many arguments
+(check_construction; HandlerClass.construct), a field assigned on a
+name that holds no instance (require_instance; Interpreter.instance),
+a field the class does not declare (require_field; field_index), a
+handle() argument that is not an instance or that fulfills an effect
+another argument fulfills (check_handle; install), a raise or an
+eff.throw() of a value that is not an exception (require_exception;
+exception_value), an exception constructor call with more than a str
+message (check_exception_call; construct_exception), an operator on
+operands of the wrong types (check_operands; binop and compare), a
+subscript, an append, or a for on a value that is not a list
+(check_index, check_append, the For branch; list_value), a
+non-integer index or range() argument (check_index, check_range;
+list_index and int_value), a method other than append or an append
+with the wrong number of arguments (check_append; list_method), a
+built-in with the wrong number or type of argument (check_builtin;
+builtin), range() outside a for (check_call; call), and a non-bool
+operand of and, or, or not, or test of an if or a while
+(require_bool; truth). A RaisedException nobody catches, which
+entry_point in targeteffectpython.py would report, is unreachable
+too, since main()'s empty row rejects it. The "unknown node" branches
+guard the dispatch and no parse reaches them.
+
+Each pair holds where the checker has a type for the value, and a
+type it holds is the type the value has at runtime: checker.py's
+docstring gives the rules (merge_types for the paths that meet,
+hand_over for a [], require_known for a typed slot, check_return and
+always_returns for a return). An unknown type, which a name two
+paths leave with two types has, as do a [] handed to another name, a
+literal with an unknown element, and an element read from a [] the
+checker never refined, reaches these branches as any untyped value
+does, where the operation is one the checker leaves to the runtime.
+Those cases are runtime-only, and tests/programs/runtime_*.epy
+reaches each: a read of a name, or an append on one, whose
+assignment comes earlier in the source but did not run, because it
+sits in a loop body that ran zero times or in one branch of an if
+(Environment.lookup, and the OpCall branch of eval_expr); an
+operator or a comparison, a subscript, append, or for target, a
+len() or str() argument, a list index, a bool operand, or an if or
+while test whose type the checker could not see; integer division or
+modulo by zero; a list index out of range (list_index_error.epy);
+and a recursion that outgrows the C stack, which RPython's stack
+check stops and the entry point (deep_recursion.epy) or
+run_body_callback (deep_recursion_in_body.epy) reports as "maximum
+recursion depth exceeded". A read of a name an except clause
+deleted, where the read comes earlier in the source, needs a loop or
+a resumed body to run after the clause, and a pass that unbinds a
+name is followed by another over the suite, which finds the read
+unbound (unreachable_clause_deleted_read*.epy).
 """
 import os
 try:

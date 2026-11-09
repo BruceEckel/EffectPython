@@ -1,0 +1,20 @@
+# The except clause deletes e, and the read at the top of the loop
+# body comes earlier in the source. The clause changes no type here,
+# since e was unknown before the loop, but a pass that unbinds a name
+# is followed by another, which finds the read unbound.
+
+class Boom(Exception):
+    pass
+
+def main() -> int:
+    if 1 == 1:
+        e = "s"
+    else:
+        e = 1
+    for i in range(2):
+        print(e)
+        try:
+            raise Boom("boom")
+        except Boom as e:
+            print("caught")
+    return 0

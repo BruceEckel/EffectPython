@@ -112,7 +112,8 @@ with them, and it is checked again from the merged types until
 nothing changes (check_loop_body), so the code after the loop sees a
 name the body gives another type as unknown, and a type the body can
 carry into a later iteration is unknown on the next pass over the
-body. The name a for binds is the exception to the one-path rule:
+body; a pass that unbinds a name is followed by another too, so a
+read earlier in the body meets the unbound name (same_names). The name a for binds is the exception to the one-path rule:
 afterwards it has the element type merged with the type it had
 before, or the element type alone when it had none, since an unbound
 name fails at runtime whatever its type (check_loop). A try's
@@ -216,6 +217,18 @@ def same_types(a, b):
         return False
     for name in a:
         if name not in b or a[name] != b[name]:
+            return False
+    return True
+
+def same_names(a, b):
+    """Whether two unbound sets name the same names: a pass over a loop
+    body or a handled body that unbinds a name must be followed by
+    another, since a read earlier in the suite is now a read of an
+    unbound name, whether or not the types changed."""
+    if len(a) != len(b):
+        return False
+    for name in a:
+        if name not in b:
             return False
     return True
 
@@ -687,12 +700,14 @@ class Checker(object):
         exits = before.copy()
         self.loop_exits.append(exits)
         while True:
+            unbound = scope.unbound.copy()
             if test is not None:
                 self.require_bool(self.type_of(test, scope, effects),
                                   "while", test.lineno)
             self.check_block(body, scope, effects)
             after = merge_types(merge_types(before, scope.types), exits)
-            if same_types(after, before):
+            if (same_types(after, before)
+                    and same_names(scope.unbound, unbound)):
                 break
             before = after
             scope.types = after.copy()
@@ -980,10 +995,12 @@ class Checker(object):
         body_effects = EffectSet()
         entry = scope.types.copy()
         while True:
+            unbound = scope.unbound.copy()
             after = self.check_handle_suites(stmt, fulfilled, entry, scope,
                                              effects, body_effects)
             widened = merge_types(entry, after)
-            if same_types(widened, entry):
+            if (same_types(widened, entry)
+                    and same_names(scope.unbound, unbound)):
                 break
             entry = widened
         scope.types = after

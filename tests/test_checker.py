@@ -1579,3 +1579,14 @@ def test_an_effect_in_a_right_operand_counts_for_the_function():
     assert info.value.msg == (
         "line 8: function 'f' performs FileIO (line 9) without "
         "declaring it in its effect row")
+
+def test_a_pass_that_unbinds_a_name_is_followed_by_another():
+    body = ('class E(Exception): ...\n'
+            'def main() -> int / []:\n    if 1 == 1:\n        e = "s"\n'
+            '    else:\n        e = 1\n    for i in range(2):\n'
+            '        print(e)\n        try:\n            raise E()\n'
+            '        except E as e:\n            pass\n    return 0\n')
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == ("line 15: name 'e' is unbound after the "
+                              "except clause that bound it")
