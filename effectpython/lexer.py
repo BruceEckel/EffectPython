@@ -7,7 +7,17 @@ second pass over that list to produce Python's line structure: blank and
 comment-only lines vanish, newlines inside brackets vanish, and a change
 of indentation between two statements becomes INDENT or DEDENT tokens.
 Keywords come out of the generated lexer as NAME tokens and are renamed
-in the same pass, so the keyword list lives in one place.
+in the same pass, so the keyword list lives in one place. An f-string
+comes out as one FSTRING token, which raw_tokens() expands into the
+sequence CPython 3.12 produces (PEP 701): FSTRING_START, then an
+FSTRING_MIDDLE for each run of literal text and LBRACE, the field's
+own tokens, RBRACE for each {expr} field, then FSTRING_END. The
+field's tokens come from the generated lexer run over the field's
+text, with each position shifted to the field's place in the source
+(plan 1.13). A field holds no brace and no quote of the enclosing
+kind; a { with no }, a } with no {, an empty field, and a { inside a
+field are the four f-string errors, in Python's words where Python
+has them.
 
 The whole file is lexed before parsing because RPython's next() built-in
 propagates StopIteration and RuntimeError alone: a LexingError raised
@@ -18,7 +28,7 @@ StopIteration.
 """
 from rply import LexerGenerator
 from rply.errors import LexingError
-from rply.token import Token
+from rply.token import SourcePosition, Token
 
 from effectpython.errors import InvalidSyntax
 
@@ -37,6 +47,7 @@ RULES = [
     ('NEWLINE', r'\n[ \t]*'),
     ('INT', r'\d+'),
     ('STRING', r'"[^"\n]*"|\'[^\'\n]*\''),
+    ('FSTRING', r'f"[^"\n]*"|f\'[^\'\n]*\''),
     ('NAME', r'[A-Za-z_][A-Za-z0-9_]*'),
     ('ELLIPSIS', r'\.\.\.'),
     ('DOT', r'\.'),
@@ -64,7 +75,11 @@ RULES = [
     ('RBRACE', r'\}'),
 ]
 
-TOKENS = (['INDENT', 'DEDENT'] + [name for name, pattern in RULES]
+RAW_ONLY = ['FSTRING']  # expanded before the parser sees the list
+FSTRING_TOKENS = ['FSTRING_START', 'FSTRING_MIDDLE', 'FSTRING_END']
+
+TOKENS = (['INDENT', 'DEDENT'] + FSTRING_TOKENS
+          + [name for name, pattern in RULES if name not in RAW_ONLY]
           + sorted(KEYWORDS.values()))
 
 OPENERS = ['LPAREN', 'LBRACKET', 'LBRACE']
@@ -101,8 +116,21 @@ def _line_col(source, idx):
 
 def raw_tokens(source):
     """The generated lexer's tokens, with NEWLINE tokens still carrying
-    the following line's indentation and keywords still NAME tokens."""
-    stream = lexer.lex(source)
+    the following line's indentation, keywords still NAME tokens, and
+    each FSTRING token expanded."""
+    tokens = []
+    for tok in _lex(source, None):
+        if tok.gettokentype() == 'FSTRING':
+            tokens.extend(_expand_fstring(tok))
+        else:
+            tokens.append(tok)
+    return tokens
+
+def _lex(text, base):
+    """The generated lexer's tokens for text: the whole source when
+    base is None, else an f-string field that starts at the source
+    position base and holds no newline."""
+    stream = lexer.lex(text)
     tokens = []
     while True:
         try:
@@ -111,11 +139,65 @@ def raw_tokens(source):
             break
         except LexingError as e:
             idx = e.getsourcepos().idx
-            lineno, colno = _line_col(source, idx)
-            raise InvalidSyntax(lineno, colno,
-                                "unexpected character '%s'" % source[idx])
-        tokens.append(tok)
+            pos = _shifted(base, text, idx)
+            raise InvalidSyntax(pos.lineno, pos.colno,
+                                "unexpected character '%s'" % text[idx])
+        pos = tok.getsourcepos()
+        tokens.append(Token(tok.gettokentype(), tok.getstr(),
+                            _shifted(base, text, pos.idx)))
     return tokens
+
+def _shifted(base, text, idx):
+    """The source position of text[idx] when text starts at base."""
+    if base is None:
+        lineno, colno = _line_col(text, idx)
+        return SourcePosition(idx, lineno, colno)
+    return SourcePosition(base.idx + idx, base.lineno, base.colno + idx)
+
+def _fstring_error(tok, idx, msg):
+    pos = _shifted(tok.getsourcepos(), tok.getstr(), idx)
+    return InvalidSyntax(pos.lineno, pos.colno, "f-string: " + msg)
+
+def _expand_fstring(tok):
+    """FSTRING_START, FSTRING_MIDDLE and LBRACE expr RBRACE parts in
+    source order, and FSTRING_END, for one f"..." token."""
+    text = tok.getstr()
+    pos = tok.getsourcepos()
+    end = len(text) - 1
+    assert end >= 2  # the lexer guarantees the prefix and both quotes
+    result = [Token('FSTRING_START', text[:2], pos)]
+    i = 2
+    while i < end:
+        j = i
+        while j < end and text[j] != '{' and text[j] != '}':
+            j += 1
+        if j > i:
+            assert i >= 0
+            result.append(Token('FSTRING_MIDDLE', text[i:j],
+                                _shifted(pos, text, i)))
+        if j == end:
+            break
+        if text[j] == '}':
+            raise _fstring_error(tok, j, "single '}' is not allowed")
+        k = j + 1
+        while k < end and text[k] != '}' and text[k] != '{':
+            k += 1
+        if k == end:
+            raise _fstring_error(tok, j, "expecting '}'")
+        if text[k] == '{':
+            raise _fstring_error(tok, k, "nested '{' is not allowed")
+        start = j + 1
+        assert start >= 0
+        field = text[start:k]
+        if field.strip() == '':
+            raise _fstring_error(tok, j, "empty expression not allowed")
+        result.append(Token('LBRACE', '{', _shifted(pos, text, j)))
+        result.extend(_lex(field, _shifted(pos, text, start)))
+        result.append(Token('RBRACE', '}', _shifted(pos, text, k)))
+        i = k + 1
+    result.append(Token('FSTRING_END', text[end:],
+                        _shifted(pos, text, end)))
+    return result
 
 def _rename_keyword(tok):
     text = tok.getstr()

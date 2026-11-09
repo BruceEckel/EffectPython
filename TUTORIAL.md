@@ -39,7 +39,7 @@ Those limits are the size of the project, not design choices, and they do not ge
 def repeat(word: str, times: int) -> str:
     text = word
     while times > 1:
-        text = text + " " + word
+        text = f"{text} {word}"
         times = times - 1
     return text
 
@@ -78,6 +78,8 @@ The `/ []` after `main`'s return type is an *effect row*, the list of effects th
 `main()` must have an empty one, and a function with no row written has an empty row too.
 And the annotations are required, not optional:
 every value has a type the checker knows, so the arithmetic here is `int`, a comparison and `small` are `bool`, and `repeat` builds a `str`.
+An f-string such as `f"{text} {word}"` builds a `str` from its fields, each an `int`, a `str`, or a `bool`, with no format specs;
+`"a" + str(n)` says the same thing the long way, and the two agree on every value.
 `and`, `or`, and `not` combine `bool` values as Python's do, with the same precedence and the same short circuit, and take `bool` operands alone:
 `if n:` on an `int` is a checker error, `if needs a bool, not int`, where Python would test the number for zero.
 
@@ -97,7 +99,7 @@ def read_config(path: str) -> str / [FileIO]:
     return perform(FileIO.read(path))
 
 def load_app(name: str) -> int / [FileIO]:
-    config = read_config(name + ".json")
+    config = read_config(f"{name}.json")
     print(config)
     return perform(FileIO.write(name, config))
 
@@ -106,7 +108,7 @@ def main() -> int / []:
         with handle(FileIO):
             print(load_app("settings"))
     except FileIO.read as eff:
-        eff.resume("contents of " + eff.path)
+        eff.resume(f"contents of {eff.path}")
     except FileIO.write as eff:
         print("writing", eff.path, eff.content)
         eff.resume(7)
@@ -214,7 +216,7 @@ def query(sql: str) -> str / [DBQuery]:
 
 def load(path: str) -> str / [FileIO, DBQuery]:
     names = perform(FileIO.read(path))
-    return query("select " + names)
+    return query(f"select {names}")
 
 def main() -> int / []:
     try:
@@ -224,10 +226,10 @@ def main() -> int / []:
                     print(load("users.txt"))
             except DBQuery.execute as eff:
                 print("db:", eff.sql)
-                eff.resume("rows for " + eff.sql)
+                eff.resume(f"rows for {eff.sql}")
     except FileIO.read as eff:
         print("file:", eff.path)
-        eff.resume("names from " + eff.path)
+        eff.resume(f"names from {eff.path}")
     return 0
 ```
 
@@ -404,16 +406,16 @@ class FakeFileIO(Handler[FileIO]):
         if path in self.files:
             return self.files[path]
         else:
-            return "missing: " + path
+            return f"missing: {path}"
     def write(self, path: str, content: str) -> int / [Log]:
-        perform(Log.note("writing " + path))
+        perform(Log.note(f"writing {path}"))
         return 7
 
 def read_config(path: str) -> str / [FileIO]:
     return perform(FileIO.read(path))
 
 def load_app(name: str) -> int / [FileIO]:
-    config = read_config(name + ".json")
+    config = read_config(f"{name}.json")
     print(config)
     return perform(FileIO.write(name, config))
 
@@ -462,13 +464,13 @@ class FileIO(Effect):
 class CountingFileIO(Handler[FileIO]):
     writes: int = 0
     def read(self, path: str) -> str:
-        return "contents of " + path
+        return f"contents of {path}"
     def write(self, path: str, content: str) -> int:
         self.writes = self.writes + 1
         return self.writes
 
 def save(name: str) -> int / [FileIO]:
-    config = perform(FileIO.read(name + ".json"))
+    config = perform(FileIO.read(f"{name}.json"))
     return perform(FileIO.write(name, config))
 
 def main() -> int / []:
@@ -778,7 +780,7 @@ def squares(n: int) -> list[int] / [Log]:
     result = []
     for i in range(n):
         result.append(i * i)
-        perform(Log.note("squared " + str(i)))
+        perform(Log.note(f"squared {i}"))
     return result
 
 def main() -> int / []:
@@ -813,7 +815,7 @@ A list field's default is `[]`, and each instance gets a list of its own, which 
 so an `append` inside the body lengthens the walk, as in Python,
 and the name keeps the last element after the loop.
 `for i in range(n):` and `range(start, stop)` count integers; `range()` is allowed there and nowhere else, so the checker rejects `xs = range(3)`.
-`str(i)` turns an `int` or a `bool` into what `print` would show for it, which is how `squares` labels its log entries.
+`str(i)` turns an `int` or a `bool` into what `print` would show for it, and an f-string field does the same in place, which is how `squares` labels its log entries.
 `break` and `continue` work in both loops as they do in Python, and the checker rejects either outside a loop;
 `tests/programs/loop_exits.epy` runs through the cases.
 

@@ -16,7 +16,7 @@ def query(sql: str) -> str / [DBQuery]:
 
 def load(path: str) -> str / [FileIO, DBQuery]:
     names = perform(FileIO.read(path))
-    return query("select " + names)
+    return query(f"select {names}")
 
 def main() -> int / []:
     try:
@@ -26,8 +26,8 @@ def main() -> int / []:
                     print(load("users.txt"))
             except DBQuery.execute as eff:
                 print("db:", eff.sql)
-                eff.resume("rows for " + eff.sql)
+                eff.resume(f"rows for {eff.sql}")
     except FileIO.read as eff:
         print("file:", eff.path)
-        eff.resume("names from " + eff.path)
+        eff.resume(f"names from {eff.path}")
     return 0

@@ -11,13 +11,13 @@ class FileIO(Effect):
 class CountingFileIO(Handler[FileIO]):
     writes: int = 0
     def read(self, path: str) -> str:
-        return "contents of " + path
+        return f"contents of {path}"
     def write(self, path: str, content: str) -> int:
         self.writes = self.writes + 1
         return self.writes
 
 def save(name: str) -> int / [FileIO]:
-    config = perform(FileIO.read(name + ".json"))
+    config = perform(FileIO.read(f"{name}.json"))
     return perform(FileIO.write(name, config))
 
 def main() -> int / []:

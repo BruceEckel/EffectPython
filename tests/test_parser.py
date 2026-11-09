@@ -4,7 +4,7 @@ Milestone 6, exceptions; from Milestone 7, operation rows and throw;
 from Milestone 8, finally; from Milestone 9, lists and the
 for loop; from Milestone 10, break and continue; from Milestone 11,
 the boolean operators and elif (plan 1.11); from Milestone 12, dicts
-and in (plan 1.12).
+and in (plan 1.12); from Milestone 13, f-strings (plan 1.13).
 
 Run with:  pypy2 -m pytest
 """
@@ -960,4 +960,97 @@ def test_dict_type_on_a_parameter():
 def test_dict_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
+    assert info.value.msg == msg
+
+# --- f-strings (Milestone 13) ------------------------------------------------
+
+@pytest.mark.parametrize('source, expected', [
+    ('f"x"', ['FSTRING_START', 'FSTRING_MIDDLE', 'FSTRING_END']),
+    ('f""', ['FSTRING_START', 'FSTRING_END']),
+    ('f"a{n}b"',
+     ['FSTRING_START', 'FSTRING_MIDDLE', 'LBRACE', 'NAME', 'RBRACE',
+      'FSTRING_MIDDLE', 'FSTRING_END']),
+    ('f"{a}{b}"',
+     ['FSTRING_START', 'LBRACE', 'NAME', 'RBRACE', 'LBRACE', 'NAME',
+      'RBRACE', 'FSTRING_END']),
+    ('f\'{d["k"]}\'',
+     ['FSTRING_START', 'LBRACE', 'NAME', 'LBRACKET', 'STRING',
+      'RBRACKET', 'RBRACE', 'FSTRING_END']),
+    ('f"{a and not b}"',
+     ['FSTRING_START', 'LBRACE', 'NAME', 'AND', 'NOT', 'NAME', 'RBRACE',
+      'FSTRING_END']),
+], ids=['text', 'empty', 'field-between-text', 'adjacent-fields',
+        'string-in-field', 'keywords-in-field'])
+def test_fstring_tokens(source, expected):
+    assert kinds(source) == expected + ['NEWLINE']
+
+def test_fstring_middle_holds_the_literal_text():
+    middle = tokenize('f"ab{n}"\n')[1]
+    assert (middle.gettokentype(), middle.getstr()) == (
+        'FSTRING_MIDDLE', 'ab')
+
+def test_a_name_in_a_field_has_its_source_position():
+    name = tokenize('x = f"ab{name}"\n')[5]
+    pos = name.getsourcepos()
+    assert (name.getstr(), pos.lineno, pos.colno) == ('name', 1, 10)
+
+@pytest.mark.parametrize('source, msg', [
+    ('f"{"', "line 1, column 3: f-string: expecting '}'"),
+    ('    print(f"{")', "line 1, column 13: f-string: expecting '}'"),
+    ('f"}"', "line 1, column 3: f-string: single '}' is not allowed"),
+    ('f"{}"', 'line 1, column 3: f-string: empty expression not allowed'),
+    ('f"a{ }b"',
+     'line 1, column 4: f-string: empty expression not allowed'),
+    ('f"{{x}}"', "line 1, column 4: f-string: nested '{' is not allowed"),
+    ('f"{$}"', "line 1, column 4: unexpected character '$'"),
+], ids=['unclosed', 'unclosed-indented', 'single-close', 'empty-field',
+        'blank-field', 'nested-open', 'bad-character'])
+def test_fstring_lexing_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        tokenize(source)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('source, expected', [
+    ('f"a{n}b{m}"',
+     ('FString', ['a', 'b', ''], [('Name', 'n'), ('Name', 'm')])),
+    ('f""', ('FString', [''], [])),
+    ('f"{a}{b}"',
+     ('FString', ['', '', ''], [('Name', 'a'), ('Name', 'b')])),
+    ('f"text"', ('FString', ['text'], [])),
+    ('f"{n + 1}"',
+     ('FString', ['', ''],
+      [('BinOp', '+', ('Name', 'n'), ('IntLiteral', 1))])),
+    ('f"{d[\'k\']}"',
+     ('FString', ['', ''], [('Index', ('Name', 'd'), ('StrLiteral', 'k'))])),
+    ('f"{a < b}"',
+     ('FString', ['', ''], [('Compare', '<', ('Name', 'a'), ('Name', 'b'))])),
+    ('f"{n}" + "s"',
+     ('BinOp', '+', ('FString', ['', ''], [('Name', 'n')]),
+      ('StrLiteral', 's'))),
+    ('xs[f"{n}"]',
+     ('Index', ('Name', 'xs'), ('FString', ['', ''], [('Name', 'n')]))),
+    ('print(f"{n}", f"{m}")',
+     ('Call', 'print', [('FString', ['', ''], [('Name', 'n')]),
+                        ('FString', ['', ''], [('Name', 'm')])])),
+], ids=['two-fields', 'empty', 'adjacent-fields', 'text-only',
+        'binop-field', 'index-field', 'compare-field', 'left-of-plus',
+        'index-key', 'two-arguments'])
+def test_fstring_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    statement = module.functions[0].body[0]
+    assert shape(statement) == ('ExprStmt', expected)
+
+def test_an_fstring_carries_the_line_of_its_start():
+    statement = parse('def main() -> int:\n    x = (1 +\n'
+                      '        f"{n}")\n').functions[0].body[0]
+    assert statement.value.right.lineno == 3
+
+@pytest.mark.parametrize('source, msg', [
+    ('f"{n:3}"', "line 2, column 9: unexpected ':'"),
+    ('f"{n=}"', "line 2, column 9: unexpected '='"),
+    ('f"{n +}"', "line 2, column 11: unexpected '}'"),
+], ids=['format-spec', 'self-documenting', 'incomplete-expr'])
+def test_fstring_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    %s\n' % source)
     assert info.value.msg == msg

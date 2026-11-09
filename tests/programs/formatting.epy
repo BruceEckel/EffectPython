@@ -1,0 +1,37 @@
+# Milestone 13: f-strings (plan 1.13). A field holds any expression
+# whose value is an int, a str, or a bool, and the fields of one
+# f-string are evaluated left to right: Log.note in the first and
+# third fields of the last line suspends the body twice around the
+# call in the second, and the output shows the order.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+def label(n: int, name: str) -> str:
+    return f"{name}#{n}"
+
+def shout(word: str) -> str:
+    print(f"shouting {word}")
+    return word
+
+def main() -> int / []:
+    n = 7
+    name = "pin"
+    d = {"k": 3}
+    xs = [10, 20]
+    print(f"")
+    print(f"n={n} name={name} big={n > 5} sum={n + xs[1]}")
+    print(f"{n}{name}", f'{d["k"]}', f"{d['k'] + 1}")
+    print(label(n, name), label(0, ""))
+    counts = {}
+    counts[f"row{n}"] = n
+    print(counts)
+    try:
+        with handle(Log):
+            print(f"{perform(Log.note('first'))}/{shout('mid')}/{perform(Log.note('last'))}")
+    except Log.note as eff:
+        print(f"note: {eff.text}")
+        eff.resume(len(eff.text))
+    return 0

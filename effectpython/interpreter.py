@@ -25,7 +25,11 @@ folds, and counts in an RPython local. xs.append(v) on a name is the
 OpCall the parser builds for Effect.op(...), told apart by the name
 being bound, since an effect is never a value; on any other
 expression it is a MethodCall. len(), str(), and range() are Call
-nodes recognized by name, as print is. A W_Dict (plan 1.12) is
+nodes recognized by name, as print is. An FString (plan 1.13)
+evaluates its fields left to right and joins their str() with its
+literal text, so a perform() in a field suspends the body in the
+middle of the expression, as one in an argument does. A W_Dict
+(plan 1.12) is
 shared the same way, over an RPython dict from str to W_Root, which
 keeps insertion order; exec_for_dict walks its keys and stops with
 Python's error when a store changes the size, and k in d and x in xs
@@ -160,7 +164,9 @@ method other than append or an append with the wrong number of
 arguments (check_append; list_method; unreachable_list_method.epy and
 unreachable_append_arity.epy), a built-in with the wrong number or
 type of argument (check_builtin; builtin; unreachable_len_arity.epy,
-unreachable_len_argument.epy, and unreachable_str_argument.epy),
+unreachable_len_argument.epy, and unreachable_str_argument.epy), an
+f-string field that is not a scalar (check_fstring; the FString
+branch of eval_expr; unreachable_fstring_field.epy),
 range() outside a for (check_call; call; unreachable_range_call.epy),
 and a non-bool operand of and, or, or not, or test of an if or a
 while (require_bool; truth; unreachable_bool_operand.epy and
@@ -199,8 +205,9 @@ runtime_clause_before_resume.epy, runtime_finally_after_return.epy,
 runtime_finally_midsuite.epy, runtime_finally_break.epy, and
 runtime_finally_unwind.epy), a subscript, append, for, or in target
 (runtime_subscript_unknown.epy, runtime_append_unknown_target.epy,
-and runtime_for_unknown.epy), a len() or str() argument
-(runtime_len_unknown.epy and runtime_str_unknown.epy), a list index
+and runtime_for_unknown.epy), a len() or str() argument or an
+f-string field (runtime_len_unknown.epy, runtime_str_unknown.epy,
+and runtime_fstring_field.epy), a list index
 (runtime_index_unknown.epy), a dict key
 (runtime_dict_key_unknown.epy), a bool operand
 (runtime_bool_operand.epy), or an if or while test
@@ -924,6 +931,17 @@ class Interpreter(object):
                 key = dict_key(self.eval_expr(expr.keys[i], env))
                 items_w[key] = self.eval_expr(expr.values[i], env)
             return W_Dict(items_w)
+        elif isinstance(expr, ast.FString):
+            parts = [expr.literals[0]]
+            for i in range(len(expr.exprs)):
+                w_field = self.eval_expr(expr.exprs[i], env)
+                if not is_scalar(w_field):
+                    raise EffectPythonRuntimeError(
+                        "an f-string field needs an int, str, or bool, not "
+                        "%s" % type_name(w_field))
+                parts.append(w_field.str())
+                parts.append(expr.literals[i + 1])
+            return W_Str("".join(parts))
         elif isinstance(expr, ast.In):
             w_left = self.eval_expr(expr.left, env)
             w_right = self.eval_expr(expr.right, env)
@@ -1103,11 +1121,14 @@ def builtin(name, args_w):
             return W_Int(len(w_arg.items_w))
         raise EffectPythonRuntimeError(
             "len() needs a list, dict, or str, not %s" % type_name(w_arg))
-    if (isinstance(w_arg, W_Int) or isinstance(w_arg, W_Str)
-            or isinstance(w_arg, W_Bool)):
+    if is_scalar(w_arg):
         return W_Str(w_arg.str())
     raise EffectPythonRuntimeError(
         "str() needs an int, str, or bool, not %s" % type_name(w_arg))
+
+def is_scalar(w):
+    return (isinstance(w, W_Int) or isinstance(w, W_Str)
+            or isinstance(w, W_Bool))
 
 def lists_equal(w_left, w_right):
     """Element by element; elements of two types are unequal, as 1 and

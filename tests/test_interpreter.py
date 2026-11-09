@@ -1,6 +1,7 @@
 """Milestone 1 acceptance: the evaluator runs a recursive Fibonacci;
 from Milestone 11, the boolean operators and elif (plan 1.11);
-from Milestone 12, dicts and in (plan 1.12).
+from Milestone 12, dicts and in (plan 1.12); from Milestone 13,
+f-strings (plan 1.13).
 
 Run with:  pypy2 -m pytest
 These tests import no RPython modules, so they need no PYTHONPATH.
@@ -734,4 +735,71 @@ def test_dict_operations(statement, printed):
 def test_a_dict_misuse_is_a_runtime_error(body, msg):
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_main_body(body + '    return 0\n')
+    assert info.value.msg == msg
+
+# --- f-strings (Milestone 13) ------------------------------------------------
+
+@pytest.mark.parametrize('statement, printed', [
+    ('n = 7\n'
+     '    s = "pin"\n'
+     '    print(f"n={n} s={s} big={n > 5} sum={n + 1}")',
+     ["n=7 s=pin big=True sum=8"]),
+    ('print(f"")', [""]),
+    ('print(f"text")', ["text"]),
+    ('n = 7\n'
+     '    s = "pin"\n'
+     '    print(f"{n}{s}")',
+     ["7pin"]),
+    ('s = "pin"\n'
+     '    print(f"[{s}]")',
+     ["[pin]"]),
+    ('print(f"{True} {False}")', ["True False"]),
+    ('n = -3\n'
+     '    print(f"{n}")',
+     ["-3"]),
+    ('d = {"k": 3}\n'
+     '    print(f\'{d["k"]}\', f"{d[\'k\'] + 1}")',
+     ["3 4"]),
+    ('n = 7\n'
+     '    d = {}\n'
+     '    d[f"row{n}"] = n\n'
+     '    print(d)',
+     ["{'row7': 7}"]),
+    ('n = 7\n'
+     '    print(str(n) == f"{n}", str(True) == f"{True}")',
+     ["True True"]),
+], ids=['fields', 'empty', 'no-fields', 'adjacent-fields', 'bare-str',
+        'bool', 'negative-int', 'other-quote-subscript', 'dict-key',
+        'agrees-with-str'])
+def test_an_fstring_puts_each_field_between_its_literals(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n')
+    assert (exit_code, lines) == (0, printed)
+
+def test_fstring_fields_are_evaluated_left_to_right():
+    functions = (
+        'def first() -> int:\n'
+        '    print("a")\n'
+        '    return 1\n'
+        'def second() -> int:\n'
+        '    print("b")\n'
+        '    return 2\n')
+    exit_code, lines = run_main_body(
+        '    print(f"{first()}-{second()}")\n    return 0\n', functions)
+    assert (exit_code, lines) == (0, ["a", "b", "1-2"])
+
+@pytest.mark.parametrize('value, msg', [
+    ('[1]', 'an f-string field needs an int, str, or bool, not list'),
+    ('{"a": 1}', 'an f-string field needs an int, str, or bool, not dict'),
+], ids=['list', 'dict'])
+def test_a_non_scalar_fstring_field_is_a_runtime_error(value, msg):
+    body = (
+        '    if 1 == 1:\n'
+        '        v = ' + value + '\n'
+        '    else:\n'
+        '        v = 1\n'
+        '    print(f"{v}")\n'
+        '    return 0\n')
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(body)
     assert info.value.msg == msg

@@ -1,0 +1,8 @@
+# The runtime's "an f-string field needs an int, str, or bool" is
+# unreachable where the checker knows the type: check_fstring
+# rejects it.
+
+def main() -> int:
+    xs = [1]
+    print(f"xs is {xs}")
+    return 0

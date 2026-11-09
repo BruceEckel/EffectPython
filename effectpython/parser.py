@@ -6,9 +6,9 @@ declarations and methods, exception classes, function definitions
 with typed parameters, a return type, and an optional effect row;
 return, raise, assignment, attribute assignment, expression, pass,
 if/elif/else, while, for, try/except/finally, and handle statements;
-int, str, bool, list, and dict literals, names, arithmetic,
-comparisons, in and not in, and, or, and not in Python's precedence,
-calls, indexing, attribute reads, and attribute calls. An elif builds an If alone in the else
+int, str, bool, list, and dict literals, f-strings, names,
+arithmetic, comparisons, in and not in, and, or, and not in Python's
+precedence, calls, indexing, attribute reads, and attribute calls. An elif builds an If alone in the else
 suite of the one above it, as CPython's AST does (plan 1.11).
 
 perform and handle are names in Python, not keywords, so the grammar
@@ -128,6 +128,13 @@ class _DictItems(BaseBox):
     def __init__(self, keys, values):
         self.keys = keys      # list of Expr
         self.values = values  # list of Expr
+
+class _FStringParts(BaseBox):
+    _attrs_ = ['literals', 'exprs']
+
+    def __init__(self, literals, exprs):
+        self.literals = literals  # list of str, one longer than exprs
+        self.exprs = exprs        # list of Expr
 
 class _NameList(BaseBox):
     _attrs_ = ['items']
@@ -814,6 +821,39 @@ def list_literal(p):
     elements = p[1]
     assert isinstance(elements, _ExprList)
     return ast.ListLiteral(elements.items, _line(p[0]))
+
+@pg.production('atom : FSTRING_START FSTRING_END')
+def empty_fstring(p):
+    return ast.FString([""], [], _line(p[0]))
+
+@pg.production('atom : FSTRING_START fstring_parts FSTRING_END')
+def fstring(p):
+    parts = p[1]
+    assert isinstance(parts, _FStringParts)
+    return ast.FString(parts.literals, parts.exprs, _line(p[0]))
+
+@pg.production('fstring_parts : FSTRING_MIDDLE')
+def fstring_text(p):
+    return _FStringParts([_text(p[0])], [])
+
+@pg.production('fstring_parts : LBRACE expr RBRACE')
+def fstring_field(p):
+    return _FStringParts(["", ""], [_expr(p[1])])
+
+@pg.production('fstring_parts : fstring_parts FSTRING_MIDDLE')
+def fstring_more_text(p):
+    parts = p[0]
+    assert isinstance(parts, _FStringParts)
+    parts.literals[-1] = parts.literals[-1] + _text(p[1])
+    return parts
+
+@pg.production('fstring_parts : fstring_parts LBRACE expr RBRACE')
+def fstring_more_fields(p):
+    parts = p[0]
+    assert isinstance(parts, _FStringParts)
+    parts.exprs.append(_expr(p[2]))
+    parts.literals.append("")
+    return parts
 
 @pg.production('atom : LBRACE RBRACE')
 def empty_dict_literal(p):

@@ -17,7 +17,7 @@ def squares(n: int) -> list[int] / [Log]:
     result = []
     for i in range(n):
         result.append(i * i)
-        perform(Log.note("squared " + str(i)))
+        perform(Log.note(f"squared {i}"))
     return result
 
 def main() -> int / []:

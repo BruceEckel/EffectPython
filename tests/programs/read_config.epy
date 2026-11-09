@@ -12,7 +12,7 @@ def read_config(path: str) -> str / [FileIO]:
     return perform(FileIO.read(path))
 
 def load_app(name: str) -> int / [FileIO]:
-    config = read_config(name + ".json")
+    config = read_config(f"{name}.json")
     print(config)
     return perform(FileIO.write(name, config))
 
@@ -21,7 +21,7 @@ def main() -> int / []:
         with handle(FileIO):
             print(load_app("settings"))
     except FileIO.read as eff:
-        eff.resume("contents of " + eff.path)
+        eff.resume(f"contents of {eff.path}")
     except FileIO.write as eff:
         print("writing", eff.path, eff.content)
         eff.resume(7)

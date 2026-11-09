@@ -18,16 +18,16 @@ class FakeFileIO(Handler[FileIO]):
         if path in self.files:
             return self.files[path]
         else:
-            return "missing: " + path
+            return f"missing: {path}"
     def write(self, path: str, content: str) -> int / [Log]:
-        perform(Log.note("writing " + path))
+        perform(Log.note(f"writing {path}"))
         return 7
 
 def read_config(path: str) -> str / [FileIO]:
     return perform(FileIO.read(path))
 
 def load_app(name: str) -> int / [FileIO]:
-    config = read_config(name + ".json")
+    config = read_config(f"{name}.json")
     print(config)
     return perform(FileIO.write(name, config))
 

@@ -1,0 +1,10 @@
+# Runtime-only: an if leaves v with two types, so the checker cannot
+# hold the f-string field to a scalar; the FString branch does.
+
+def main() -> int:
+    if 1 == 1:
+        v = [1]
+    else:
+        v = 1
+    print(f"v is {v}")
+    return 0

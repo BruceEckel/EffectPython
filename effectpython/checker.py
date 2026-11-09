@@ -46,7 +46,9 @@ check_index, check_index_assign, check_membership); x in xs needs a
 value of the list's element type; and in gives bool. A for over a
 list binds its name to the element type, over a dict to str, and
 over range() to int. len(), str(), and range() are built-in names
-beside print, and a function cannot take one of them. For two lists
+beside print, and a function cannot take one of them. An f-string
+is str, and each of its fields is int, str, or bool, as str() takes
+(check_fstring). For two lists
 the checker requires one element type, which the runtime does not:
 it compares them and finds the elements unequal; dicts have no
 operator.
@@ -71,8 +73,9 @@ the checker never saw. A typed slot therefore refuses a value of
 unknown type (require_known), as "argument 1 of f() must be int, but
 'x' has no known type", and an append of one to a [] leaves the list
 with no known type. A value of unknown type may still be printed,
-measured with len(), converted with str(), indexed, iterated,
-compared, and used as an operand, where the runtime keeps the check.
+measured with len(), converted with str() or an f-string field,
+indexed, iterated, compared, and used as an operand, where the
+runtime keeps the check.
 A name holding [] that a statement hands to a slot of type list[T]
 takes list[T], since the receiver may append to it (hand_over). One
 assigned to another name loses its type: the checker does not track
@@ -851,6 +854,17 @@ class Checker(object):
             else:
                 scope.set_type(target.id, "dict[str, %s]" % actual)
 
+    def check_fstring(self, expr, scope, effects):
+        """Each field is int, str, or bool, as str() takes, or unknown,
+        and its effects count; the result is str."""
+        for field in expr.exprs:
+            actual = self.type_of(field, scope, effects)
+            if actual != UNKNOWN and actual not in SCALARS:
+                raise InvalidProgram(
+                    expr.lineno, "an f-string field needs an int, str, or "
+                    "bool, not %s" % actual)
+        return "str"
+
     def check_dict_literal(self, expr, scope, effects):
         """{k: v, ...}: str keys and values of one scalar type; a value
         of unknown type makes the literal unknown, as it does a list
@@ -1274,6 +1288,8 @@ class Checker(object):
             return "list[%s]" % element
         elif isinstance(expr, ast.DictLiteral):
             return self.check_dict_literal(expr, scope, effects)
+        elif isinstance(expr, ast.FString):
+            return self.check_fstring(expr, scope, effects)
         elif isinstance(expr, ast.In):
             return self.check_membership(expr, scope, effects)
         elif isinstance(expr, ast.Index):

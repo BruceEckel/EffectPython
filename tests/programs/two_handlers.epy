@@ -8,11 +8,11 @@ class Greeting(Effect):
 
 class Formal(Handler[Greeting]):
     def greet(self, name: str) -> str:
-        return "Good day, " + name
+        return f"Good day, {name}"
 
 class Casual(Handler[Greeting]):
     def greet(self, name: str) -> str:
-        return "Hi " + name
+        return f"Hi {name}"
 
 def welcome(name: str) -> str / [Greeting]:
     return perform(Greeting.greet(name))

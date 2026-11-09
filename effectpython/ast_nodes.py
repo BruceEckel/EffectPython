@@ -378,6 +378,17 @@ class BinOp(Expr):
         self.left = left    # Expr
         self.right = right  # Expr
 
+class FString(Expr):
+    """f"..." (plan 1.13): the literal text around and between the
+       fields, one entry more than exprs, so the value is literals[0],
+       then exprs[0] as text, then literals[1], and so on"""
+    _attrs_ = ['literals', 'exprs']
+
+    def __init__(self, literals, exprs, lineno=0):
+        Node.__init__(self, lineno)
+        self.literals = literals  # list of str
+        self.exprs = exprs        # list of Expr
+
 class DictLiteral(Expr):
     """{key: value, ...} or {} (plan 1.12); keys and values are
        parallel lists"""

@@ -1741,3 +1741,57 @@ def test_rejects_a_clause_change_fed_back_into_the_body(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(body)
     assert info.value.msg == msg
+
+# --- f-strings (Milestone 13) ------------------------------------------------
+
+LOG = 'class Log(Effect):\n    def note(text: str) -> int: ...\n'
+
+@pytest.mark.parametrize('body', [
+    'def main() -> int / []:\n    n = 1\n    s = "a"\n    b = n > 0\n'
+    '    print(f"{n} {s} {b} {n + 1} {not b}")\n    return 0\n',
+    'def main() -> int / []:\n    print(f"")\n    print(f"text")\n'
+    '    return 0\n',
+    'def main() -> int / []:\n    d = {"k": 1}\n'
+    '    print(f"{d[\'k\']}")\n    return 0\n',
+    'def take(s: str) -> int:\n    return 0\n'
+    'def main() -> int / []:\n    n = 1\n    take(f"{n}")\n    return 0\n',
+    'def main() -> int / []:\n    n = 1\n    d = {"a": 1}\n'
+    '    d[f"row{n}"] = 1\n    return 0\n',
+    'def name(n: int) -> str:\n    return f"#{n}"\n' + MAIN,
+    'def main() -> int / []:\n    if 1 == 1:\n        v = 1\n'
+    '    else:\n        v = "s"\n    print(f"{v}")\n    return 0\n',
+], ids=['scalar-fields', 'no-fields', 'dict-item', 'str-argument',
+        'dict-key', 'str-return', 'unknown-field'])
+def test_accepts_an_fstring_of_scalar_or_unknown_fields(body):
+    check_source(body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def main() -> int / []:\n    xs = [1]\n    print(f"{xs}")\n'
+     '    return 0\n',
+     'line 10: an f-string field needs an int, str, or bool, '
+     'not list[int]'),
+    ('def main() -> int / []:\n    d = {"a": 1}\n    print(f"{d}")\n'
+     '    return 0\n',
+     'line 10: an f-string field needs an int, str, or bool, '
+     'not dict[str, int]'),
+    ('def main() -> int / []:\n    print(f"{print(1)}")\n    return 0\n',
+     'line 9: an f-string field needs an int, str, or bool, not None'),
+], ids=['list-field', 'dict-field', 'none-field'])
+def test_rejects_an_fstring_field_of_another_type(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == msg
+
+def test_an_fstring_field_that_performs_counts_for_the_row():
+    body = (LOG + 'def f() -> str:\n'
+            '    return f"{perform(Log.note(\'x\'))}"\n' + MAIN)
+    with pytest.raises(UnhandledEffectError) as info:
+        check_source(body)
+    assert info.value.msg == (
+        "line 10: function 'f' performs Log (line 11) without declaring "
+        "it in its effect row")
+
+def test_accepts_an_fstring_field_that_performs_a_declared_effect():
+    body = (LOG + 'def f() -> str / [Log]:\n'
+            '    return f"{perform(Log.note(\'x\'))}"\n' + MAIN)
+    check_source(body)

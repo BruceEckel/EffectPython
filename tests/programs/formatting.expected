@@ -1,0 +1,10 @@
+exit 0
+
+n=7 name=pin big=True sum=27
+7pin 3 4
+pin#7 #0
+{'row7': 7}
+note: first
+shouting mid
+note: last
+5/mid/4

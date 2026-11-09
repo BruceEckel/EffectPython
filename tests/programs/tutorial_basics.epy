@@ -5,7 +5,7 @@
 def repeat(word: str, times: int) -> str:
     text = word
     while times > 1:
-        text = text + " " + word
+        text = f"{text} {word}"
         times = times - 1
     return text
 
