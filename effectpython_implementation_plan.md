@@ -1049,6 +1049,83 @@ The acceptance program `augmented.epy` has each of the five operators on an `int
     The samples use `+=` and `-=`; the other three are one token rule each and share the one grammar rule and the one checker rule.
     *The design takes all five, so the augmented forms are the arithmetic operators and no list to remember.*
 
+### 1.15 A clause that leaves (designed 2026-11-09, not implemented)
+
+`shop_orders.epy` is the first sample written in Python and then ported, and it has the first operand of unknown type in a sample outside `runtime_*.epy`.
+Its `fill()` skips an order line the warehouse cannot supply:
+
+```python
+    for i in range(len(owners)):
+        ...
+        try:
+            left = perform(Stock.reserve(item, qty))
+        except OutOfStock as e:
+            perform(Log.note(f"{customer}: {item} is short, line skipped"))
+            continue
+        ...
+        if left < 3:
+```
+
+`check_try` merges the end of every clause that does not end in a `return` into the types after the `try`.
+The clause does not bind `left`, `merge_types` gives a name one path alone holds the unknown type, and `left < 3` passes `check_operands` unchecked (`Checker.unknowns` holds line 72, and `tests/test_checker.py` lists it in `ORDINARY_UNKNOWNS`).
+Where the value goes to a typed slot instead of an operator, the checker rejects the program: with `v = risky(i)` in the suite and `last = take(v)` after the `try`, a clause that ends in `continue`, `break`, or `raise Worse("x")` gives "argument 1 of take() must be int, but 'v' has no known type", and a clause that ends in `return 1` is accepted.
+So the form Python writes for "skip this one and go on" is refused today whenever the value it guards is passed to a function.
+
+**The rule.**
+A clause whose last statement is `continue`, `break`, or `raise` *leaves*: no path runs from its end to the statement after the `try`.
+The types at its end stay out of the merge that gives the types after the `try`, as those of a clause ending in `return` do today.
+A function `leaves(stmts)` beside `ends_in_return` answers for the three statements, and `check_try` asks it where a clause does not end in a `return`.
+
+**What still sees the clause.**
+The paths the clause does take are covered by accumulators that exist today, so the rule adds none.
+
+*   A `continue` or `break` absorbs the types where it stands into `loop_exits[-1]` when `dispatch_stmt` checks it, and `check_loop_body` merges those into the types the next pass starts from and the types after the loop.
+    A name the clause retypes is therefore unknown from the second pass on: with `last = 0` before the loop, `last = "s"` and `continue` in the clause, and `take(last)` after the `try`, the program stays rejected with "argument 1 of take() must be int, but 'last' has no known type".
+*   A `raise` is a statement of the clause, and `check_stmt` absorbs the types after every statement into each accumulator in `boundaries`, so the clauses and the `finally` of an enclosing `try` start from the clause's types.
+*   The `finally` of the same `try` is checked first from `into_finally`, which absorbs every boundary of every clause whatever its last statement.
+    A `take(v)` in a `finally` after the clause above stays rejected.
+    The second check of the suite starts from the types after the `try`, which are for the code after it, and takes the narrower types with that code.
+*   The clause's name is not affected.
+    `check_named_clause` restores the name for a clause that ends in a `return` and unbinds it for every other, and that stays: after a `continue` the next pass finds `e` deleted, as CPython does, and `print(e)` after the `try` stays "name 'e' is unbound after the except clause that bound it".
+    `leaves` is therefore a second predicate and does not replace `ends_in_return`, whose other two uses (`check_named_clause`, and the `returned` list `check_try` keeps for the `finally` suite) concern the name.
+
+**A name the clause alone binds.**
+`require_bound` reads `scope.types` for the source-order rule, so a name left out of the types after the `try` would be "name 'w' is not defined" at a later read.
+For `continue` and `break` that is too strict.
+With `w = "s"` and `continue` in the clause and `print(w)` after the `try`, CPython prints `s` on the pass after a failing one and raises an `UnboundLocalError` ("cannot access local variable 'w' where it is not associated with a value") when no pass has failed yet.
+The checker accepts that program today with `w` of unknown type, and the design keeps it: each name bound at the end of a leaving clause and absent from the merged types enters them with the unknown type.
+A name the merged types hold keeps the type they give it, so `left` is `int`.
+
+**What changes for a program.**
+A typed slot that refused the name accepts it, and an operator that passed unchecked is checked.
+A program accepted today is rejected under the rule in one case: an operator now sees two known types it refuses, which is the error the runtime reports at that line whenever the line runs.
+
+**Probed against a prototype (2026-11-09).**
+The rule was patched into a copy of `checker.py` in memory: `leaves`, the branch in `check_try`, and the unknown entries for the names a leaving clause alone binds.
+Over the 140 sample programs the result differs for one, `shop_orders.epy`, whose list of unknown operands goes from line 72 to empty.
+Over the 49,500 programs of the enumeration at sizes 2 and 3 no result differs, which is expected, since its alphabet has no exception clause.
+The enumeration therefore does not test this rule, and the milestone needs cases of its own.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether an `if` arm that leaves gets the same rule.*
+    `check_if` merges both arms whatever their last statements: with `v = 1` before it, `if i == 1:` over `v = "s"` and `continue`, and `take(v)` after it, the program is rejected with "argument 1 of take() must be int, but 'v' has no known type".
+    The `None` note in 2.2 needs the same thing for its guard clause, `if x is None: return`.
+    *The design recommends taking the `if` arm in the same milestone, for an arm that ends in `return` as well as the three statements: it is one more use of the predicate, and the guard is as common in Python as the clause.*
+2.  *Whether the `try` suite gets the rule when it is the path that leaves.*
+    A suite that ends in `continue` with a clause that falls through is the mirror case.
+    The types after the `try` start from the suite's end today, so the rule there needs a way to start from no path, and types for the code after a `try` every path of which leaves.
+    *The design leaves the suite out: no sample has the form.*
+3.  *Whether `leaves` reads the last statement alone or follows nested statements as `always_returns` does.*
+    An `if`/`else` whose arms both end in `continue` leaves too.
+    *The design reads the last statement alone, as `ends_in_return` does, and widens it when a program has the nested form.*
+4.  *Whether an effect clause of a `handle` statement gets the rule.*
+    `check_handle_suites` merges `resumed`, every boundary of the clause with its end among them, into the types after the statement whatever the clause's last statement, so leaving out the end alone would change nothing.
+    *The design leaves effect clauses as they are: narrowing them means deciding which boundaries of a clause can reach the end of the statement, a question of its own.*
+5.  *Whether a name a leaving clause alone binds is unknown or "not defined" after the `try`.*
+    After a `raise` no later pass can bind it, so "not defined" would be right there, as it is today after a `return`.
+    *The design gives all three the unknown type: one rule, and no program accepted today is rejected for a name.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1764,3 +1841,12 @@ EffectPython/
         *   The twelve programs with an `x = x + v` line at `94fdb04` replace it (fifteen lines); their recorded outputs did not change, and `TUTORIAL.md`'s five listings that quote them changed with them.
         *   Reject `x += 1` with `x` unbound ("name 'x' is not defined"), `s += 1` with `s` a `str` ("unsupported operand types for +: str and int"), `xs += [1]` ("unsupported operand types for +: list[int] and list[int]"), `flag += True` ("unsupported operand types for +: bool and bool"), `d[k] += 1` with `d` a `dict[str, str]`, `d[1] += 1` ("a dict key must be str, not int"), `f() += 1` ("cannot assign to this expression"), and a `perform()` in the value with no effect in the row; accept `s += "x"`, `self.n += 1`, `xs[i] += 1`, `d[k] += 1` with `d` a `dict[str, int]`, and `x //= 2`.
         *   `runtime_augmented_key.epy` reaches "key 'k' not found" from `d[k] += 1` on a missing key.
+15. **Milestone 15: a clause that leaves (1.15)**
+    *   *Designed 2026-11-09, not implemented.* The five open questions of 1.15 are not settled.
+    *   *Implementation (planned):* `checker.py` gains `leaves(stmts)` beside `ends_in_return`; `check_try` keeps the end of a leaving clause out of the types after the `try` and enters each name that clause alone binds with the unknown type; the module docstring's paragraph on `check_try` and the `check_try` item of 2.2 say so.
+        The change is to how a name's type changes across a suite, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   `shop_orders.epy` has no unknown operand, and its entry leaves `ORDINARY_UNKNOWNS` in `tests/test_checker.py`; its recorded output does not change.
+        *   Accept `last = take(v)` after a `try` whose suite binds `v` and whose clause ends in `continue`, in `break`, or in `raise`; these are rejected today with "argument 1 of take() must be int, but 'v' has no known type".
+        *   Still reject `take(last)` after a clause that retypes `last` and continues, `take(v)` in the `finally` of such a `try`, and `print(e)` after it ("name 'e' is unbound after the except clause that bound it"); still accept `print(w)` for a `w` the clause alone binds.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
