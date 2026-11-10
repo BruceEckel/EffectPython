@@ -1,0 +1,107 @@
+# A program with a job of its own: a shop fills four customers' orders
+# from one warehouse. A short line is skipped (the handler throws
+# OutOfStock into the body), an unknown item rejects the whole order
+# (the handler raises UnknownItem, which abandons it), and ten units
+# earn a discount. Written in Python first and then ported, to see
+# which constructs the dialect made it give up.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Stock(Effect):
+    def reserve(item: str, qty: int) -> int / [OutOfStock]: ...
+
+class Pricing(Effect):
+    def price(item: str) -> int: ...
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class OutOfStock(Exception): ...
+
+class UnknownItem(Exception): ...
+
+class Warehouse(Handler[Stock]):
+    stock: dict[str, int] = {}
+    backorders: dict[str, int] = {}
+    def reserve(self, item: str, qty: int) -> int / [OutOfStock, UnknownItem]:
+        if item not in self.stock:
+            raise UnknownItem(item)
+        have = self.stock[item]
+        if have < qty:
+            if item in self.backorders:
+                self.backorders[item] += qty - have
+            else:
+                self.backorders[item] = qty - have
+            raise OutOfStock(item)
+        self.stock[item] = have - qty
+        return have - qty
+
+class Journal(Handler[Log]):
+    entries: list[str] = []
+    def note(self, text: str) -> int:
+        self.entries.append(text)
+        return len(self.entries)
+
+def money(cents: int) -> str:
+    rest = cents % 100
+    if rest < 10:
+        return f"{cents // 100}.0{rest}"
+    return f"{cents // 100}.{rest}"
+
+def discount(subtotal: int, units: int) -> int:
+    if units >= 10:
+        return subtotal // 10
+    return 0
+
+def fill(customer: str, owners: list[str], items: list[str],
+         qtys: list[int]) -> int / [Stock, Pricing, Log]:
+    subtotal = 0
+    units = 0
+    for i in range(len(owners)):
+        if owners[i] != customer:
+            continue
+        item = items[i]
+        qty = qtys[i]
+        try:
+            left = perform(Stock.reserve(item, qty))
+        except OutOfStock as e:
+            perform(Log.note(f"{customer}: {item} is short, line skipped"))
+            continue
+        cost = perform(Pricing.price(item)) * qty
+        perform(Log.note(f"{customer}: {qty} x {item} = {money(cost)}"))
+        if left < 3:
+            perform(Log.note(f"reorder {item}, {left} left"))
+        subtotal += cost
+        units += qty
+    off = discount(subtotal, units)
+    if off > 0:
+        perform(Log.note(f"{customer}: discount {money(off)}"))
+    return subtotal - off
+
+def main() -> int / []:
+    owners = ["alice", "alice", "bob", "bob", "bob", "carol", "carol",
+              "dave", "dave"]
+    items = ["widget", "gizmo", "gadget", "widget", "gizmo", "gizmo",
+             "sprocket", "gadget", "widget"]
+    qtys = [2, 10, 3, 3, 1, 4, 1, 1, 2]
+    prices = {"widget": 250, "gadget": 1200, "gizmo": 75}
+    warehouse = Warehouse({"widget": 6, "gadget": 2, "gizmo": 40})
+    journal = Journal()
+    revenue = 0
+    for customer in ["alice", "bob", "carol", "dave"]:
+        try:
+            try:
+                with handle(warehouse, journal, Pricing):
+                    total = fill(customer, owners, items, qtys)
+                    print(customer, "owes", money(total))
+                    revenue += total
+            except Pricing.price as eff:
+                eff.resume(prices[eff.item])
+        except UnknownItem as e:
+            print(customer, "rejected: no such item as", e)
+    print("revenue", money(revenue))
+    print("stock", warehouse.stock)
+    print("backorders", warehouse.backorders)
+    for entry in journal.entries:
+        print(entry)
+    return 0

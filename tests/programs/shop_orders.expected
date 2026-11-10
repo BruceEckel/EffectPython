@@ -1,0 +1,19 @@
+exit 0
+alice owes 11.25
+bob owes 8.25
+carol rejected: no such item as sprocket
+dave owes 12.00
+revenue 31.50
+stock {'widget': 1, 'gadget': 1, 'gizmo': 25}
+backorders {'gadget': 1, 'widget': 1}
+alice: 2 x widget = 5.00
+alice: 10 x gizmo = 7.50
+alice: discount 1.25
+bob: gadget is short, line skipped
+bob: 3 x widget = 7.50
+reorder widget, 1 left
+bob: 1 x gizmo = 0.75
+carol: 4 x gizmo = 3.00
+dave: 1 x gadget = 12.00
+reorder gadget, 1 left
+dave: widget is short, line skipped
