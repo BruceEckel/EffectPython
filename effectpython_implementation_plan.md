@@ -1077,7 +1077,7 @@ The types at its end stay out of the merge that gives the types after the `try`,
 A function `leaves(stmts)` beside `ends_in_return` answers for the three statements, and `check_try` asks it where a clause does not end in a `return`.
 
 **What still sees the clause.**
-The paths the clause does take are covered by accumulators that exist today, so the rule adds none.
+The paths the clause does take are covered by accumulators that exist today, with one exception, the `finally` of the same `try` on a `continue` or `break`, which the next paragraph takes up.
 
 *   A `continue` or `break` absorbs the types where it stands into `loop_exits[-1]` when `dispatch_stmt` checks it, and `check_loop_body` merges those into the types the next pass starts from and the types after the loop.
     A name the clause retypes is therefore unknown from the second pass on: with `last = 0` before the loop, `last = "s"` and `continue` in the clause, and `take(last)` after the `try`, the program stays rejected with "argument 1 of take() must be int, but 'last' has no known type".
@@ -1085,9 +1085,23 @@ The paths the clause does take are covered by accumulators that exist today, so 
 *   The `finally` of the same `try` is checked first from `into_finally`, which absorbs every boundary of every clause whatever its last statement.
     A `take(v)` in a `finally` after the clause above stays rejected.
     The second check of the suite starts from the types after the `try`, which are for the code after it, and takes the narrower types with that code.
+    What the `finally` suite assigns on the leaving path is the exception below.
 *   The clause's name is not affected.
     `check_named_clause` restores the name for a clause that ends in a `return` and unbinds it for every other, and that stays: after a `continue` the next pass finds `e` deleted, as CPython does, and `print(e)` after the `try` stays "name 'e' is unbound after the except clause that bound it".
-    `leaves` is therefore a second predicate and does not replace `ends_in_return`, whose other two uses (`check_named_clause`, and the `returned` list `check_try` keeps for the `finally` suite) concern the name.
+    `leaves` is therefore a second predicate and does not replace `ends_in_return`, which has three call sites: the one in `check_try`, which decides the merge and the `returned` list it keeps for the `finally` suite together, the one in `check_named_clause`, and the one in `check_handle_suites`, which decides whether an effect clause's end is merged (open question 4).
+    The `returned` list and `check_named_clause` concern the name and keep `ends_in_return`.
+
+**The `finally` on a leaving path (found by the verify-claims pass, 2026-11-09).**
+A `continue` or `break` absorbs its types into `loop_exits[-1]` where it stands, which is before the `finally` suite of a `try` around it runs.
+The first check of that suite, from `into_finally`, feeds `boundaries` and not `loop_exits`, so the types the suite leaves on the leaving path reach neither the next pass nor the code after the loop.
+Today a clause's end is merged into the types after the `try`, which the second check of the suite starts from, and that covers a clause; the rule above removes the merge and with it the cover.
+With `x = 0` and `z = 0` before a `for`, `z = risky(i)` in the suite, `z = "s"` and `continue` in the clause, `x = z` in the `finally`, and `print(take(x))` after the loop, today's checker rejects the program ("argument 1 of take() must be int, but 'x' has no known type"), a prototype of the rule alone accepts it with `x` an `int`, and the run fails at the typed slot when the last pass is the failing one.
+The same hole is in the checker today where the `continue` stands in the suite, which no merge covers: a suite of `if i == 0:` over `z = "s"` and `continue`, then `z = 1`, with `x = z` in the `finally` and `print(take(x))` after the loop, is accepted, and the binary fails with "unsupported operand types for -: str and int" inside `take`, the typed-slot failure the checker exists to prevent.
+The enumeration cannot find it, since its alphabet has no loop and no `finally`.
+So the design has a second rule, which stands without the first and closes the hole that exists: after the first check of a `finally` suite, `check_try` absorbs the types it leaves into `loop_exits[-1]` when the `try` is under a loop of the same function.
+A prototype with that line rejects the suite program at the `take(x)` after the loop, keeps the clause program rejected there with the first rule in place as well, and changes the result of no sample and no program of the enumeration at sizes 2 and 3.
+The prototype absorbs for every `try` under a loop; limiting it to a `try` whose suite or clauses hold a `break` or `continue` is a refinement the samples give no reason to make.
+A `raise` needs no such rule, since the first check of the `finally` feeds the `boundaries` of every enclosing `try`.
 
 **A name the clause alone binds.**
 `require_bound` reads `scope.types` for the source-order rule, so a name left out of the types after the `try` would be "name 'w' is not defined" at a later read.
@@ -1098,11 +1112,12 @@ A name the merged types hold keeps the type they give it, so `left` is `int`.
 
 **What changes for a program.**
 A typed slot that refused the name accepts it, and an operator that passed unchecked is checked.
-A program accepted today is rejected under the rule in one case: an operator now sees two known types it refuses, which is the error the runtime reports at that line whenever the line runs.
+A program accepted today is rejected under the rule where a check that lets an unknown type pass now sees a known type it refuses: an operator, and also `len()`, the iterable of a `for`, the test of an `if`, a subscript, and `append` (with `v = []` before the loop, `v = risky(i)` in the suite, and `v = [1]` and `continue` in the clause, `len(v)` after the `try` goes from accepted to "len() needs a list, dict, or str, not int").
+Each is the error the runtime reports at that line whenever the line runs.
 
 **Probed against a prototype (2026-11-09).**
 The rule was patched into a copy of `checker.py` in memory: `leaves`, the branch in `check_try`, and the unknown entries for the names a leaving clause alone binds.
-Over the 140 sample programs the result differs for one, `shop_orders.epy`, whose list of unknown operands goes from line 72 to empty.
+Over the 140 of the 141 sample programs that parse the result differs for one, `shop_orders.epy`, whose list of unknown operands goes from line 72 to empty.
 Over the 49,500 programs of the enumeration at sizes 2 and 3 no result differs, which is expected, since its alphabet has no exception clause.
 The enumeration therefore does not test this rule, and the milestone needs cases of its own.
 
@@ -1843,10 +1858,11 @@ EffectPython/
         *   `runtime_augmented_key.epy` reaches "key 'k' not found" from `d[k] += 1` on a missing key.
 15. **Milestone 15: a clause that leaves (1.15)**
     *   *Designed 2026-11-09, not implemented.* The five open questions of 1.15 are not settled.
-    *   *Implementation (planned):* `checker.py` gains `leaves(stmts)` beside `ends_in_return`; `check_try` keeps the end of a leaving clause out of the types after the `try` and enters each name that clause alone binds with the unknown type; the module docstring's paragraph on `check_try` and the `check_try` item of 2.2 say so.
+    *   *Implementation (planned):* `checker.py` gains `leaves(stmts)` beside `ends_in_return`; `check_try` keeps the end of a leaving clause out of the types after the `try`, enters each name that clause alone binds with the unknown type, and absorbs the types after the first check of a `finally` suite into `loop_exits[-1]` under a loop; the module docstring's paragraph on `check_try` and the `check_try` item of 2.2 say so.
         The change is to how a name's type changes across a suite, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*
         *   `shop_orders.epy` has no unknown operand, and its entry leaves `ORDINARY_UNKNOWNS` in `tests/test_checker.py`; its recorded output does not change.
         *   Accept `last = take(v)` after a `try` whose suite binds `v` and whose clause ends in `continue`, in `break`, or in `raise`; these are rejected today with "argument 1 of take() must be int, but 'v' has no known type".
         *   Still reject `take(last)` after a clause that retypes `last` and continues, `take(v)` in the `finally` of such a `try`, and `print(e)` after it ("name 'e' is unbound after the except clause that bound it"); still accept `print(w)` for a `w` the clause alone binds.
+        *   Reject `print(take(x))` after a loop whose `try` has `x = z` in its `finally` and `z = "s"` before a `continue` or a `break`, in the clause and in the suite; the suite form is accepted today and fails in `take` at runtime.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
