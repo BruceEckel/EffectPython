@@ -140,10 +140,11 @@ after the try sees the suite's end merged with the end of every
 clause that does not return (check_try), while a finally suite is
 checked from every boundary of the suite and of each clause, since
 it runs on every path out of them, and then from the continuing
-paths, types and bound names both, for the code after it. Under a
-loop the types the first check leaves also join the loop's exits,
-since a break or continue in the suite or a clause leaves through
-the finally suite after recording its own types
+paths, types and bound names both, for the code after it. A break
+or continue in the suite or a clause leaves through the finally
+suite after recording its own types, so under a loop the suite is
+checked a third time from the types at those statements, and what
+it leaves joins the loop's exits
 (tests/programs/unreachable_finally_continue.epy). A handle
 statement's clauses start from every boundary of its body, where a
 perform() may suspend it, and the body runs on from any boundary of
@@ -413,6 +414,22 @@ class Pending(object):
         self.changed = changed  # variable name -> type name
         self.carried = carried  # variable name -> True
 
+class Leaving(object):
+    """The types at the break and continue statements under a try
+    with a finally suite, for the loop they leave: the loop_exits
+    entry numbered depth. A break in a nested loop leaves that loop
+    alone and passes through no finally suite of this try."""
+
+    def __init__(self, depth):
+        self.depth = depth
+        self.types = None  # None until a break or continue
+
+    def absorb(self, types):
+        if self.types is None:
+            self.types = types.copy()
+        else:
+            absorb(self.types, types)
+
 class HandlerInfo(object):
     """A handler class as Pass 1 records it: its fields in declaration
     order, with the count that a constructor call must supply, and the
@@ -439,6 +456,7 @@ class Checker(object):
         self.loop_depth = 0   # loops around the statement being checked
         self.boundaries = []  # types at each statement boundary, per suite
         self.loop_exits = []  # types at each break or continue, per loop
+        self.leaving = []     # Leaving of each try with a finally suite
         self.handles = []     # Pending of each enclosing handle statement
         self.fn = None        # the FunctionDef being checked
         self.what = ""        # "function" or "method"
@@ -654,6 +672,7 @@ class Checker(object):
         self.loop_depth = 0
         self.boundaries = []
         self.loop_exits = []
+        self.leaving = []
         self.handles = []
         self.fn = fn
         self.what = what
@@ -705,10 +724,10 @@ class Checker(object):
             self.check_loop_body(stmt.test, stmt.body, scope, effects)
         elif isinstance(stmt, ast.Break):
             self.require_loop(stmt, "'break' outside loop")
-            absorb(self.loop_exits[-1], scope.types)
+            self.leave_loop(scope.types)
         elif isinstance(stmt, ast.Continue):
             self.require_loop(stmt, "'continue' not properly in loop")
-            absorb(self.loop_exits[-1], scope.types)
+            self.leave_loop(scope.types)
         elif isinstance(stmt, ast.For):
             iterable = self.type_of(stmt.iterable, scope, effects)
             if iterable == UNKNOWN or iterable == LIST:
@@ -1063,6 +1082,15 @@ class Checker(object):
         raise InvalidProgram(
             lineno, "%s needs an exception, not %s" % (what, actual))
 
+    def leave_loop(self, types):
+        """Record the types of a path that leaves the innermost loop:
+        in its exits, and in each enclosing try of that loop whose
+        finally suite runs on the way out."""
+        absorb(self.loop_exits[-1], types)
+        for leaving in self.leaving:
+            if leaving.depth == len(self.loop_exits):
+                leaving.absorb(types)
+
     def check_try(self, stmt, scope, effects):
         """The suite's effects, less the classes the clauses catch, plus
         whatever the clauses perform or raise: the formula of a handle
@@ -1080,10 +1108,15 @@ class Checker(object):
         again from the paths that continue, for the code after it,
         with the bound names those paths left, since the first check
         may have unbound a name in the finally suite. A break or
-        continue records its types before the finally suite runs, so
-        under a loop the types the first check leaves join the loop's
-        exits as well, for the next pass and the code after the loop
-        (plan 1.15)."""
+        continue in the suite or a clause records its types before the
+        finally suite runs, so the suite is checked a third time from
+        the types at those statements, and what it leaves joins the
+        loop's exits (leave_loop), for the next pass and the code
+        after the loop (plan 1.15)."""
+        leaving = None
+        if len(stmt.finalbody) > 0 and len(self.loop_exits) > 0:
+            leaving = Leaving(len(self.loop_exits))
+            self.leaving.append(leaving)
         body_effects = EffectSet()
         entry = self.check_suite(stmt.body, scope, body_effects)
         after = scope.types
@@ -1107,6 +1140,8 @@ class Checker(object):
             else:
                 after = merge_types(after, scope.types)
             absorb(into_finally, boundaries)
+        if leaving is not None:
+            self.leaving.pop()
         for name in body_effects.names:
             if name in self.exceptions and (name in caught
                                             or EXCEPTION in caught):
@@ -1119,8 +1154,15 @@ class Checker(object):
                 scope.unbound[name] = True
             first = len(self.unknowns)
             self.check_block(stmt.finalbody, scope, effects)
-            if len(self.loop_exits) > 0:
-                absorb(self.loop_exits[-1], scope.types)
+            if leaving is not None and leaving.types is not None:
+                scope.unbound = unbound.copy()
+                for name in returned:
+                    scope.unbound[name] = True
+                scope.types = leaving.types
+                third = len(self.unknowns)
+                self.check_block(stmt.finalbody, scope, effects)
+                self.leave_loop(scope.types)
+                self._drop_repeats(first, third)
             scope.unbound = unbound
             scope.types = after
             second = len(self.unknowns)

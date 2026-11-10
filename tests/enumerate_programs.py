@@ -16,6 +16,23 @@ and an Ask clause, which this module runs as a script:
 
     pypy2 tests/enumerate_programs.py 2 4
 
+loop_bodies(n) yields the second alphabet's programs, which the
+first cannot reach: a for over range(2) whose body is a try with a
+Boom clause and an optional finally, followed by an optional
+take_int(x) or take_int(z) after the loop. Its n statements are
+split among the suite (at least one), the clause (pass when it gets
+none), and the finally (absent when it gets none), from assignments
+of an int or a str to x and z, a copy x = z, z = risky(i), which
+raises Boom on the first pass, continue, break, a guarded form of
+each on the second pass, the guarded form with z = "s" before it,
+and take_int(x) and take_int(z). The last two make the finally hole
+of plan 1.15 four statements long: a guarded z = "s" and continue,
+then z = 1 in the suite, z = 1 in the clause, and x = z in the
+finally, with take_int(x) after the loop. The script runs it with
+"loop" first:
+
+    pypy2 tests/enumerate_programs.py loop 2 3
+
 The lengths are inclusive; 2 to 4 is 130,816 programs and took eight
 minutes on 2026-11-09, with none failing. The binary is
 ./effectpython-c, which must be translated from the source being
@@ -112,6 +129,55 @@ def bodies(n):
                 ask = clause('e', 'Ask.get', assign, False)
                 yield program(stmts, [log, ask])
 
+LOOP_PRELUDE = '''class Boom(Exception):
+    pass
+
+def take_int(n: int) -> int:
+    return n - 1
+
+def risky(i: int) -> int / [Boom]:
+    if i == 0:
+        raise Boom("b")
+    return i
+
+def main() -> int / []:
+    x = 0
+    z = 0
+    for i in range(2):
+        try:
+'''
+LOOP_STMTS = [
+    'x = 1', 'x = "s"', 'z = 1', 'z = "s"', 'x = z', 'z = risky(i)',
+    'continue', 'break', 'if i == 1:\n    continue',
+    'if i == 1:\n    break', 'take_int(x)', 'take_int(z)',
+    'if i == 1:\n    z = "s"\n    continue',
+    'if i == 1:\n    z = "s"\n    break']
+LOOP_TAILS = [None, 'take_int(x)', 'take_int(z)']
+
+def block(stmts, pad):
+    lines = []
+    for stmt in stmts:
+        lines.extend(pad + line for line in stmt.split('\n'))
+    return '\n'.join(lines) + '\n'
+
+def loop_program(suite, clause, final, tail):
+    pad = ' ' * 12
+    text = LOOP_PRELUDE + block(suite, pad)
+    text += '        except Boom:\n' + block(clause or ['pass'], pad)
+    if final:
+        text += '        finally:\n' + block(final, pad)
+    if tail is not None:
+        text += '    %s\n' % tail
+    return text + '    return 0\n'
+
+def loop_bodies(n):
+    for s in range(1, n + 1):
+        for c in range(n - s + 1):
+            for stmts in itertools.product(LOOP_STMTS, repeat=n):
+                for tail in LOOP_TAILS:
+                    yield loop_program(stmts[:s], stmts[s:s + c],
+                                       stmts[s + c:], tail)
+
 def unknown_operands(text):
     """The operands the checker left unknown in an accepted program,
     or None if the checker rejects it."""
@@ -157,8 +223,13 @@ def run(binary, texts, directory):
     return passed, failures, unknown_operand, other
 
 def main(argv):
+    generate = bodies
+    if argv[1] == 'loop':
+        generate = loop_bodies
+        argv = argv[1:]
     low, high = int(argv[1]), int(argv[2])
-    texts = itertools.chain(*[bodies(n) for n in range(low, high + 1)])
+    texts = itertools.chain(*[generate(n)
+                              for n in range(low, high + 1)])
     directory = tempfile.mkdtemp()
     passed, failures, unknown_operand, other = run(
         './effectpython-c', texts, directory)
