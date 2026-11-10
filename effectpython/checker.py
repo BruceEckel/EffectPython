@@ -140,7 +140,11 @@ after the try sees the suite's end merged with the end of every
 clause that does not return (check_try), while a finally suite is
 checked from every boundary of the suite and of each clause, since
 it runs on every path out of them, and then from the continuing
-paths, types and bound names both, for the code after it. A handle
+paths, types and bound names both, for the code after it. Under a
+loop the types the first check leaves also join the loop's exits,
+since a break or continue in the suite or a clause leaves through
+the finally suite after recording its own types
+(tests/programs/unreachable_finally_continue.epy). A handle
 statement's clauses start from every boundary of its body, where a
 perform() may suspend it, and the body runs on from any boundary of
 a clause where resume() may stand. What the clauses did on one pass
@@ -1075,7 +1079,11 @@ class Checker(object):
         returned unbound, since exec_clauses deleted it, and then
         again from the paths that continue, for the code after it,
         with the bound names those paths left, since the first check
-        may have unbound a name in the finally suite."""
+        may have unbound a name in the finally suite. A break or
+        continue records its types before the finally suite runs, so
+        under a loop the types the first check leaves join the loop's
+        exits as well, for the next pass and the code after the loop
+        (plan 1.15)."""
         body_effects = EffectSet()
         entry = self.check_suite(stmt.body, scope, body_effects)
         after = scope.types
@@ -1111,6 +1119,8 @@ class Checker(object):
                 scope.unbound[name] = True
             first = len(self.unknowns)
             self.check_block(stmt.finalbody, scope, effects)
+            if len(self.loop_exits) > 0:
+                absorb(self.loop_exits[-1], scope.types)
             scope.unbound = unbound
             scope.types = after
             second = len(self.unknowns)

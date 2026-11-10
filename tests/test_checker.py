@@ -1462,6 +1462,29 @@ def test_rejects_a_loop_name_finally_read_or_nested_list(body, msg):
         check_source(body)
     assert info.value.msg == msg
 
+LEAVING = ('class E(Exception): ...\n'
+           'def take(n: int) -> int:\n    return n - 1\n'
+           'def risky(i: int) -> int / [E]:\n    if i == 1:\n'
+           '        raise E()\n    return i\n'
+           'def main() -> int / []:\n    x = 0\n    z = 0\n'
+           '    for i in range(2):\n        try:\n')
+IN_SUITE = ('            if i == 1:\n                z = "s"\n'
+            '                %s\n            z = 1\n')
+IN_CLAUSE = ('            z = risky(i)\n        except E:\n'
+             '            z = "s"\n            %s\n')
+COPIED = ('        finally:\n            x = z\n'
+          '    print(take(x))\n    return 0\n')
+
+@pytest.mark.parametrize('form', [IN_SUITE, IN_CLAUSE],
+                         ids=['suite', 'clause'])
+@pytest.mark.parametrize('leave', ['continue', 'break'])
+def test_a_finally_on_a_leaving_path_reaches_the_loop_exits(form, leave):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(LEAVING + form % leave + COPIED)
+    assert info.value.msg == (
+        "line 26: argument 1 of take() must be int, but 'x' has no "
+        "known type")
+
 UNSURE = ('    if 1 == 1:\n        x = 1\n    else:\n        x = "s"\n')
 
 HN = ('class X(Effect):\n    def a() -> int: ...\n'

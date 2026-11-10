@@ -1,0 +1,2 @@
+exit 1
+error: line 21: argument 1 of take() must be int, but 'x' has no known type

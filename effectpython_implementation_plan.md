@@ -1857,12 +1857,17 @@ EffectPython/
         *   Reject `x += 1` with `x` unbound ("name 'x' is not defined"), `s += 1` with `s` a `str` ("unsupported operand types for +: str and int"), `xs += [1]` ("unsupported operand types for +: list[int] and list[int]"), `flag += True` ("unsupported operand types for +: bool and bool"), `d[k] += 1` with `d` a `dict[str, str]`, `d[1] += 1` ("a dict key must be str, not int"), `f() += 1` ("cannot assign to this expression"), and a `perform()` in the value with no effect in the row; accept `s += "x"`, `self.n += 1`, `xs[i] += 1`, `d[k] += 1` with `d` a `dict[str, int]`, and `x //= 2`.
         *   `runtime_augmented_key.epy` reaches "key 'k' not found" from `d[k] += 1` on a missing key.
 15. **Milestone 15: a clause that leaves (1.15)**
-    *   *Designed 2026-11-09, not implemented.* The five open questions of 1.15 are not settled.
-    *   *Implementation (planned):* `checker.py` gains `leaves(stmts)` beside `ends_in_return`; `check_try` keeps the end of a leaving clause out of the types after the `try`, enters each name that clause alone binds with the unknown type, and absorbs the types after the first check of a `finally` suite into `loop_exits[-1]` under a loop; the module docstring's paragraph on `check_try` and the `check_try` item of 2.2 say so.
+    *   *Designed 2026-11-09, the second rule implemented.* The five open questions of 1.15 are not settled.
+    *   *Done 2026-11-09: the second rule, the `finally` on a leaving path.*
+        After the first check of a `finally` suite, `check_try` absorbs `scope.types` into `loop_exits[-1]` when `loop_exits` is not empty, which holds when the `try` is under a loop of the same function, since `check_function` resets the list.
+        `tests/programs/unreachable_finally_continue.epy` is the suite form with `continue`, and `tests/test_checker.py` rejects the suite and the clause forms with `continue` and with `break`.
+        The enumeration at sizes 2 and 3 gave the counts of the run before the change.
+        The first rule (`leaves` and the names a leaving clause alone binds) is not implemented.
+    *   *Implementation (planned):* `checker.py` gains `leaves(stmts)` beside `ends_in_return`; `check_try` keeps the end of a leaving clause out of the types after the `try`, enters each name that clause alone binds with the unknown type, and (done) absorbs the types after the first check of a `finally` suite into `loop_exits[-1]` under a loop; the module docstring's paragraph on `check_try` and the `check_try` item of 2.2 say so.
         The change is to how a name's type changes across a suite, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*
         *   `shop_orders.epy` has no unknown operand, and its entry leaves `ORDINARY_UNKNOWNS` in `tests/test_checker.py`; its recorded output does not change.
         *   Accept `last = take(v)` after a `try` whose suite binds `v` and whose clause ends in `continue`, in `break`, or in `raise`; these are rejected today with "argument 1 of take() must be int, but 'v' has no known type".
         *   Still reject `take(last)` after a clause that retypes `last` and continues, `take(v)` in the `finally` of such a `try`, and `print(e)` after it ("name 'e' is unbound after the except clause that bound it"); still accept `print(w)` for a `w` the clause alone binds.
-        *   Reject `print(take(x))` after a loop whose `try` has `x = z` in its `finally` and `z = "s"` before a `continue` or a `break`, in the clause and in the suite; the suite form is accepted today and fails in `take` at runtime.
+        *   Reject `print(take(x))` after a loop whose `try` has `x = z` in its `finally` and `z = "s"` before a `continue` or a `break`, in the clause and in the suite (done; the suite form was accepted before and failed in `take` at runtime).
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.

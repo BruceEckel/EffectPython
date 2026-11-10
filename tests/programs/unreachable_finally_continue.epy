@@ -1,0 +1,22 @@
+# The continue leaves the suite with z a str, and the finally runs on
+# the way out and copies it into x. check_try absorbs the types the
+# first check of the finally leaves into the loop's exits, so the next
+# pass and the code after the loop see x unknown, and the typed slot
+# refuses it; take() subtracting 1 from a str is unreachable here.
+
+def take(n: int) -> int:
+    return n - 1
+
+def main() -> int:
+    x = 0
+    z = 0
+    for i in range(2):
+        try:
+            if i == 1:
+                z = "s"
+                continue
+            z = 1
+        finally:
+            x = z
+    print(take(x))
+    return 0
