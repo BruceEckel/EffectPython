@@ -20,6 +20,18 @@ The lengths are inclusive; 2 to 4 is 130,816 programs and took eight
 minutes on 2026-11-09, with none failing. The binary is
 ./effectpython-c, which must be translated from the source being
 checked.
+
+run() sorts an accepted program that fails at runtime into one of
+three counts. A typed-slot failure is a checker bug. A type error,
+"unsupported operand types", on an operand the checker left unknown
+(Checker.unknowns) is the remainder that plan 2.2 leaves to the
+runtime by design. If the checker noted no unknown operand in such a
+program, the checker saw its operands as known, so run() reports it
+with the typed-slot failures. Any other runtime error is "list index
+out of range" from xs[0] while xs is still empty, which the checker
+does not claim to settle. Sizes 2 and 3 on 2026-11-09 were 49,500
+programs: 39,831 accepted, no typed-slot failure, 172 type errors on
+an unknown operand, and 18,515 other runtime errors.
 """
 import itertools
 import os
@@ -27,7 +39,7 @@ import subprocess
 import sys
 import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from effectpython.checker import check
+from effectpython.checker import Checker
 from effectpython.errors import InvalidProgram, UnhandledEffectError
 from effectpython.parser import parse
 
@@ -100,22 +112,29 @@ def bodies(n):
                 ask = clause('e', 'Ask.get', assign, False)
                 yield program(stmts, [log, ask])
 
-def accepted(text):
+def unknown_operands(text):
+    """The operands the checker left unknown in an accepted program,
+    or None if the checker rejects it."""
+    checker = Checker(parse(text))
     try:
-        check(parse(text))
+        checker.check()
     except (InvalidProgram, UnhandledEffectError):
-        return False
-    return True
+        return None
+    return checker.unknowns
 
 def run(binary, texts, directory):
     """The accepted programs, the ones among them that fail at a typed
-    slot (each with its output), and the count that fail elsewhere at
-    runtime, on a name the checker left unknown."""
+    slot or with a type error on operands all known (each with its
+    output), the count that fail with a type error on an operand the
+    checker left unknown, and the count that fail with any other
+    runtime error."""
     passed = []
     failures = []
-    runtime_only = 0
+    unknown_operand = 0
+    other = 0
     for i, text in enumerate(texts):
-        if not accepted(text):
+        unknowns = unknown_operands(text)
+        if unknowns is None:
             continue
         path = os.path.join(directory, 'p%d.epy' % i)
         with open(path, 'w') as f:
@@ -128,18 +147,24 @@ def run(binary, texts, directory):
             continue
         if any(words in output for words in TYPE_ERRORS):
             failures.append(text + output)
+        elif 'unsupported operand types' in output:
+            if unknowns:
+                unknown_operand += 1
+            else:
+                failures.append(text + output)
         else:
-            runtime_only += 1
-    return passed, failures, runtime_only
+            other += 1
+    return passed, failures, unknown_operand, other
 
 def main(argv):
     low, high = int(argv[1]), int(argv[2])
     texts = itertools.chain(*[bodies(n) for n in range(low, high + 1)])
     directory = tempfile.mkdtemp()
-    passed, failures, runtime_only = run('./effectpython-c', texts,
-                                         directory)
-    print 'accepted %d, typed-slot failures %d, runtime-only %d' % (
-        len(passed), len(failures), runtime_only)
+    passed, failures, unknown_operand, other = run(
+        './effectpython-c', texts, directory)
+    print ('accepted %d, typed-slot failures %d, unknown-operand type '
+           'errors %d, other runtime errors %d' % (
+               len(passed), len(failures), unknown_operand, other))
     for failure in failures:
         print failure
     return len(failures)

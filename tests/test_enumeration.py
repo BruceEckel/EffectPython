@@ -12,7 +12,6 @@ Run with:  EFFECTPYTHON_BINARY=./effectpython-c pypy2 -m pytest tests/test_enume
 from enumerate_programs import run, triples
 
 def test_no_accepted_program_fails_with_a_type_error(binary, tmp_path):
-    passed, failures, runtime_only = run(binary, triples(),
-                                         str(tmp_path))
+    passed, failures, _, _ = run(binary, triples(), str(tmp_path))
     assert failures == []
     assert len(passed) > 200
