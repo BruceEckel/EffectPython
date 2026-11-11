@@ -1150,6 +1150,85 @@ Probed against the checker with `v = 1` in the loop before the `if`, `v = "s"` a
 What the arm did still reaches the paths it takes: with `v = 1` before the loop instead, `take(v)` after the loop stays rejected for `continue` and `break` through `loop_exits`; a `raise` in an arm under a `try` of the same function reaches that `try`'s clauses and the code after it through `boundaries`; and a `return` in an arm under a `try` reaches its `finally` the same way.
 A `raise` or a `return` in an arm with no `try` around it leaves the function, so `take(v)` after the loop is accepted there, as is `take(last)` after a clause that retypes `last` and raises.
 
+
+### 1.16 `None` and optional types (designed 2026-11-11, not implemented)
+
+`settings_layers.epy` is the second sample written in Python and then ported, and the first with a lookup that may miss without that being an error, which is what the `None` note in 2.2 said to wait for.
+The Python version has two:
+
+```python
+    def get(self, key: str) -> str | None:
+        value = self.values.get(key)
+        if value is not None:
+            self.hits += 1
+        return value
+```
+
+```python
+    timeout = find("timeout", layers)
+    print("timeout", "unset" if timeout is None else timeout[0])
+```
+
+The port has neither `None` nor a miss that is a value.
+Each layer is a handler that performs `Lookup.get` outward when it lacks the key, the outermost clause throws `Missing` into the body (1.7), and `address()` and `main()` catch it where the Python version tests `is None`.
+The port's output matches the Python version's line for line, so the dialect can do the job; what it cannot do is hand a miss back as a value.
+The port's larger loss is the pair `find()` returned, the value with its layer's name, for which `Lookup.source` is a second operation that walks the layers again; that is a tuple and not this section (open question 1).
+
+**Today (probed against the binary, 2026-11-11).**
+`None` is an ordinary name: `x = None` is "name 'None' is not defined", and `None = 1` is accepted.
+`x is None` and `x is not None` are "line 11, column 10: unexpected 'is'", and `-> str | None` or a parameter `s: str | None` is "unexpected character '|'".
+The type `None` exists: a bare `return`, and a call to a function declared `-> None`, have it, `x = nothing()` binds `x` to it, and `print(x)` prints `None`.
+A value of that type is refused by a typed slot ("argument 1 of take() must be int, not None"), by an f-string field ("an f-string field needs an int, str, or bool, not None"), by `str()` ("str() needs an int, str, or bool, not None"), by an `if` ("if needs a bool, not None"), and by every operator, `==` included ("unsupported operand types for ==: None and None").
+A list literal takes it: `xs = [x]` prints `[None]`, which the element rule of 1.9 should refuse and does not.
+A name that is `None` on one path and a `str` on another is unknown, as any two types are.
+
+**Syntax.**
+`None` and `is` become keywords.
+`None` is an expression, a `NoneLiteral` node, and a type, so `-> None` still parses.
+The type form `<T> | None`, with `T` one of `int`, `str`, and `bool` and `None` on the right alone, may stand wherever a type is written: a parameter, a return, an operation's parameter or return.
+`<arith> is None` and `<arith> is not None` join the comparison layer beside `in` and `not in`, as an `IsNone` node with a `negated` flag; `is` between two other values has no place in the dialect and is a syntax error.
+
+**Types.**
+`matches(actual, "T | None")` holds for `T`, for `None`, and for `T | None`; `matches("T | None", "T")` does not, so a typed slot refuses an optional as it refuses `None` today, in the same words with the type's name: "argument 1 of take() must be int, not int | None".
+`merged` gains one level: `T` and `None` give `T | None`, and `T | None` with `T`, with `None`, or with itself stays `T | None`; any other pair is unknown as before.
+A name assigned `None` on one path and a `str` on another therefore stays known, and every fixpoint inherits that through `merged`.
+An optional takes no operator, `==` and `!=` included, no subscript, no `len()`, no `str()`, no f-string field, and no `for`; `print()` takes it, as it takes `None` today.
+`x is None` is `bool`, and its operand may have any type.
+
+**Narrowing.**
+Where the test of an `if` is `<name> is None` or `<name> is not None` and the name is a local variable, the checker retypes the name for each arm: in the arm where it is `None` it has the type `None`, and in the other a `T | None` becomes `T`.
+A name of unknown type is `None` in the one arm and stays unknown in the other; a name of any other type is not retyped.
+The retyping is not an assignment and does not go through `scope.set_type`, so a handle clause in which it stands does not count the name among those it wrote.
+The guard clause needs no rule of its own: after `if x is None:` over a `return`, `continue`, `break`, or `raise`, Milestone 15 gives the code after the `if` the other arm's types, in which `x` is `T`.
+A perform point in a narrowed arm widens the name again when a clause assigns it, by the rule of 2.2 as it stands.
+
+**Runtime.**
+`NoneLiteral` evaluates to `w_None`, and `IsNone` compares its operand's identity with `w_None`.
+Nothing else changes: `W_None` and its `str()` exist.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether `None` comes before the tuple.*
+    The port lost more to the missing pair than to the missing `None`, and the Python `find()` needs both, `tuple[str, str] | None`.
+    *The design takes `None` first: it is the smaller of the two, Milestone 15 has put the guard clause in place, and a tuple that may be absent needs it.*
+2.  *Whether `==` and `!=` take an optional.*
+    CPython compares anything, and `x == "a"` on an optional is common.
+    The runtime refuses `==` between `None` and anything today.
+    *The design refuses them: `is None` is the one test, and after it the name has a type `==` takes.*
+3.  *Whether `not`, `and`, and `while` narrow.*
+    `if x is not None and len(x) > 0:` is the form Python writes, and it needs the right operand of `and` checked from narrowed types.
+    *The design narrows at an `if` (and so an `elif`) whose whole test is the one comparison, and leaves the rest until a program has the form; the nested `if` says the same in one more line.*
+4.  *Whether a handler class field may be optional.*
+    `FIELD_TYPES` is `int` and `str`, with list and dict types beside them.
+    *The design leaves fields as they are.*
+5.  *Whether a list or dict type may be optional, and whether `None` may be an element.*
+    *The design keeps `T` to the three scalars, and closes the hole above: a list literal, an `append`, and a dict value refuse `None` and an optional with the words of 1.9, "list elements must be int, str, or bool".*
+6.  *Whether a function declared `-> T | None` may reach its end without a `return`.*
+    CPython returns `None` there.
+    *The design keeps `always_returns` as it is, so the function writes `return None`: the rule that caught a forgotten `return` should not be switched off by the optional.*
+7.  *Whether `x is None` is refused where `x` can never be `None`.*
+    *The design accepts it, as CPython does; the test is `bool` and nothing is narrowed.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1245,7 +1324,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `IndexAugAssign` (1.14; Milestone 14, 2026-11-09) holds `check_index`'s element or value type and the value's type to `check_operands` with the element on the left (`check_index_aug_assign`); a name or a field target arrives as the assignment it means and needs no rule.
         *   `BoolOp` and `Not` (1.11; Milestone 11, 2026-11-08) have the type `bool`, and their operands, like the test of an `IfNode` or a `While`, must be `bool` where the type is known, else "and needs a bool, not int" (`require_bool`); both operands' effects count, though the runtime may skip the right one.
         *   Lists (1.9; Milestone 9, 2026-11-07): a `ListLiteral` has the type `list[T]` of its elements, which must share one type, or the element-less `list` when it is empty, which `matches` accepts for any list type; `Index` has the element type and needs an `int` index; `IndexAssign` and `append` need a value of the element type, and a name holding `[]` takes the element type of its first `append`; `len()` of a list or `str` is `int`, `str()` of a scalar is `str`, and `range()` outside a `for` is rejected; `For` binds its name to the iterable's element type and `ForRange` to `int`, each an assignment for the `Name` rule, and both union the suite's effects; `==` and `!=` are the operators of a list type; and `len`, `str`, and `range` join `print` as names a function cannot take.
-        *   *`None` and optional types (noted 2026-11-09, not implemented).*
+        *   *`None` and optional types (noted 2026-11-09; designed in 1.16, 2026-11-11, not implemented).*
             Today `None` is the type of a bare `return`, of `resume()`, `throw()`, and `append`, and of a call to a function declared `-> None`, so `x = f()` binds `x` to `None` and `print(x)` prints `None` through `W_None.str()` (`w_None` in `model.py`); the literal `None` is "name 'None' is not defined", there is no `is`, and no type names an optional.
             The survey of 2026-11-09 found four lines in two programs where Python would write `None`: `try_around_perform.epy`'s `contents()` returns `""` for a path it does not know and `read_or_default` tests `config == ""` to raise `NotFound`, and `raise_in_body.epy`'s clause resumes `""` for the body to test the same way.
             An optional needs: a `None` keyword and a `NoneLiteral` node of type `None`; a `|` token and the type form `int | None`, `str | None`, or `bool | None` wherever a type is written, with `None` on the right alone; `matches` accepting `str` and `None` for `str | None`; an `is` keyword and an `Is` node with a `negated` flag whose right operand is `None` alone, since `is` between other values has no place in the dialect; an optional accepting no operator, index, field, or `len()`, so a value must be narrowed first;
@@ -1887,4 +1966,14 @@ EffectPython/
         *   Accept `last = take(v)` after a `try` whose suite binds `v` and whose clause ends in `continue`, in `break`, or in `raise`; these are rejected today with "argument 1 of take() must be int, but 'v' has no known type".
         *   Still reject `take(last)` after a clause that retypes `last` and continues, `take(v)` in the `finally` of such a `try`, and `print(e)` after it ("name 'e' is unbound after the except clause that bound it"); still accept `print(w)` for a `w` the clause alone binds.
         *   Reject `print(take(x))` after a loop whose `try` has `x = z` in its `finally` and `z = "s"` before a `continue` or a `break`, in the clause and in the suite (done; the suite form was accepted before and failed in `take` at runtime).
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+16. **Milestone 16: `None` and optional types (1.16)**
+    *   *Designed 2026-11-11, not implemented.* The seven open questions of 1.16 are not settled.
+    *   *Implementation (planned), in the order of Milestone 5:* the lexer and parser with tests (`None`, `is`, `|`, `NoneLiteral`, `IsNone`, the optional type form), the checker with tests (`matches`, `merged`, the refusals, narrowing in `check_if`), then the runtime (`NoneLiteral`, `IsNone`).
+        The change is to `merged`, which every fixpoint uses, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   A sample with the job of `settings_layers.epy` in which `Lookup.get` returns `str | None`, the outermost clause resumes `None`, and `address()` and `main()` test `is None`; its output is that of `settings_layers.epy`, which stays as the throw form.
+        *   Accept `take(x)` in the arm of `if x is not None:` and after the guard `if x is None:` over `return`, for an `x` of type `int | None`; reject it outside them with "argument 1 of take() must be int, not int | None".
+        *   Reject an operator, `==`, a subscript, `len()`, `str()`, an f-string field, and a `for` on an optional, and `[x]` for an `x` of type `None`.
+        *   `None = 1` and `x is y` are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
