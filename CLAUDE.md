@@ -11,6 +11,8 @@ read the relevant section before changing the code it describes.
   It runs under `pypy2` only.
 - The `.epy` programs the interpreter reads are Python 3 syntax.
   The host parses them with its own `rply` grammar and never imports them.
+- `tools/` is the `epy` task runner and is ordinary Python 3 (3.14 or later), outside both dialects:
+  the Thinking in Python skill applies to it in full, and `uvx ruff check tools` and `uvx --with pytest ty check tools` pass.
 
 ## Style: the Thinking in Python skill
 
@@ -41,6 +43,11 @@ every error carries a `msg` attribute instead.
 Applies to `.epy` sample programs as far as the dialect implements the construct.
 
 ## Toolchain
+
+`epy` (`tools/epy.py`, installed with `uv tool install --editable .`) wraps the commands below:
+`epy setup` installs the toolchain, `epy doctor` reports on it, `epy test` and `epy enumerate` translate first when the binary is stale,
+`epy verify` is build, test, and the enumeration at sizes 2 and 3, and `epy <program>` runs a sample by name.
+Its own tests run with `uv run --with pytest pytest tools`.
 
 The only Python 2 host is PyPy 8.0.1 at `~/.local/bin/pypy2`, with pytest 4.6.11 and rply 0.7.8 importable.
 The RPython source tree is `~/pypy/pypy2.7-v8.0.1-src`. No CPython 2.7 is installed.

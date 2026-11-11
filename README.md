@@ -194,8 +194,35 @@ and `load` catches it or declares it.
 A handler class method raises a class its operation declares to the same effect;
 any other exception a method raises abandons the body as before.
 
-## Installing the toolchain
+## The `epy` runner
 
+`epy` is a small task runner that hides the commands below.
+It needs [uv](https://docs.astral.sh/uv/), and one line installs it from the repository root:
+
+```
+uv tool install --editable .
+```
+
+```
+epy setup                # install PyPy 2.7, its source tree, pytest, and rply
+epy doctor               # report what is installed and what is missing
+epy fib                  # run tests/programs/fib.epy
+epy my_program.epy       # run a program of your own
+epy check shop_orders    # parse and check without running, in under a second
+epy programs             # list the samples; `epy programs settings` filters
+epy test                 # the tests, through the translated binary
+epy enumerate            # the checker's soundness enumeration, sizes 2 and 3
+epy verify               # build, test, and enumerate: what a commit needs
+```
+
+A task that needs the binary translates it first when a file under `effectpython/` is newer, which takes about a minute, so there is no separate build step to remember; `epy build --force` translates regardless.
+`epy setup` downloads the two PyPy archives, holds them to the checksums pypy.org publishes, and installs under `~/pypy` and `~/.local/bin`.
+The C compiler is the one part it cannot install, since that needs `sudo`; `epy doctor` prints the `apt-get` line when `gcc` is missing.
+`epy` is Python 3 (`tools/epy.py`), the one part of the repository that is; its own tests run with `uv run --with pytest pytest tools`.
+
+## Installing the toolchain by hand
+
+`epy setup` does these steps.
 The host is PyPy 2.7 v8.0.1 with its own source tree, which holds RPython, plus pytest 4.6.11, rply 0.7.8, and a C compiler for the translation.
 These steps were run on Ubuntu 26.04 under WSL2 on 2026-11-11 and put everything where `CLAUDE.md` and the commands below expect it.
 
@@ -220,8 +247,9 @@ pypy2 -m pip install pytest==4.6.11 rply==0.7.8
 The release ships as `.tar.gz`: the `.tar.bz2` names of earlier PyPy releases give a 404.
 No CPython 2.7 is needed, and PyPy's pip warns that Python 2 is past its end of life, which is expected.
 
-## Running it
+## Running it by hand
 
+`epy test`, `epy build`, and `epy <program>` run these commands.
 The host is PyPy 2 (`pypy2`) with the RPython source tree beside it, as installed above;
 see `CLAUDE.md` for the paths and versions.
 

@@ -1,0 +1,36 @@
+# The `epy` task runner (tools/epy.py), the one part of the repository
+# in Python 3. `uv tool install --editable .` puts `epy` on PATH; the
+# interpreter itself is RPython and has no package to install.
+[project]
+name = "effectpython-tools"
+version = "0"
+description = "The epy task runner for the EffectPython interpreter."
+requires-python = ">=3.14"
+
+[project.scripts]
+epy = "tools.epy:main"
+
+[build-system]
+requires = ["uv_build>=0.9,<1"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "tools"
+module-root = ""
+
+# The import block stays contiguous, as the Thinking in Python style
+# has it. tools/ alone is linted: the rest of the repository is
+# Python 2 syntax.
+[tool.ruff]
+include = ["tools/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "N", "I", "UP", "A"]
+# An exception name needs no Error suffix
+ignore = ["N818"]
+
+[tool.ruff.lint.isort]
+no-lines-before = [
+    "future", "standard-library", "third-party", "first-party", "local-folder",
+]
+lines-after-imports = 1
