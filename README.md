@@ -194,9 +194,35 @@ and `load` catches it or declares it.
 A handler class method raises a class its operation declares to the same effect;
 any other exception a method raises abandons the body as before.
 
+## Installing the toolchain
+
+The host is PyPy 2.7 v8.0.1 with its own source tree, which holds RPython, plus pytest 4.6.11, rply 0.7.8, and a C compiler for the translation.
+These steps were run on Ubuntu 26.04 under WSL2 on 2026-11-11 and put everything where `CLAUDE.md` and the commands below expect it.
+
+```
+sudo apt-get install -y build-essential libffi-dev pkg-config
+
+mkdir -p ~/pypy ~/.local/bin
+cd ~/pypy
+curl -LO https://downloads.python.org/pypy/pypy2.7-v8.0.1-linux64.tar.gz
+curl -LO https://downloads.python.org/pypy/pypy2.7-v8.0.1-src.tar.gz
+sha256sum pypy2.7-v8.0.1-*.tar.gz    # compare with https://pypy.org/checksums.html
+tar xzf pypy2.7-v8.0.1-linux64.tar.gz
+tar xzf pypy2.7-v8.0.1-src.tar.gz
+ln -s ~/pypy/pypy2.7-v8.0.1-linux64/bin/pypy ~/.local/bin/pypy2
+
+pypy2 -m ensurepip
+pypy2 -m pip install pytest==4.6.11 rply==0.7.8
+```
+
+`~/.local/bin` must be on `PATH`.
+`build-essential` supplies the `gcc` and `make` that the translation calls; `libffi-dev` and `pkg-config` were installed with it, and whether the translation needs them was not tested.
+The release ships as `.tar.gz`: the `.tar.bz2` names of earlier PyPy releases give a 404.
+No CPython 2.7 is needed, and PyPy's pip warns that Python 2 is past its end of life, which is expected.
+
 ## Running it
 
-The host is PyPy 2 (`pypy2`) with the RPython source tree checked out beside it;
+The host is PyPy 2 (`pypy2`) with the RPython source tree beside it, as installed above;
 see `CLAUDE.md` for the paths and versions.
 
 ```
