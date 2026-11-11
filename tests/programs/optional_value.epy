@@ -1,0 +1,40 @@
+# Milestone 16: None and optional types (plan 1.16). An operation that
+# returns str | None, which the clause resumes with a value or with
+# None; the guard `if value is None: return` after which the name is
+# a str; an empty value, which is not None; and a name that starts as
+# None before a loop and holds the longest word after it.
+
+from effectpython import Effect, perform, handle
+
+class Env(Effect):
+    def get(name: str) -> str | None: ...
+
+def setting(name: str, fallback: str) -> str / [Env]:
+    value = perform(Env.get(name))
+    if value is None:
+        return fallback
+    return value
+
+def longest(words: list[str]) -> str | None:
+    best = None
+    for word in words:
+        if best is None:
+            best = word
+        elif len(word) > len(best):
+            best = word
+    return best
+
+def main() -> int / []:
+    values = {"HOST": "db.internal", "PREFIX": ""}
+    try:
+        with handle(Env):
+            print(setting("HOST", "localhost"), setting("PORT", "8080"))
+            prefix = perform(Env.get("PREFIX"))
+            print(prefix is None, perform(Env.get("USER")))
+    except Env.get as eff:
+        if eff.name in values:
+            eff.resume(values[eff.name])
+        else:
+            eff.resume(None)
+    print(longest(["ab", "abcd", "abc"]), longest([]))
+    return 0

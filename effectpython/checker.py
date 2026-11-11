@@ -86,6 +86,26 @@ assigned to another name loses its type: the checker does not track
 which names share a list, so an append through either name would
 leave the other with a stale type.
 
+None is a type and a value, and int | None, str | None, and
+bool | None are the optional types (plan 1.16). A slot of type
+T | None takes a T, a None, or the optional (matches), and a name
+two paths leave as a scalar T and as None is T | None where the
+paths meet (merged), so the lattice has one level between a type and
+unknown. An optional is refused wherever a T is wanted: a typed
+slot, an operator, == included, a subscript, len(), str(), an
+f-string field, a for, and a test; print() takes it. A list element
+or a dict value is no None and no optional (require_scalar). The
+test `name is None` or `name is not None` of an if retypes a local
+name for each branch (narrow): None where it is None, and T in the
+other for a T | None. Where the name's type is None the other branch
+cannot run under these types, so it is checked with the name unknown
+and kept out of the types after the if, as a branch that leaves is;
+the first pass over a loop meets `best = None` before it that way
+(tests/programs/optional_value.epy). The guard `if x is None:
+return` needs no rule of its own, since the branch leaves. Narrowing
+is a retyping on a path, so a perform point in a narrowed branch
+widens the name again where a clause assigns it.
+
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
 return type is not None must return or raise an exception on every
@@ -210,6 +230,8 @@ OPERATORS = {
 }
 BUILTINS = ["print", "len", "str", "range"]
 EXCEPTION = "Exception"
+NONE = "None"
+OPTIONAL = " | None"
 OPERANDS = 0
 BOOL = 1
 INDEX = 2
@@ -251,22 +273,42 @@ def element_of(type_name):
     assert end >= 5
     return type_name[5:end]
 
+def is_optional(type_name):
+    return type_name.endswith(OPTIONAL)
+
+def base_of(type_name):
+    """The T of the optional type T | None."""
+    end = len(type_name) - len(OPTIONAL)
+    assert end >= 0
+    return type_name[:end]
+
 def matches(actual, expected):
     """Whether a value of the actual type may stand where the expected
-    type is wanted: an unknown type matches anything, and [] matches
-    any list."""
+    type is wanted: an unknown type matches anything, [] matches any
+    list, and T and None match T | None (plan 1.16)."""
     if actual == UNKNOWN or expected == UNKNOWN or actual == expected:
         return True
+    if is_optional(expected):
+        return actual == NONE or actual == base_of(expected)
     if actual == LIST:
         return is_list(expected)
     return actual == DICT and is_dict(expected)
 
 def merged(a, b):
     """The type a name has where two paths meet and left it with types
-    a and b: the one type, the list[T] that refines a [], or
+    a and b: the one type, the list[T] that refines a [], the
+    optional T | None of a scalar T and None (plan 1.16), or
     unknown."""
     if a == b:
         return a
+    if a == NONE and b in SCALARS:
+        return b + OPTIONAL
+    if b == NONE and a in SCALARS:
+        return a + OPTIONAL
+    if is_optional(a) and (b == NONE or b == base_of(a)):
+        return a
+    if is_optional(b) and (a == NONE or a == base_of(b)):
+        return b
     if is_empty(a) and matches(a, b):
         return b
     if is_empty(b) and matches(b, a):
@@ -802,14 +844,20 @@ class Checker(object):
         does not reach the code after the if, which then has the
         other branch's types, with a name the leaving branch alone
         binds unknown (plan 1.15); two such branches are merged as
-        before, since no path is left to take the types from."""
+        before, since no path is left to take the types from. A test
+        of a name against None retypes the name for each branch
+        (narrow, plan 1.16)."""
         before = scope.types.copy()
+        body_left = self.narrow(stmt.test, scope, False)
         self.check_block(stmt.body, scope, effects)
         body_types = scope.types
         scope.types = before
+        else_left = self.narrow(stmt.test, scope, True)
         self.check_block(stmt.orelse, scope, effects)
-        body_left = leaves(stmt.body) or ends_in_return(stmt.body)
-        else_left = leaves(stmt.orelse) or ends_in_return(stmt.orelse)
+        if leaves(stmt.body) or ends_in_return(stmt.body):
+            body_left = True
+        if leaves(stmt.orelse) or ends_in_return(stmt.orelse):
+            else_left = True
         if body_left and not else_left:
             keep_bound(scope.types, body_types)
         elif else_left and not body_left:
@@ -817,6 +865,37 @@ class Checker(object):
             scope.types = body_types
         else:
             scope.types = merge_types(body_types, scope.types)
+
+    def narrow(self, test, scope, orelse):
+        """Retype the name of a test `name is None` or `name is not
+        None` for one branch of its if (plan 1.16): None where the
+        name is None, if it was optional or unknown, and T in the
+        other branch if it was T | None. A name whose type is None
+        cannot reach the other branch, so the answer is True, for
+        check_if to keep that branch out of the types after the if,
+        and the name is unknown while the branch is checked: the
+        first pass over a loop meets `best = None` before it that
+        way, and the pass after it has the optional. This is no
+        assignment, so it does not go through set_type, and a clause
+        binding or a handler instance is left alone."""
+        if not isinstance(test, ast.IsNone):
+            return False
+        operand = test.operand
+        if not isinstance(operand, ast.Name):
+            return False
+        name = operand.id
+        if name not in scope.types or name in scope.bindings:
+            return False
+        current = scope.types[name]
+        if test.negated == orelse:
+            if current == UNKNOWN or is_optional(current):
+                scope.types[name] = NONE
+        elif is_optional(current):
+            scope.types[name] = base_of(current)
+        elif current == NONE:
+            scope.types[name] = UNKNOWN
+            return True
+        return False
 
     def check_return(self, stmt, scope, effects):
         """The value must have the declared return type; a bare return
@@ -963,10 +1042,10 @@ class Checker(object):
             raise InvalidProgram(
                 stmt.lineno, "the %s holds %s; cannot assign %s" %
                 (kind, element, actual))
-        if is_list(actual) or is_dict(actual):
-            raise InvalidProgram(
-                stmt.lineno, "dict values must be int, str, or bool, not "
-                "a %s" % kind_of(actual))
+        if kind == "list" and not (is_list(actual) or is_dict(actual)):
+            self.require_scalar(actual, "list elements", stmt.lineno)
+        else:
+            self.require_scalar(actual, "dict values", stmt.lineno)
         self.hand_over(stmt.value, element, scope)
         target = stmt.target
         if (isinstance(target, ast.Name)
@@ -975,6 +1054,19 @@ class Checker(object):
                 scope.set_type(target.id, UNKNOWN)
             else:
                 scope.set_type(target.id, "dict[str, %s]" % actual)
+
+    def require_scalar(self, actual, what, lineno):
+        """A list element or a dict value is an int, str, or bool where
+        its type is known: no list or dict (plan 1.9, 1.12), and no
+        None or optional, which no element type names (plan 1.16)."""
+        if is_list(actual) or is_dict(actual):
+            raise InvalidProgram(
+                lineno, "%s must be int, str, or bool, not a %s" %
+                (what, kind_of(actual)))
+        if actual == NONE or is_optional(actual):
+            raise InvalidProgram(
+                lineno, "%s must be int, str, or bool, not %s" %
+                (what, actual))
 
     def check_index_aug_assign(self, stmt, scope, effects):
         """xs[i] op= v or d[k] op= v: the element or value type on the
@@ -1010,10 +1102,7 @@ class Checker(object):
                 raise InvalidProgram(
                     expr.lineno, "dict keys must be str, not %s" % key)
             actual = self.type_of(expr.values[i], scope, effects)
-            if is_list(actual) or is_dict(actual):
-                raise InvalidProgram(
-                    expr.lineno, "dict values must be int, str, or bool, "
-                    "not a %s" % kind_of(actual))
+            self.require_scalar(actual, "dict values", expr.lineno)
             if actual == UNKNOWN:
                 untyped = True
             elif value == UNKNOWN:
@@ -1066,10 +1155,7 @@ class Checker(object):
         self.check_args(["value"], [element], args, "append()", lineno,
                         scope, effects)
         actual = self.type_of(args[0], scope, effects)
-        if is_list(actual) or is_dict(actual):
-            raise InvalidProgram(
-                lineno, "list elements must be int, str, or bool, not a "
-                "%s" % kind_of(actual))
+        self.require_scalar(actual, "list elements", lineno)
         if type_name == LIST and isinstance(target, ast.Name):
             if actual == UNKNOWN:
                 scope.set_type(target.id, UNKNOWN)
@@ -1437,10 +1523,7 @@ class Checker(object):
             untyped = False
             for item in expr.elements:
                 actual = self.type_of(item, scope, effects)
-                if is_list(actual) or is_dict(actual):
-                    raise InvalidProgram(
-                        expr.lineno, "list elements must be int, str, or "
-                        "bool, not a %s" % kind_of(actual))
+                self.require_scalar(actual, "list elements", expr.lineno)
                 if actual == UNKNOWN:
                     untyped = True
                 elif element == UNKNOWN:
@@ -1460,6 +1543,11 @@ class Checker(object):
             return self.check_fstring(expr, scope, effects)
         elif isinstance(expr, ast.In):
             return self.check_membership(expr, scope, effects)
+        elif isinstance(expr, ast.NoneLiteral):
+            return NONE
+        elif isinstance(expr, ast.IsNone):
+            self.type_of(expr.operand, scope, effects)
+            return "bool"
         elif isinstance(expr, ast.Index):
             return self.check_index(expr.target, expr.index, expr.lineno,
                                     scope, effects)

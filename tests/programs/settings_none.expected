@@ -1,0 +1,15 @@
+exit 0
+web at db.internal:9000
+web at db.internal:8080/api without env
+user is app
+no setting for password
+timeout unset
+app None
+env answered 2
+file answered 4
+defaults answered 2
+host = 'db.internal' (file)
+port = '9000' (env)
+host = 'db.internal' (file)
+port = '8080' (defaults)
+user = 'app' (file)

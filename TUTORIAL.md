@@ -892,6 +892,70 @@ A dict field's default is `{}`, fresh for each instance.
 A `break` in a handled body ends the loop around the `handle` statement, and a `break` in a clause abandons the suspended body before it ends the loop,
 which `tests/programs/break_in_handled_body.epy` shows.
 
+### A value that may be absent
+
+`None` is a value and a type, and `int | None`, `str | None`, and `bool | None` are the types of a value that may be absent:
+
+```python tests/programs/optional_value.epy
+from effectpython import Effect, perform, handle
+
+class Env(Effect):
+    def get(name: str) -> str | None: ...
+
+def setting(name: str, fallback: str) -> str / [Env]:
+    value = perform(Env.get(name))
+    if value is None:
+        return fallback
+    return value
+
+def longest(words: list[str]) -> str | None:
+    best = None
+    for word in words:
+        if best is None:
+            best = word
+        elif len(word) > len(best):
+            best = word
+    return best
+
+def main() -> int / []:
+    values = {"HOST": "db.internal", "PREFIX": ""}
+    try:
+        with handle(Env):
+            print(setting("HOST", "localhost"), setting("PORT", "8080"))
+            prefix = perform(Env.get("PREFIX"))
+            print(prefix is None, perform(Env.get("USER")))
+    except Env.get as eff:
+        if eff.name in values:
+            eff.resume(values[eff.name])
+        else:
+            eff.resume(None)
+    print(longest(["ab", "abcd", "abc"]), longest([]))
+    return 0
+```
+
+```text tests/programs/optional_value.expected
+db.internal 8080
+False None
+abcd None
+```
+
+`Env.get` returns `str | None`, so its clause may resume with a `str` or with `None`, and `perform(Env.get(name))` gives the body a value it cannot use yet:
+an optional takes no operator, `==` included, no `len()`, no subscript, no `str()` or f-string field, and no typed slot that wants a `str`.
+`print` takes it, which is how `USER` prints as `None`.
+The one test is `<name> is None` or `<name> is not None`, and an `if` with that test gives the name a type in each branch: `None` where it is `None`, and the `str` in the other.
+In `setting`, the branch returns, so the code after the `if` has `value` as a `str` and returns it where a `str` is declared.
+An empty string is a value: `PREFIX` is set to `""`, and `prefix is None` is `False`.
+
+`longest` starts `best` as `None` and assigns it a `str` in the loop, and the two types meet as `str | None` where any other two would leave the name with no type.
+The `elif` is reached when `best` is not `None`, so `len(best)` there is the length of a `str`,
+and the function returns the optional, `None` for an empty list.
+
+The narrowing is at an `if` or `elif` whose whole test is the one comparison of a local name.
+`if x is not None and x > 0:` is two nested `if` statements here, and a `while` test does not narrow.
+`is` has no other use: `x is y` is a syntax error.
+A handler class field, a list element, and a dict value cannot be optional.
+`tests/programs/settings_none.epy` is a longer program with the same forms, and `tests/programs/settings_layers.epy` does its job with a thrown exception in place of `None`.
+
 ## 10. What the checker catches
 
 Everything in this list is rejected before the program runs, with a line number:
@@ -906,6 +970,7 @@ Everything in this list is rejected before the program runs, with a line number:
 - a read of a name nothing has bound earlier in the function, and a read of an `except` clause's `as` name after the clause, which Python 3 leaves unbound;
 - a list literal whose elements differ in type, an index or `append` on a value that is not a list, an `append` or an indexed assignment of the wrong element type, a `for` over a value that is neither a list nor `range()`, and `range()` anywhere else;
 - a `return` whose value is not the declared return type, and a function that can reach its end without returning one;
+- an optional (`str | None`) used as its type before an `is None` test has narrowed it, and `None` or an optional as a list element or a dict value;
 - `Exception` in a row, since a row names the classes that can reach a caller.
 
 A name that an `if`, a loop, a `try`, or a handled body can leave with two types has no type the checker can hold it to.

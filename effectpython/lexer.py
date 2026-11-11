@@ -40,6 +40,7 @@ KEYWORDS = {
     'True': 'TRUE', 'False': 'FALSE', 'finally': 'FINALLY',
     'for': 'FOR', 'in': 'IN', 'break': 'BREAK', 'continue': 'CONTINUE',
     'and': 'AND', 'or': 'OR', 'not': 'NOT', 'elif': 'ELIF',
+    'None': 'NONE', 'is': 'IS',
 }
 
 # Order matters: a longer operator precedes any prefix of it
@@ -78,6 +79,7 @@ RULES = [
     ('RBRACKET', r'\]'),
     ('LBRACE', r'\{'),
     ('RBRACE', r'\}'),
+    ('PIPE', r'\|'),
 ]
 
 RAW_ONLY = ['FSTRING']  # expanded before the parser sees the list

@@ -1151,7 +1151,7 @@ What the arm did still reaches the paths it takes: with `v = 1` before the loop 
 A `raise` or a `return` in an arm with no `try` around it leaves the function, so `take(v)` after the loop is accepted there, as is `take(last)` after a clause that retypes `last` and raises.
 
 
-### 1.16 `None` and optional types (designed 2026-11-11, not implemented)
+### 1.16 `None` and optional types (designed and implemented 2026-11-11, open questions settled as recommended)
 
 `settings_layers.epy` is the second sample written in Python and then ported, and the first with a lookup that may miss without that being an error, which is what the `None` note in 2.2 said to wait for.
 The Python version has two:
@@ -1230,6 +1230,27 @@ Nothing else changes: `W_None` and its `str()` exist.
 7.  *Whether `x is None` is refused where `x` can never be `None`.*
     *The design accepts it, as CPython does; the test is `bool` and nothing is narrowed.*
 
+All seven were settled as recommended on 2026-11-11.
+
+**A branch the types rule out (found while implementing, 2026-11-11).**
+The narrowing paragraph said a name of any type but an optional or unknown is not retyped, and the form Python writes most often for an optional fails under that rule:
+
+```python
+    best = None
+    for i in range(3):
+        if best is None:
+            best = i
+        else:
+            best = best + i
+```
+
+The first pass over a loop starts from the types before it (2.2), where `best` is `None`, so the `else` branch was "unsupported operand types for +: None and int", though no run reaches that branch with `best` still `None`.
+`narrow` therefore answers for a third case: where the name's type is `None`, the branch in which it is not `None` cannot run under these types.
+The branch is checked with the name unknown, and `check_if` keeps its end out of the types after the `if`, as it does for a branch that leaves (1.15), so the unknown does not reach the merge; the pass after it starts with `best` as `int | None` and checks the branch at `int`.
+Giving the name the unknown type alone was tried first and is wrong: a branch that only reads the name leaves it unknown, and the merge after the `if` then loses the type for the rest of the function ("function 'f' must return int, but 'best' has no known type").
+What remains is a typed slot in that branch: `best = take(best)` in the `else` is "argument 1 of take() must be int, but 'best' has no known type" on the first pass, since a slot refuses an unknown; `best = best + i` and `len(best)` pass.
+A name of a type that cannot be `None` (`x = 1`, then `if x is None:`) is left as the design says, both branches merged.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1238,7 +1259,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`, and from 2026-11-08 `{` and `}`). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`, and from 2026-11-11 `None` and `is`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`, and from 2026-11-08 `{` and `}`, and from 2026-11-11 `|`, in a type alone). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from <module> import <names>`, accepted and ignored whatever the module
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
@@ -1252,6 +1273,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `and`, `or`, and `not`, a `BoolOp` and a `Not` node, in three grammar layers above a comparison with Python's precedence; and `elif`, which builds an `If` alone in the `orelse` of the `If` above it, with no node of its own (1.11; Milestone 11, 2026-11-08)
     *   dict literals `{}` and `{<expr>: <expr>, ...}`, a `DictLiteral` node; the type form `dict[str, T]`; and `in` and `not in` in the comparison layer, an `In` node (1.12; Milestone 12, 2026-11-08)
     *   f-strings `f"..."` with `{<expr>}` fields, an `FString` node, from the token sequence `FSTRING_START`, `FSTRING_MIDDLE`, `LBRACE expr RBRACE`, `FSTRING_END` that the lexer expands one `FSTRING` token into (1.13; Milestone 13, 2026-11-08)
+    *   `None`, a `NoneLiteral` node, and `<arith> is None` and `<arith> is not None` in the comparison layer, an `IsNone` node with a `negated` flag; `is` with anything else on its right is a syntax error (1.16; Milestone 16, 2026-11-11)
     *   augmented assignment `<postfix> op= <expr>` for `+=`, `-=`, `*=`, `//=`, and `%=`, built as the `Assign` or `AttrAssign` over a `BinOp` it means for a name or a field target, and an `IndexAugAssign` node for a subscript target (1.14; Milestone 14, 2026-11-09)
     *   `for <name> in <expr>: <suite>`, a `For` node, or a `ForRange` node when the expression is a call to `range` (1.9; Milestone 9, 2026-11-07)
     *   indexed assignment `<expr>[<expr>] = <expr>`, an `IndexAssign` node; one production reads every assignment and sorts the target into `Assign`, `AttrAssign`, or `IndexAssign` (1.9; Milestone 9, 2026-11-07)
@@ -1262,7 +1284,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `finally: <suite>` after the clauses of either `try` form, or after a `try` suite with no clauses, filling `Try.finalbody`; on effect clauses the `Handle` is wrapped in a clause-less `Try` (1.8; Milestone 8, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
 *   **Expressions:** Integer/string literals, `True` and `False` (a `BoolLiteral`, added 2026-11-06, which `==` and `!=` compare), variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31). Milestone 9 adds list literals `[<exprs>]`, indexing `<expr>[<expr>]` (an `Index`), a method call on an expression `<expr>.<name>(<args>)` (a `MethodCall`; on a name it is the `OpCall` above, or a `Resume` or `Throw`), the built-in calls `len(...)`, `str(...)`, and `range(...)`, and a unary minus folded into the literal it negates or into `0 - x`; attribute reads, attribute calls, and indexing are postfix forms on an expression, with a name required on the left of an attribute read (1.9; Milestone 9, 2026-11-07).
-*   **Types:** a parameter, return, or field type is a name or `list[int]`, `list[str]`, or `list[bool]`, which the parser reads into one string (1.9; Milestone 9, 2026-11-07).
+*   **Types:** a parameter, return, or field type is a name or `list[int]`, `list[str]`, or `list[bool]`, which the parser reads into one string (1.9; Milestone 9, 2026-11-07). `None` is a type, and `int | None`, `str | None`, and `bool | None` are the optional types, read into the strings `int | None` and so on (1.16; Milestone 16, 2026-11-11).
 
 Two constraints on the lexer, found when translating `experiments/rply_addition.py` (2026-10-28), which confirmed that `rply` 0.7.8 translates with this toolchain:
 
@@ -1319,13 +1341,14 @@ The static analyzer runs in three passes over the AST before execution:
         *   `[]` handed over (`hand_over`, 2026-11-08): a name holding `[]` passed as an argument, assigned to a field, returned, or passed to `resume()` where `list[T]` is expected takes `list[T]`, since the receiver may append to it;
             one assigned to another name loses its type, since the checker does not track which names share a list; a list is no element of a list (1.9, open question 5), in a literal or an `append`, which keeps `xss[0]` from naming one twice; and a literal with an element of unknown type is unknown, so nothing refines it as `[]` is refined.
             An `append` on a name of unknown type passes, as an unknown type does everywhere.
+        *   `NoneLiteral` and `IsNone` (1.16; Milestone 16, 2026-11-11): `None` has the type `None` and `x is None` the type `bool`, whatever its operand's type; `matches` lets `T`, `None`, and `T | None` stand where `T | None` is wanted, `merged` gives `T | None` for a scalar `T` and `None`, an optional is refused wherever a `T` is wanted, `require_scalar` keeps `None` and an optional out of a list or a dict, and `narrow` retypes the name of an `if` test `name is None` for each branch (`check_if`).
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
         *   `IndexAugAssign` (1.14; Milestone 14, 2026-11-09) holds `check_index`'s element or value type and the value's type to `check_operands` with the element on the left (`check_index_aug_assign`); a name or a field target arrives as the assignment it means and needs no rule.
         *   `BoolOp` and `Not` (1.11; Milestone 11, 2026-11-08) have the type `bool`, and their operands, like the test of an `IfNode` or a `While`, must be `bool` where the type is known, else "and needs a bool, not int" (`require_bool`); both operands' effects count, though the runtime may skip the right one.
         *   Lists (1.9; Milestone 9, 2026-11-07): a `ListLiteral` has the type `list[T]` of its elements, which must share one type, or the element-less `list` when it is empty, which `matches` accepts for any list type; `Index` has the element type and needs an `int` index; `IndexAssign` and `append` need a value of the element type, and a name holding `[]` takes the element type of its first `append`; `len()` of a list or `str` is `int`, `str()` of a scalar is `str`, and `range()` outside a `for` is rejected; `For` binds its name to the iterable's element type and `ForRange` to `int`, each an assignment for the `Name` rule, and both union the suite's effects; `==` and `!=` are the operators of a list type; and `len`, `str`, and `range` join `print` as names a function cannot take.
-        *   *`None` and optional types (noted 2026-11-09; designed in 1.16, 2026-11-11, not implemented).*
+        *   *`None` and optional types (noted 2026-11-09; designed and implemented as 1.16, Milestone 16, 2026-11-11, which the rest of this note predates).*
             Today `None` is the type of a bare `return`, of `resume()`, `throw()`, and `append`, and of a call to a function declared `-> None`, so `x = f()` binds `x` to `None` and `print(x)` prints `None` through `W_None.str()` (`w_None` in `model.py`); the literal `None` is "name 'None' is not defined", there is no `is`, and no type names an optional.
             The survey of 2026-11-09 found four lines in two programs where Python would write `None`: `try_around_perform.epy`'s `contents()` returns `""` for a path it does not know and `read_or_default` tests `config == ""` to raise `NotFound`, and `raise_in_body.epy`'s clause resumes `""` for the body to test the same way.
             An optional needs: a `None` keyword and a `NoneLiteral` node of type `None`; a `|` token and the type form `int | None`, `str | None`, or `bool | None` wherever a type is written, with `None` on the right alone; `matches` accepting `str` and `None` for `str | None`; an `is` keyword and an `Is` node with a `negated` flag whose right operand is `None` alone, since `is` between other values has no place in the dialect; an optional accepting no operator, index, field, or `len()`, so a value must be narrowed first;
@@ -1969,11 +1992,16 @@ EffectPython/
         *   Reject `print(take(x))` after a loop whose `try` has `x = z` in its `finally` and `z = "s"` before a `continue` or a `break`, in the clause and in the suite (done; the suite form was accepted before and failed in `take` at runtime).
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 16. **Milestone 16: `None` and optional types (1.16)**
-    *   *Designed 2026-11-11, not implemented.* The seven open questions of 1.16 are not settled.
+    *   *Designed and done 2026-11-11.* The seven open questions of 1.16 are settled as recommended.
+    *   *Done 2026-11-11.*
+        `lexer.py` has the keywords `None` and `is` and the token `PIPE`; `parser.py` reads `None` as a type and an atom, `<T> | None` as a type for the three scalars, and `<arith> is None` and `<arith> is not None` in the comparison layer; `ast_nodes.py` has `NoneLiteral` and `IsNone`.
+        `checker.py` has `is_optional`, `base_of`, the optional cases of `matches` and `merged`, `require_scalar` at the four places a list or a dict takes a value, and `narrow`, which `check_if` calls for each branch and whose answer keeps a branch the types rule out from the merge (1.16, a branch the types rule out).
+        `interpreter.py` evaluates `NoneLiteral` to `w_None` and `IsNone` by identity with it.
+        `tests/programs/settings_none.epy` is the acceptance program and `tests/programs/optional_value.epy` the tutorial's; the tutorial has a subsection for them at the end of section 9.
     *   *Implementation (planned), in the order of Milestone 5:* the lexer and parser with tests (`None`, `is`, `|`, `NoneLiteral`, `IsNone`, the optional type form), the checker with tests (`matches`, `merged`, the refusals, narrowing in `check_if`), then the runtime (`NoneLiteral`, `IsNone`).
         The change is to `merged`, which every fixpoint uses, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*
-        *   A sample with the job of `settings_layers.epy` in which `Lookup.get` returns `str | None`, the outermost clause resumes `None`, and `address()` and `main()` test `is None`; its output is that of `settings_layers.epy`, which stays as the throw form.
+        *   A sample with the job of `settings_layers.epy` in which `Lookup.get` returns `str | None`, the outermost clause resumes `None`, and `address()` and `main()` test `is None` (`settings_none.epy`); its output is that of `settings_layers.epy`, which stays as the throw form, with one line more and one more answer from the file layer for `first_set()`, which the sample adds for a name that is `None` before a loop.
         *   Accept `take(x)` in the arm of `if x is not None:` and after the guard `if x is None:` over `return`, for an `x` of type `int | None`; reject it outside them with "argument 1 of take() must be int, not int | None".
         *   Reject an operator, `==`, a subscript, `len()`, `str()`, an f-string field, and a `for` on an optional, and `[x]`, `xs.append(x)` on a `[]`, `{"a": x}`, and `d["a"] = x` on a `{}` for an `x` of type `None`.
         *   `None = 1` and `x is y` are syntax errors.

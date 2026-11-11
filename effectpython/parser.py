@@ -6,9 +6,9 @@ declarations and methods, exception classes, function definitions
 with typed parameters, a return type, and an optional effect row;
 return, raise, assignment, attribute assignment, expression, pass,
 if/elif/else, while, for, try/except/finally, and handle statements;
-int, str, bool, list, and dict literals, f-strings, names,
-arithmetic, comparisons, in and not in, and, or, and not in Python's
-precedence, calls, indexing, attribute reads, and attribute calls. An elif builds an If alone in the else
+int, str, bool, list, and dict literals, None, f-strings, names,
+arithmetic, comparisons, in and not in, is None and is not None,
+and, or, and not in Python's precedence, calls, indexing, attribute reads, and attribute calls. An elif builds an If alone in the else
 suite of the one above it, as CPython's AST does (plan 1.11).
 
 perform and handle are names in Python, not keywords, so the grammar
@@ -35,7 +35,10 @@ AttrAssign it means, over a BinOp, for a name or a field target;
 a subscript target gives an IndexAugAssign, since its target and
 index are evaluated once (plan 1.14). A type is a name or list[name] whose element is int,
 str, or bool; a bare list is rejected, since it needs an element
-type. A for whose iterable is a call to range becomes a ForRange,
+type, and int | None, str | None, or bool | None is an optional
+type, with None on the right alone; None is a type and an
+expression, and is takes None alone on its right, giving an IsNone
+(plan 1.16). A for whose iterable is a call to range becomes a ForRange,
 and a unary minus is folded into the literal it negates or into
 0 - x (plan 1.9). break and continue are simple statements giving
 Break and Continue nodes (plan 1.10).
@@ -417,6 +420,19 @@ def dict_type(p):
                      "is int, str, or bool" % value)
     return _Type('dict[str, %s]' % value)
 
+@pg.production('type : NONE')
+def none_type(p):
+    return _Type('None')
+
+@pg.production('type : NAME PIPE NONE')
+def optional_type(p):
+    base = _text(p[0])
+    if base not in LIST_ELEMENTS:
+        raise _error(p[0], "%s | None is not a type; the optional "
+                     "types are int | None, str | None, and bool | None"
+                     % base)
+    return _Type('%s | None' % base)
+
 LIST_ELEMENTS = ['int', 'str', 'bool']
 
 @pg.production('params :')
@@ -732,6 +748,16 @@ def non_membership(p):
     left = _expr(p[0])
     return ast.In(left, _expr(p[3]), True, left.lineno)
 
+@pg.production('comparison : arith IS NONE')
+def is_none(p):
+    operand = _expr(p[0])
+    return ast.IsNone(operand, False, operand.lineno)
+
+@pg.production('comparison : arith IS NOT NONE')
+def is_not_none(p):
+    operand = _expr(p[0])
+    return ast.IsNone(operand, True, operand.lineno)
+
 @pg.production('comparison : arith cmpop arith')
 def compare(p):
     left = _expr(p[0])
@@ -783,6 +809,10 @@ def true_literal(p):
 @pg.production('atom : FALSE')
 def false_literal(p):
     return ast.BoolLiteral(False, _line(p[0]))
+
+@pg.production('atom : NONE')
+def none_literal(p):
+    return ast.NoneLiteral(_line(p[0]))
 
 @pg.production('atom : STRING')
 def str_literal(p):

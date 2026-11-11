@@ -344,6 +344,13 @@ class BoolLiteral(Expr):
         Node.__init__(self, lineno)
         self.value = value  # bool
 
+class NoneLiteral(Expr):
+    """None (plan 1.16)"""
+    _attrs_ = []
+
+    def __init__(self, lineno=0):
+        Node.__init__(self, lineno)
+
 class ListLiteral(Expr):
     """[e1, e2, ...] or [] (plan 1.9)"""
     _attrs_ = ['elements']
@@ -422,6 +429,16 @@ class In(Expr):
         Node.__init__(self, lineno)
         self.left = left        # Expr
         self.right = right      # Expr
+        self.negated = negated  # bool
+
+class IsNone(Expr):
+    """operand is None, or operand is not None (plan 1.16): the one
+       use of is in the dialect"""
+    _attrs_ = ['operand', 'negated']
+
+    def __init__(self, operand, negated, lineno=0):
+        Node.__init__(self, lineno)
+        self.operand = operand  # Expr
         self.negated = negated  # bool
 
 class BoolOp(Expr):

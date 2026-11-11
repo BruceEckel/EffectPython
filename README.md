@@ -8,7 +8,7 @@ Handlers are delimited continuations built on RPython's `rstacklet`.
 
 This file is the short version.
 [TUTORIAL.md](TUTORIAL.md) walks through the dialect in eleven sections with a working program for each step,
-from a first effect and handler through nested handlers, handler classes, exceptions, `eff.throw()`, `finally`, lists and dicts with the `for` loop, f-strings, and augmented assignment;
+from a first effect and handler through nested handlers, handler classes, exceptions, `eff.throw()`, `finally`, lists and dicts with the `for` loop, f-strings, augmented assignment, and `None` with optional types;
 every listing in it is a file under `tests/programs/` with its recorded output beside it, and a test holds the two to each other.
 
 ```python

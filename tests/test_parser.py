@@ -5,7 +5,8 @@ from Milestone 8, finally; from Milestone 9, lists and the
 for loop; from Milestone 10, break and continue; from Milestone 11,
 the boolean operators and elif (plan 1.11); from Milestone 12, dicts
 and in (plan 1.12); from Milestone 13, f-strings (plan 1.13);
-from Milestone 14, augmented assignment (plan 1.14).
+from Milestone 14, augmented assignment (plan 1.14); from
+Milestone 16, None and optional types (plan 1.16).
 
 Run with:  pypy2 -m pytest
 """
@@ -1112,4 +1113,68 @@ def test_an_augmented_assignment_carries_its_line(source):
 def test_augmented_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def main() -> int:\n    %s\n' % source)
+    assert info.value.msg == msg
+
+# --- None and optional types (Milestone 16) ----------------------------------
+
+def test_none_and_is_are_keywords_and_the_bar_is_a_token():
+    assert kinds('x: int | None = y is not None') == [
+        'NAME', 'COLON', 'NAME', 'PIPE', 'NONE', 'EQUALS', 'NAME', 'IS',
+        'NOT', 'NONE', 'NEWLINE']
+
+@pytest.mark.parametrize('source, expected', [
+    ('x = None', ('Assign', 'x', ('NoneLiteral',))),
+    ('x = y is None', ('Assign', 'x', ('IsNone', ('Name', 'y'), False))),
+    ('x = y is not None',
+     ('Assign', 'x', ('IsNone', ('Name', 'y'), True))),
+    ('x = not y is None',
+     ('Assign', 'x', ('Not', ('IsNone', ('Name', 'y'), False)))),
+    ('x = f() is None and z',
+     ('Assign', 'x',
+      ('BoolOp', 'and', ('IsNone', ('Call', 'f', []), False),
+       ('Name', 'z')))),
+], ids=['literal', 'is', 'is-not', 'not-is', 'and'])
+def test_none_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    assert shape(module.functions[0].body[0]) == expected
+
+@pytest.mark.parametrize('written', [
+    'None', 'int | None', 'str | None', 'bool | None'])
+def test_a_type_may_be_none_or_optional(written):
+    module = parse('def f(x: %s) -> %s:\n    return x\n'
+                   % (written, written))
+    fn = module.functions[0]
+    assert (fn.param_types, fn.return_type) == ([written], written)
+
+def test_an_operation_may_return_an_optional_with_a_row():
+    module = parse('class A(Effect):\n'
+                   '    def get(key: str) -> str | None / [E]: ...\n')
+    op = module.effects[0].operations[0]
+    assert (op.return_type, op.row) == ('str | None', ['E'])
+
+@pytest.mark.parametrize('source, msg', [
+    ('    None = 1\n',
+     'line 2, column 10: cannot assign to this expression'),
+    ('    x = y is z\n', "line 2, column 14: unexpected 'z'"),
+    ('    x = y is not 1\n', "line 2, column 18: unexpected '1'"),
+    ('    x = 1 | 2\n', "line 2, column 11: unexpected '|'"),
+    ('    x = y is None == True\n',
+     "line 2, column 19: unexpected '=='"),
+], ids=['assign-none', 'is-name', 'is-not-literal', 'bar', 'chain'])
+def test_none_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n' + source)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('written, msg', [
+    ('int | str', "line 1, column 16: unexpected 'str'"),
+    ('None | int', "line 1, column 15: unexpected '|'"),
+    ('list[int] | None', "line 1, column 20: unexpected '|'"),
+    ('E | None',
+     'line 1, column 10: E | None is not a type; the optional types '
+     'are int | None, str | None, and bool | None'),
+], ids=['union', 'none-first', 'list', 'class'])
+def test_optional_type_errors(written, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def f(x: %s) -> int:\n    return 0\n' % written)
     assert info.value.msg == msg

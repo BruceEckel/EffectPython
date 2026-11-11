@@ -10,7 +10,8 @@ Milestone 11 the bool rule for and, or, not, if, and while, and elif
 from Milestone 13 the f-string field rule (plan 1.13), and from
 Milestone 14 the augmented assignment rules (plan 1.14), and from
 Milestone 15 the rule for a clause or an arm that leaves (plan
-1.15). The last
+1.15), and from Milestone 16 None and optional types (plan 1.16).
+The last
 tests read Checker.unknowns, the places an operand of unknown type
 passed the checker, counted on the last pass over a suite alone.
 
@@ -1570,6 +1571,152 @@ def test_a_name_a_leaving_clause_alone_binds_is_unknown(leave):
 def test_a_leaving_path_still_reaches_what_it_runs_into(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(WALK + body)
+    assert info.value.msg == msg
+
+OPT = ('def take(n: int) -> int:\n    return n - 1\n'
+       'def maybe(i: int) -> int | None:\n    if i == 1:\n'
+       '        return None\n    return i\n'
+       'def word(i: int) -> str | None:\n    if i == 1:\n'
+       '        return None\n    return "w"\n'
+       'def main() -> int / []:\n    return 0\n')
+MAYBE = 'def f() -> int:\n    x = maybe(1)\n'
+WORD = 'def f() -> int:\n    s = word(1)\n'
+BEST = ('def f() -> int:\n    best = None\n    for i in range(3):\n'
+        '        if best is None:\n            best = i\n'
+        '        else:\n            %s\n')
+ASKING = ('class A(Effect):\n    def get() -> %s: ...\n'
+         'def f() -> int / []:\n    x = maybe(1)\n    try:\n'
+         '        with handle(A):\n%s'
+         '    except A.get as eff:\n        %s\n    return 0\n')
+
+@pytest.mark.parametrize('body', [
+    MAYBE + '    if x is not None:\n        return take(x)\n'
+    '    return 0\n',
+    MAYBE + '    if x is None:\n        return 0\n    return take(x)\n',
+    MAYBE + '    if x is None:\n        y = 0\n    else:\n'
+    '        y = take(x)\n    return y\n',
+    MAYBE + '    if x is None:\n        return 0\n    elif x > 0:\n'
+    '        return 1\n    return 2\n',
+    MAYBE + '    if x is None:\n        x = 0\n    return take(x)\n',
+    'def f() -> int:\n    x = None\n    if 1 == 1:\n        x = 3\n'
+    '    if x is None:\n        return 0\n    return take(x)\n',
+    BEST % 'best = best + i' + '    if best is None:\n'
+    '        return 0\n    return take(best)\n',
+    'def f() -> int:\n    x = 1\n    if x is None:\n        return 0\n'
+    '    return take(x)\n',
+    ASKING % ('int', '            if x is not None:\n'
+             '                print(take(x))\n'
+             '                perform(A.get())\n',
+             'x = None\n        eff.resume(1)'),
+], ids=['is-not-none', 'guard', 'else', 'elif', 'assigned-in-arm',
+        'merged', 'none-before-loop', 'never-none',
+        'clause-after-read'])
+def test_a_test_against_none_narrows_an_optional(body):
+    check_source(OPT + body)
+
+@pytest.mark.parametrize('body', [
+    'def f() -> int | None:\n    return None\n',
+    'def f() -> int | None:\n    return\n',
+    'def f() -> int | None:\n    return 1\n',
+    'def f() -> int | None:\n    return maybe(2)\n',
+    'def g(x: int | None) -> int:\n    return 0\n'
+    'def f() -> int:\n    return g(None) + g(1) + g(maybe(1))\n',
+    MAYBE + '    print(x)\n    return 0\n',
+    ASKING % ('int | None', '            perform(A.get())\n',
+             'eff.resume(None)'),
+    ASKING % ('int | None', '            perform(A.get())\n',
+             'eff.resume(x)'),
+    'class A(Effect):\n    def get() -> int | None: ...\n'
+    'class H(Handler[A]):\n    def get(self) -> int | None:\n'
+    '        return None\n',
+], ids=['return-none', 'bare-return', 'return-value',
+        'return-optional', 'argument', 'print', 'resume-none',
+        'resume-optional', 'method'])
+def test_an_optional_slot_takes_the_value_none_or_an_optional(body):
+    check_source(OPT + body)
+
+@pytest.mark.parametrize('body, msg', [
+    (MAYBE + '    return take(x)\n',
+     'line 22: argument 1 of take() must be int, not int | None'),
+    (MAYBE + '    if x is None:\n        return take(x)\n'
+     '    return 0\n',
+     'line 23: argument 1 of take() must be int, not None'),
+    (MAYBE + '    if x is not None:\n        print(x)\n'
+     '    return take(x)\n',
+     'line 24: argument 1 of take() must be int, not int | None'),
+    (MAYBE + '    return x + 1\n',
+     'line 22: unsupported operand types for +: int | None and int'),
+    (MAYBE + '    print(x == 1)\n    return 0\n',
+     'line 22: unsupported operand types for ==: int | None and '
+     'int'),
+    (WORD + '    print(s[0])\n    return 0\n',
+     "line 22: 's' is not a list"),
+    (WORD + '    return len(s)\n',
+     'line 22: len() needs a list, dict, or str, not str | None'),
+    (WORD + '    print(str(s))\n    return 0\n',
+     'line 22: str() needs an int, str, or bool, not str | None'),
+    (WORD + '    print(f"{s}")\n    return 0\n',
+     'line 22: an f-string field needs an int, str, or bool, '
+     'not str | None'),
+    (WORD + '    for c in s:\n        print(c)\n    return 0\n',
+     'line 22: for needs a list, a dict, or range(), not str | '
+     'None'),
+    (MAYBE + '    if x:\n        pass\n    return 0\n',
+     'line 22: if needs a bool, not int | None'),
+    ('def f() -> int:\n    x = None\n    if 1 == 1:\n        x = 3\n'
+     '    return take(x)\n',
+     'line 24: argument 1 of take() must be int, not int | None'),
+    ('def f() -> int | None:\n    return "s"\n',
+     "line 21: function 'f' must return int | None, not str"),
+    ('def f() -> int | None:\n    x = 1\n',
+     "line 20: function 'f' can reach its end without returning "
+     'int | None'),
+    (MAYBE + '    if x is not None and x > 0:\n        return 1\n'
+     '    return 0\n',
+     'line 22: unsupported operand types for >: int | None and int'),
+    (MAYBE + '    while x is not None:\n        x = maybe(x)\n'
+     '    return 0\n',
+     'line 23: argument 1 of maybe() must be int, not int | None'),
+    ('def f() -> int:\n    xs = [None]\n    return 0\n',
+     'line 21: list elements must be int, str, or bool, not None'),
+    (MAYBE + '    xs = [x]\n    return 0\n',
+     'line 22: list elements must be int, str, or bool, not int '
+     '| None'),
+    ('def f() -> int:\n    xs = []\n    xs.append(None)\n'
+     '    return 0\n',
+     'line 22: list elements must be int, str, or bool, not None'),
+    ('def f() -> int:\n    d = {"a": None}\n    return 0\n',
+     'line 21: dict values must be int, str, or bool, not None'),
+    ('def f() -> int:\n    d = {}\n    d["a"] = None\n    return 0\n',
+     'line 22: dict values must be int, str, or bool, not None'),
+    ('class H(Handler[FileIO]):\n    v: int | None\n',
+     "line 21: field 'v' of handler class 'H' must be int, str, "
+     'list[...], or dict[str, ...], not int | None'),
+    (BEST % 'best = take(best)' + '    return 0\n',
+     "line 26: argument 1 of take() must be int, but 'best' has "
+     'no known type'),
+    ('def f() -> int:\n    x = None\n    y = 1\n'
+     '    for i in range(3):\n        if x is not None:\n'
+     '            y = "s"\n        x = i\n    return take(y)\n',
+     "line 27: argument 1 of take() must be int, but 'y' has no "
+     'known type'),
+    (ASKING % ('int', '            if x is not None:\n'
+              '                perform(A.get())\n'
+              '                print(take(x))\n',
+              'x = None\n        eff.resume(1)'),
+     'line 28: argument 1 of take() must be int, not int | None'),
+    (ASKING % ('str | None', '            perform(A.get())\n',
+              'eff.resume(1)'),
+     'line 28: eff.resume() for A.get must pass str | None, not '
+     'int'),
+], ids=['slot', 'none-arm', 'after-if', 'operator', 'equality',
+        'subscript', 'len', 'str', 'fstring', 'for', 'test', 'merged',
+        'return', 'no-return', 'and', 'while', 'list',
+        'list-optional', 'append', 'dict', 'store', 'field',
+        'dead-arm-slot', 'live-arm-in-loop', 'clause', 'resume'])
+def test_an_optional_is_refused_until_it_is_narrowed(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(OPT + body)
     assert info.value.msg == msg
 
 UNSURE = ('    if 1 == 1:\n        x = 1\n    else:\n        x = "s"\n')

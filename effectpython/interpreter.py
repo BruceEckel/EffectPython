@@ -973,6 +973,11 @@ class Interpreter(object):
                 parts.append(w_field.str())
                 parts.append(expr.literals[i + 1])
             return W_Str("".join(parts))
+        elif isinstance(expr, ast.NoneLiteral):
+            return w_None
+        elif isinstance(expr, ast.IsNone):
+            w_operand = self.eval_expr(expr.operand, env)
+            return wrap_bool((w_operand is w_None) != expr.negated)
         elif isinstance(expr, ast.In):
             w_left = self.eval_expr(expr.left, env)
             w_right = self.eval_expr(expr.right, env)

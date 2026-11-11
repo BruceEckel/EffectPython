@@ -2,7 +2,7 @@
 from Milestone 11, the boolean operators and elif (plan 1.11);
 from Milestone 12, dicts and in (plan 1.12); from Milestone 13,
 f-strings (plan 1.13); from Milestone 14, augmented assignment
-(plan 1.14).
+(plan 1.14); from Milestone 16, None and is (plan 1.16).
 
 Run with:  pypy2 -m pytest
 These tests import no RPython modules, so they need no PYTHONPATH.
@@ -883,3 +883,39 @@ def test_an_augmented_assignment_misuse_is_a_runtime_error(body, msg):
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_main_body(body + '    return 0\n')
     assert info.value.msg == msg
+
+# --- None and optional types (Milestone 16) ----------------------------------
+
+MAYBE = ('def maybe(i: int) -> int | None:\n'
+         '    if i == 1:\n'
+         '        return None\n'
+         '    return i\n')
+
+@pytest.mark.parametrize('statement, printed', [
+    ('x = None\n    print(x)', ['None']),
+    ('x = None\n    print(x is None, x is not None)', ['True False']),
+    ('print(maybe(1) is None, maybe(2) is None)', ['True False']),
+    ('print(1 is None, "a" is not None, [1] is None)',
+     ['False True False']),
+    ('print(None is None, not None is None)', ['True False']),
+    ('y = maybe(2)\n'
+     '    if y is not None:\n'
+     '        print(y + 1)', ['3']),
+    ('y = maybe(1)\n'
+     '    if y is None:\n'
+     '        y = 0\n'
+     '    print(y + 1)', ['1']),
+], ids=['literal', 'is', 'call', 'other-values', 'none-itself',
+        'narrowed', 'defaulted'])
+def test_none_and_is(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n', MAYBE)
+    assert (exit_code, lines) == (0, printed)
+
+def test_the_operand_of_is_is_evaluated_once():
+    functions = ('def val() -> int | None:\n'
+                 '    print("val")\n'
+                 '    return None\n')
+    exit_code, lines = run_main_body(
+        '    print(val() is not None)\n    return 0\n', functions)
+    assert (exit_code, lines) == (0, ['val', 'False'])
