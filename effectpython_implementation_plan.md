@@ -1179,18 +1179,19 @@ The port's larger loss is the pair `find()` returned, the value with its layer's
 `x is None` and `x is not None` are "line 11, column 10: unexpected 'is'", and `-> str | None` or a parameter `s: str | None` is "unexpected character '|'".
 The type `None` exists: a bare `return`, and a call to a function declared `-> None`, have it, `x = nothing()` binds `x` to it, and `print(x)` prints `None`.
 A value of that type is refused by a typed slot ("argument 1 of take() must be int, not None"), by an f-string field ("an f-string field needs an int, str, or bool, not None"), by `str()` ("str() needs an int, str, or bool, not None"), by an `if` ("if needs a bool, not None"), and by every operator, `==` included ("unsupported operand types for ==: None and None").
-A list literal takes it: `xs = [x]` prints `[None]`, which the element rule of 1.9 should refuse and does not.
+A container takes it, which the element rule of 1.9 should refuse and does not: `xs = [x]` prints `[None]` and has the type `list[None]` ("argument 1 of f() must be list[int], not list[None]"), an `append` of it to a `[]` settles the list as `list[None]` ("argument 1 of append() must be None, not int" at a later `append(1)`), and `{"a": x}` and `d["a"] = x` on a `{}` print `{'a': None}`.
+A parameter may be declared `x: None` and takes it; a handler class field may not ("field 'v' of handler class 'H' must be int, str, list[...], or dict[str, ...], not None").
 A name that is `None` on one path and a `str` on another is unknown, as any two types are.
 
 **Syntax.**
 `None` and `is` become keywords.
-`None` is an expression, a `NoneLiteral` node, and a type, so `-> None` still parses.
-The type form `<T> | None`, with `T` one of `int`, `str`, and `bool` and `None` on the right alone, may stand wherever a type is written: a parameter, a return, an operation's parameter or return.
+`None` is an expression, a `NoneLiteral` node, and a type, so `-> None` and a parameter `x: None` still parse.
+The type form `<T> | None`, with `T` one of `int`, `str`, and `bool` and `None` on the right alone, may stand wherever a type is written: a parameter, a return, an operation's parameter or return, and so a handler method's, which repeats its operation's; `collect_field` refuses it for a field in the words above (open question 4).
 `<arith> is None` and `<arith> is not None` join the comparison layer beside `in` and `not in`, as an `IsNone` node with a `negated` flag; `is` between two other values has no place in the dialect and is a syntax error.
 
 **Types.**
 `matches(actual, "T | None")` holds for `T`, for `None`, and for `T | None`; `matches("T | None", "T")` does not, so a typed slot refuses an optional as it refuses `None` today, in the same words with the type's name: "argument 1 of take() must be int, not int | None".
-`merged` gains one level: `T` and `None` give `T | None`, and `T | None` with `T`, with `None`, or with itself stays `T | None`; any other pair is unknown as before.
+`merged` gains one level for the three scalars: `T` and `None` give `T | None`, and `T | None` with `T`, with `None`, or with itself stays `T | None`; any other pair is unknown as before, a list or dict type with `None` among them.
 A name assigned `None` on one path and a `str` on another therefore stays known, and every fixpoint inherits that through `merged`.
 An optional takes no operator, `==` and `!=` included, no subscript, no `len()`, no `str()`, no f-string field, and no `for`; `print()` takes it, as it takes `None` today.
 `x is None` is `bool`, and its operand may have any type.
@@ -1222,7 +1223,7 @@ Nothing else changes: `W_None` and its `str()` exist.
     `FIELD_TYPES` is `int` and `str`, with list and dict types beside them.
     *The design leaves fields as they are.*
 5.  *Whether a list or dict type may be optional, and whether `None` may be an element.*
-    *The design keeps `T` to the three scalars, and closes the hole above: a list literal, an `append`, and a dict value refuse `None` and an optional with the words of 1.9, "list elements must be int, str, or bool".*
+    *The design keeps `T` to the three scalars, and closes the hole above: a list literal, an `append` to a `[]`, a dict literal, and a store into a `{}` refuse `None` and an optional. The message of 1.9 ends "not a list" or "not a dict" through `kind_of`, so these get a tail of their own: "list elements must be int, str, or bool, not None" and "dict values must be int, str, or bool, not str | None".*
 6.  *Whether a function declared `-> T | None` may reach its end without a `return`.*
     CPython returns `None` there.
     *The design keeps `always_returns` as it is, so the function writes `return None`: the rule that caught a forgotten `return` should not be switched off by the optional.*
@@ -1974,6 +1975,6 @@ EffectPython/
     *   *Acceptance test:*
         *   A sample with the job of `settings_layers.epy` in which `Lookup.get` returns `str | None`, the outermost clause resumes `None`, and `address()` and `main()` test `is None`; its output is that of `settings_layers.epy`, which stays as the throw form.
         *   Accept `take(x)` in the arm of `if x is not None:` and after the guard `if x is None:` over `return`, for an `x` of type `int | None`; reject it outside them with "argument 1 of take() must be int, not int | None".
-        *   Reject an operator, `==`, a subscript, `len()`, `str()`, an f-string field, and a `for` on an optional, and `[x]` for an `x` of type `None`.
+        *   Reject an operator, `==`, a subscript, `len()`, `str()`, an f-string field, and a `for` on an optional, and `[x]`, `xs.append(x)` on a `[]`, `{"a": x}`, and `d["a"] = x` on a `{}` for an `x` of type `None`.
         *   `None = 1` and `x is y` are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
