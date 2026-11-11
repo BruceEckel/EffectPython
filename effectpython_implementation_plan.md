@@ -1049,7 +1049,7 @@ The acceptance program `augmented.epy` has each of the five operators on an `int
     The samples use `+=` and `-=`; the other three are one token rule each and share the one grammar rule and the one checker rule.
     *The design takes all five, so the augmented forms are the arithmetic operators and no list to remember.*
 
-### 1.15 A clause that leaves (designed 2026-11-09, not implemented)
+### 1.15 A clause that leaves (designed 2026-11-09, implemented 2026-11-11, open questions settled as recommended)
 
 `shop_orders.epy` is the first sample written in Python and then ported, and it has the first operand of unknown type in a sample outside `runtime_*.epy`.
 Its `fill()` skips an order line the warehouse cannot supply:
@@ -1121,7 +1121,7 @@ Over the 140 of the 141 sample programs that parse the result differs for one, `
 Over the 49,500 programs of the enumeration at sizes 2 and 3 no result differs, which is expected, since its alphabet has no exception clause.
 The enumeration therefore does not test this rule, and the milestone needs cases of its own.
 
-**Open questions (recommendations in italics).**
+**Open questions (recommendations in italics; all five settled as recommended, 2026-11-11).**
 
 1.  *Whether an `if` arm that leaves gets the same rule.*
     `check_if` merges both arms whatever their last statements: with `v = 1` before it, `if i == 1:` over `v = "s"` and `continue`, and `take(v)` after it, the program is rejected with "argument 1 of take() must be int, but 'v' has no known type".
@@ -1140,6 +1140,15 @@ The enumeration therefore does not test this rule, and the milestone needs cases
 5.  *Whether a name a leaving clause alone binds is unknown or "not defined" after the `try`.*
     After a `raise` no later pass can bind it, so "not defined" would be right there, as it is today after a `return`.
     *The design gives all three the unknown type: one rule, and no program accepted today is rejected for a name.*
+
+**The `if` arm as implemented (question 1, 2026-11-11).**
+`check_if` asks `leaves(arm) or ends_in_return(arm)` of each arm, an absent `else` being an arm that does not leave.
+Where one arm leaves and the other does not, the code after the `if` has the other arm's types, and a name the leaving arm alone binds enters them with the unknown type, after a `return` as well, so the `if` has one rule where the clause has two.
+Where both arms leave, they are merged as before: no path reaches the next statement, and the types have to come from somewhere.
+An `elif` chain is a nested `If` in the `orelse`, whose last statement is that `If`, so the chain as a whole never leaves (question 3), while its first arm may.
+Probed against the checker with `v = 1` in the loop before the `if`, `v = "s"` and the leaving statement in the arm, and `last = take(v)` after it: `continue`, `break`, `raise Worse("x")`, and `return 1` are each accepted in the `if` arm and in the `else` arm, and each was "argument 1 of take() must be int, but 'v' has no known type" before.
+What the arm did still reaches the paths it takes: with `v = 1` before the loop instead, `take(v)` after the loop stays rejected for `continue` and `break` through `loop_exits`; a `raise` in an arm under a `try` of the same function reaches that `try`'s clauses and the code after it through `boundaries`; and a `return` in an arm under a `try` reaches its `finally` the same way.
+A `raise` or a `return` in an arm with no `try` around it leaves the function, so `take(v)` after the loop is accepted there, as is `take(last)` after a clause that retypes `last` and raises.
 
 ---
 
@@ -1206,10 +1215,10 @@ The static analyzer runs in three passes over the AST before execution:
         *   `RaiseNode(cls)`: produces `{cls}`, and `TryNode(suite, clauses)` subtracts the caught classes from the suite's effects and unions the clauses' effects, as `HandleNode` does with handled effects (1.6; Milestone 6, 2026-11-06); a `finalbody` unions its effects unconditionally (1.8; Milestone 8, 2026-11-06).
         *   Merged paths (`merge_types`, 2026-11-07 for `if`, 2026-11-08 for the rest): where two paths meet, a name they leave with two types, or that one path alone binds, has the unknown type,
             and a `[]` that one path refined to `list[T]` keeps the refinement.
-            The branches of an `if` are two such paths (`check_if`).
+            The branches of an `if` are two such paths (`check_if`), unless one ends in a `return`, `continue`, `break`, or `raise`: the code after the `if` then has the other branch's types, and a name the leaving branch alone binds is unknown (1.15; Milestone 15, 2026-11-11).
             A loop body is checked from the types before the loop, what it leaves at its end and at each `break` or `continue` is merged with them, and it is checked again from the merged types until nothing changes (`check_loop_body`), so a name the body gives another type is unknown after the loop, and unknown on the next pass over the body.
             The name a `for` binds is bound to the element type at the start of every pass, as every iteration binds it, so what the body does to it does not reach the next pass.
-            A `try`'s clauses start from the types at every statement boundary of its suite, the first included, since the exception may arrive after any statement (`check_suite`), and the code after the `try` sees the suite's end merged with the end of every clause that does not return (`check_try`);
+            A `try`'s clauses start from the types at every statement boundary of its suite, the first included, since the exception may arrive after any statement (`check_suite`), and the code after the `try` sees the suite's end merged with the end of every clause that does not end in a `return`, `continue`, `break`, or `raise` (`check_try`, `leaves`), with a name unknown that a clause ending in one of the last three alone binds (1.15; Milestone 15, 2026-11-11);
             a `finally` suite is checked from every boundary of the suite and of each clause, a return or an exception included and with the name of a clause that returned unbound, and then from the continuing paths for the code after it;
             a `for` binds its name on the path through the body alone, so afterwards the name has the element type merged with the type it had before (`check_loop`);
             a `handle` statement's clauses start from every boundary of its body, where a `perform()` may suspend it, and what the clauses did on one pass (`Pending`: the names they retyped, through `Scope.written`, with the merge of their types, and the names they left unbound) is applied on the next pass at every perform point of the body and the clauses, until the clauses change nothing more (`check_handle`; `check_handle_suites` makes one pass);
@@ -1857,13 +1866,21 @@ EffectPython/
         *   Reject `x += 1` with `x` unbound ("name 'x' is not defined"), `s += 1` with `s` a `str` ("unsupported operand types for +: str and int"), `xs += [1]` ("unsupported operand types for +: list[int] and list[int]"), `flag += True` ("unsupported operand types for +: bool and bool"), `d[k] += 1` with `d` a `dict[str, str]`, `d[1] += 1` ("a dict key must be str, not int"), `f() += 1` ("cannot assign to this expression"), and a `perform()` in the value with no effect in the row; accept `s += "x"`, `self.n += 1`, `xs[i] += 1`, `d[k] += 1` with `d` a `dict[str, int]`, and `x //= 2`.
         *   `runtime_augmented_key.epy` reaches "key 'k' not found" from `d[k] += 1` on a missing key.
 15. **Milestone 15: a clause that leaves (1.15)**
-    *   *Designed 2026-11-09, the second rule implemented.* The five open questions of 1.15 are not settled.
+    *   *Designed 2026-11-09, the second rule implemented the same day and the first on 2026-11-11.* The five open questions of 1.15 are settled as recommended.
     *   *Done 2026-11-09: the second rule, the `finally` on a leaving path.*
         After the first check of a `finally` suite, `check_try` absorbs `scope.types` into `loop_exits[-1]` when `loop_exits` is not empty, which holds when the `try` is under a loop of the same function, since `check_function` resets the list.
         `tests/programs/unreachable_finally_continue.epy` is the suite form with `continue`, and `tests/test_checker.py` rejects the suite and the clause forms with `continue` and with `break`.
         The enumeration at sizes 2 and 3 gave the counts of the run before the change.
-        The first rule (`leaves` and the names a leaving clause alone binds) is not implemented.
-    *   *Implementation (planned):* `checker.py` gains `leaves(stmts)` beside `ends_in_return`; `check_try` keeps the end of a leaving clause out of the types after the `try`, enters each name that clause alone binds with the unknown type, and (done) absorbs the types after the first check of a `finally` suite into `loop_exits[-1]` under a loop; the module docstring's paragraph on `check_try` and the `check_try` item of 2.2 say so.
+        The first rule (`leaves` and the names a leaving clause alone binds) followed on 2026-11-11.
+    *   *Done 2026-11-11: the first rule, for a clause and for an `if` arm.*
+        `checker.py` has `leaves(stmts)` and `keep_bound(types, left)` beside `ends_in_return`.
+        `check_try` keeps the end of a clause that leaves out of the merge and enters the names it alone binds as unknown once the clauses are merged, so a name another path types keeps that type.
+        `check_if` does the same for one arm that ends in a `return`, `continue`, `break`, or `raise` (1.15, the `if` arm as implemented).
+        `tests/test_checker.py` accepts the clause and both arm forms for each leaving statement, holds a name a leaving clause alone binds to the unknown type, and rejects nine programs where the leaving path still reaches a read; `ORDINARY_UNKNOWNS` is empty.
+        `pypy2 -m pytest` passes against a binary translated from the change, 1,247 tests, 23 of them new, and `shop_orders.epy` gives its recorded output.
+        Of the sample programs the checker's result differs for `shop_orders.epy` alone, whose unknown operands go from line 72 to none.
+        `pypy2 tests/enumerate_programs.py 2 3` against that binary: accepted 39,831, typed-slot failures 0, unknown-operand type errors 172, other runtime errors 18,515, the counts before the change.
+    *   *Implementation (as planned on 2026-11-09):* `checker.py` gains `leaves(stmts)` beside `ends_in_return`; `check_try` keeps the end of a leaving clause out of the types after the `try`, enters each name that clause alone binds with the unknown type, and (done) absorbs the types after the first check of a `finally` suite into `loop_exits[-1]` under a loop; the module docstring's paragraph on `check_try` and the `check_try` item of 2.2 say so.
         The change is to how a name's type changes across a suite, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*
         *   `shop_orders.epy` has no unknown operand, and its entry leaves `ORDINARY_UNKNOWNS` in `tests/test_checker.py`; its recorded output does not change.

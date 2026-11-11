@@ -8,7 +8,9 @@ for return values, loop and try merging, and [] aliasing, and from
 Milestone 11 the bool rule for and, or, not, if, and while, and elif
 (plan 1.11), from Milestone 12 the dict and in rules (plan 1.12),
 from Milestone 13 the f-string field rule (plan 1.13), and from
-Milestone 14 the augmented assignment rules (plan 1.14). The last
+Milestone 14 the augmented assignment rules (plan 1.14), and from
+Milestone 15 the rule for a clause or an arm that leaves (plan
+1.15). The last
 tests read Checker.unknowns, the places an operand of unknown type
 passed the checker, counted on the last pass over a suite alone.
 
@@ -1485,6 +1487,91 @@ def test_a_finally_on_a_leaving_path_reaches_the_loop_exits(form, leave):
         "line 26: argument 1 of take() must be int, but 'x' has no "
         "known type")
 
+WALK = ('class E(Exception): ...\nclass Worse(Exception): ...\n'
+        'def take(n: int) -> int:\n    return n - 1\n'
+        'def risky(i: int) -> int / [E]:\n    if i == 1:\n'
+        '        raise E()\n    return i\n'
+        'def main() -> int / []:\n    return 0\n'
+        'def walk() -> int / [Worse]:\n    last = 0\n')
+EACH = '    for i in range(3):\n'
+RISK = '        try:\n            v = risky(i)\n'
+SKIP = RISK + '        except E:\n            %s\n'
+GUARD = ('        v = 1\n        if i == 1:\n            v = "s"\n'
+         '            %s\n')
+OTHER_ARM = ('        v = 1\n        if i == 1:\n            pass\n'
+             '        else:\n            v = "s"\n            %s\n')
+TAKEN = '        last = take(v)\n    return last\n'
+LEAVES = ['continue', 'break', 'raise Worse("x")']
+
+@pytest.mark.parametrize('leave', LEAVES)
+def test_a_clause_that_leaves_stays_out_of_the_types_after(leave):
+    check_source(WALK + EACH + SKIP % leave + TAKEN)
+
+@pytest.mark.parametrize('form', [GUARD, OTHER_ARM], ids=['if', 'else'])
+@pytest.mark.parametrize('leave', LEAVES + ['return 1'])
+def test_an_arm_that_leaves_stays_out_of_the_types_after(form, leave):
+    check_source(WALK + EACH + form % leave + TAKEN)
+
+@pytest.mark.parametrize('leave', LEAVES)
+def test_a_name_a_leaving_clause_alone_binds_is_unknown(leave):
+    body = (WALK + EACH + RISK + '        except E:\n'
+            '            w = 1\n            %s\n'
+            '        print(w)\n        print(take(w))\n'
+            '    return 0\n') % leave
+    with pytest.raises(InvalidProgram) as info:
+        check_source(body)
+    assert info.value.msg == (
+        "line 27: argument 1 of take() must be int, but 'w' has no "
+        "known type")
+
+@pytest.mark.parametrize('body, msg', [
+    (EACH + RISK + '        except E:\n            last = "s"\n'
+     '            continue\n        print(take(last))\n'
+     '    return 0\n',
+     "line 26: argument 1 of take() must be int, but 'last' has no "
+     "known type"),
+    (EACH + SKIP % 'continue' + '        finally:\n'
+     '            print(take(v))\n    return 0\n',
+     "line 26: argument 1 of take() must be int, but 'v' has no "
+     "known type"),
+    (EACH + RISK + '        except E as e:\n            continue\n'
+     '        print(e)\n    return 0\n',
+     "line 25: name 'e' is unbound after the except clause that "
+     "bound it"),
+    (EACH + SKIP % 'continue' + '        except Worse:\n'
+     '            v = "s"\n' + TAKEN,
+     "line 27: argument 1 of take() must be int, but 'v' has no "
+     "known type"),
+    ('    v = []\n' + EACH + RISK + '        except E:\n'
+     '            v = [1]\n            continue\n'
+     '        print(len(v))\n    return 0\n',
+     'line 27: len() needs a list, dict, or str, not int'),
+    (EACH + '        try:\n            try:\n'
+     '                v = risky(i)\n            except E:\n'
+     '                last = "s"\n                raise Worse("x")\n'
+     '            print(take(last))\n        except Worse:\n'
+     '            pass\n    return 0\n',
+     "line 27: argument 1 of take() must be int, but 'last' has no "
+     "known type"),
+    (EACH + GUARD % 'continue' + '    return take(v)\n',
+     "line 25: argument 1 of take() must be int, but 'v' has no "
+     "known type"),
+    ('    try:\n        if last == 0:\n            last = "s"\n'
+     '            return 1\n    finally:\n'
+     '        print(take(last))\n    return 0\n',
+     "line 25: argument 1 of take() must be int, but 'last' has no "
+     "known type"),
+    (EACH + '        v = 1\n        if i == 1:\n            v = "s"\n'
+     '            continue\n        else:\n            v = "t"\n'
+     '            continue\n' + TAKEN,
+     'line 28: argument 1 of take() must be int, not str'),
+], ids=['retyped', 'finally', 'clause-name', 'second-clause', 'len',
+        'caught-raise', 'after-loop', 'arm-finally', 'both-arms'])
+def test_a_leaving_path_still_reaches_what_it_runs_into(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(WALK + body)
+    assert info.value.msg == msg
+
 UNSURE = ('    if 1 == 1:\n        x = 1\n    else:\n        x = "s"\n')
 
 HN = ('class X(Effect):\n    def a() -> int: ...\n'
@@ -2012,10 +2099,7 @@ def test_counts_a_finally_suite_unknown_on_both_checks_once():
               '        print(v + 1)\n    return 0\n')
     assert unknowns_in(source) == [(9, checker.OPERANDS)]
 
-# shop_orders.epy reads left after a try whose except clause ends in
-# continue; check_try merges that clause's end, where left is not
-# bound, into the types after the try, so the comparison is unknown.
-ORDINARY_UNKNOWNS = {'shop_orders.epy': [(72, checker.OPERANDS)]}
+ORDINARY_UNKNOWNS = {}
 
 def ordinary_programs():
     return sorted(name for name in os.listdir(PROGRAMS)

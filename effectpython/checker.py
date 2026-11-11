@@ -120,9 +120,12 @@ Where two paths meet, the types they left are merged (merge_types):
 a name they leave with two types, or that one path alone binds, is
 unknown, while a [] that one path refined to list[T] keeps the
 refinement (merged). The branches of an if are two such paths
-(check_if). A loop body is checked from the types before the loop,
-what it leaves at its end and at each break or continue is merged
-with them, and it is checked again from the merged types until
+(check_if), unless one ends in a return, continue, break, or raise:
+the code after the if then has the other branch's types, and a name
+the leaving branch alone binds is unknown (plan 1.15). A loop body
+is checked from the types before the loop, what it leaves at its
+end and at each break or continue is merged with them, and it is
+checked again from the merged types until
 nothing changes (check_loop_body), so the code after the loop sees a
 name the body gives another type as unknown, and a type the body can
 carry into a later iteration is unknown on the next pass over the
@@ -137,8 +140,12 @@ since an unbound name fails at runtime whatever its type
 statement boundary of its suite, the first included, since the
 exception may arrive after any statement (check_suite), and the code
 after the try sees the suite's end merged with the end of every
-clause that does not return (check_try), while a finally suite is
-checked from every boundary of the suite and of each clause, since
+clause that does not end in a return, continue, break, or raise
+(check_try, leaves), with a name unknown that a clause ending in one
+of the last three alone binds, since the paths such a clause takes
+are recorded where the statement stands (plan 1.15), while a
+finally suite is checked from every boundary of the suite and of
+each clause, since
 it runs on every path out of them, and then from the continuing
 paths, types and bound names both, for the code after it. Under a
 loop the types the first check leaves also join the loop's exits,
@@ -318,6 +325,27 @@ def ends_in_return(stmts):
     these statements have. A raise does not qualify: an enclosing try
     in the same function may catch the exception and continue."""
     return len(stmts) > 0 and isinstance(stmts[-1], ast.Return)
+
+def leaves(stmts):
+    """Whether no path runs from the end of these statements to the
+    statement after the enclosing one, though code later in the
+    function may still run: the last is a continue, a break, or a
+    raise (plan 1.15). The last statement alone is read, as
+    ends_in_return reads it."""
+    if len(stmts) == 0:
+        return False
+    last = stmts[-1]
+    return (isinstance(last, ast.Continue) or isinstance(last, ast.Break)
+            or isinstance(last, ast.Raise))
+
+def keep_bound(types, left):
+    """Enter each name bound at the end of a path that leaves, and
+    absent from the types of the paths that continue, with the unknown
+    type: a later pass of a loop may reach the read with the name
+    bound, and the source-order rule reads bindings, not paths."""
+    for name in left:
+        if name not in types:
+            types[name] = UNKNOWN
 
 def always_returns(stmts):
     """Whether the function returns or raises an exception before
@@ -769,13 +797,26 @@ class Checker(object):
         binds, is unknown afterwards: either branch may have run, so
         the checker cannot hold a later use to one type. A name still
         counts as bound after the if when one branch bound it, since
-        the source-order rule reads bindings, not paths."""
+        the source-order rule reads bindings, not paths. A branch
+        whose last statement is a return, continue, break, or raise
+        does not reach the code after the if, which then has the
+        other branch's types, with a name the leaving branch alone
+        binds unknown (plan 1.15); two such branches are merged as
+        before, since no path is left to take the types from."""
         before = scope.types.copy()
         self.check_block(stmt.body, scope, effects)
         body_types = scope.types
         scope.types = before
         self.check_block(stmt.orelse, scope, effects)
-        scope.types = merge_types(body_types, scope.types)
+        body_left = leaves(stmt.body) or ends_in_return(stmt.body)
+        else_left = leaves(stmt.orelse) or ends_in_return(stmt.orelse)
+        if body_left and not else_left:
+            keep_bound(scope.types, body_types)
+        elif else_left and not body_left:
+            keep_bound(body_types, scope.types)
+            scope.types = body_types
+        else:
+            scope.types = merge_types(body_types, scope.types)
 
     def check_return(self, stmt, scope, effects):
         """The value must have the declared return type; a bare return
@@ -1072,7 +1113,10 @@ class Checker(object):
         A clause may start after any statement of the suite, so it
         starts from the types at every boundary of the suite, and the
         code after the try may follow the suite or any clause that
-        does not end in a return, so it sees those paths merged. The
+        does not end in a return, continue, break, or raise, so it
+        sees those paths merged; a name that a clause ending in one
+        of the last three alone binds is unknown there, where one a
+        returning clause alone binds is not defined (plan 1.15). The
         finally suite may follow any boundary of the suite or of a
         clause, a return or an exception included, so it is checked
         first from all of them merged, with the name of a clause that
@@ -1090,6 +1134,7 @@ class Checker(object):
         into_finally = entry.copy()
         absorb(into_finally, after)
         returned = []
+        left = []
         caught = {}
         for clause in stmt.clauses:
             if (clause.name != EXCEPTION
@@ -1104,9 +1149,13 @@ class Checker(object):
             if ends_in_return(clause.body):
                 if clause.binding is not None:
                     returned.append(clause.binding)
+            elif leaves(clause.body):
+                left.append(scope.types)
             else:
                 after = merge_types(after, scope.types)
             absorb(into_finally, boundaries)
+        for types in left:
+            keep_bound(after, types)
         for name in body_effects.names:
             if name in self.exceptions and (name in caught
                                             or EXCEPTION in caught):
