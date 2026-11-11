@@ -1,0 +1,94 @@
+# A second program with a job of its own: the settings a service
+# starts with come from the first layer that has each one, the
+# environment, then the config file, then the defaults. Written in
+# Python first and then ported. A layer that lacks a key is no error
+# there: get() returns None and the caller tries the next. Here each
+# layer is a handler that performs the same operation outward on a
+# miss, the outermost clause throws Missing into the body, and the
+# two places a miss is ordinary catch it. The Python find() returned
+# the value and its layer's name as a pair; with no tuple, source is
+# a second operation that walks the layers again.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Lookup(Effect):
+    def get(key: str) -> str / [Missing]: ...
+    def source(key: str) -> str / [Missing]: ...
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Missing(Exception): ...
+
+class Layer(Handler[Lookup]):
+    name: str
+    values: dict[str, str]
+    hits: int = 0
+    def get(self, key: str) -> str / [Lookup, Missing]:
+        if key in self.values:
+            self.hits += 1
+            return self.values[key]
+        return perform(Lookup.get(key))
+    def source(self, key: str) -> str / [Lookup, Missing]:
+        if key in self.values:
+            return self.name
+        return perform(Lookup.source(key))
+
+class Journal(Handler[Log]):
+    entries: list[str] = []
+    def note(self, text: str) -> int:
+        self.entries.append(text)
+        return len(self.entries)
+
+def resolve(key: str) -> str / [Lookup, Log, Missing]:
+    value = perform(Lookup.get(key))
+    source = perform(Lookup.source(key))
+    perform(Log.note(f"{key} = '{value}' ({source})"))
+    return value
+
+def address() -> str / [Lookup, Log, Missing]:
+    host = resolve("host")
+    port = resolve("port")
+    try:
+        prefix = perform(Lookup.get("prefix"))
+    except Missing:
+        return f"{host}:{port}"
+    return f"{host}:{port}{prefix}"
+
+def main() -> int / []:
+    env = Layer("env", {"port": "9000", "prefix": ""})
+    file = Layer("file", {"host": "db.internal", "user": "app"})
+    defaults = Layer("defaults", {"host": "localhost", "port": "8080",
+                                  "prefix": "/api"})
+    journal = Journal()
+    try:
+        with handle(Lookup, journal):
+            with handle(defaults):
+                with handle(file):
+                    try:
+                        with handle(env):
+                            print("web at", address())
+                        print("web at", address(), "without env")
+                    except Missing as e:
+                        print("no address: no setting for", e)
+                    with handle(env):
+                        for key in ["user", "password"]:
+                            try:
+                                print(key, "is", resolve(key))
+                            except Missing as e:
+                                print("no setting for", e)
+                        try:
+                            timeout = perform(Lookup.get("timeout"))
+                            print("timeout", timeout)
+                        except Missing:
+                            print("timeout unset")
+    except Lookup.get as eff:
+        eff.throw(Missing(eff.key))
+    except Lookup.source as eff:
+        eff.throw(Missing(eff.key))
+    print(env.name, "answered", env.hits)
+    print(file.name, "answered", file.hits)
+    print(defaults.name, "answered", defaults.hits)
+    for entry in journal.entries:
+        print(entry)
+    return 0
