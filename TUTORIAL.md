@@ -912,6 +912,12 @@ A name that an `if`, a loop, a `try`, or a handled body can leave with two types
 Such a value cannot be passed to a parameter, returned, stored in a field, or appended to a typed list
 (`argument 1 of f() must be int, but 'x' has no known type`), since the receiver would then trust a type nobody checked;
 an operator on it passes the checker and meets the runtime's check instead.
+A path that cannot reach the next statement is left out of that count:
+an `except` clause whose last statement is `continue`, `break`, or `raise`, as one that ends in `return`, and an `if` or `else` branch that ends in any of the four.
+So the way Python skips one pass of a loop keeps its types.
+In `tests/programs/shop_orders.epy`, `left = perform(Stock.reserve(item, qty))` stands in a `try` whose clause logs the short line and ends in `continue`,
+and `left` is an `int` in the code after the `try`, since that code runs only when the suite finished.
+What such a clause or branch assigned is still counted where it does go: at the top of the next pass and after the loop for `continue` and `break`, and in the clauses and the `finally` of a `try` around it for `raise` and `return`.
 What remains for runtime is what the checker does not settle:
 integer division or modulo by zero, a list index past either end, an operator whose operand types the checker could not both see, a name assigned in one branch of an `if` or in a loop that ran zero times and read after it, resuming twice, and a recursion that outgrows the stack (`maximum recursion depth exceeded`, from `tests/programs/deep_recursion.epy`).
 Under `tests/programs/`, `runtime_*.epy` reaches each of these, and `unreachable_*.epy` shows the checker stopping each error it makes unreachable.
