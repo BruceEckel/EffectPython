@@ -13,6 +13,8 @@ read the relevant section before changing the code it describes.
   The host parses them with its own `rply` grammar and never imports them.
 - `tools/` is the `epy` task runner and is ordinary Python 3 (3.14 or later), outside both dialects:
   the Thinking in Python skill applies to it in full, and `uvx ruff check tools` and `uvx --with pytest ty check tools` pass.
+- `ports/` holds the Python 3 originals of the ported samples, each named after its port under `tests/programs/`.
+  `tools/test_ports.py` holds an original's output to its port's recorded output, so a change to either shows.
 
 ## Style: the Thinking in Python skill
 
