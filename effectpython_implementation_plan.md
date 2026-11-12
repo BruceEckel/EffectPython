@@ -1397,6 +1397,97 @@ A perform before the comparison does no harm, since the comparison is evaluated 
 
 All three were settled as recommended on 2026-11-11.
 
+### 1.19 Data classes (designed 2026-11-11)
+
+Two of the three programs ported from Python lost a record on the way.
+The Python version of the build program has
+
+```python
+@dataclass
+class Task:
+    name: str
+    needs: list[str]
+    seconds: int
+    failures: int = 0
+```
+
+and `build()` takes a `list[Task]`.
+`build_plan.epy` has two parallel lists for the names and the times, two more with one entry per dependency edge, since a list cannot hold a list, and a dict for the failure counts; `shop_orders.epy` lost its order lines the same way.
+A handler class already has typed fields, a constructor, and field reads and stores (1.5), so the data class is that machinery under a declaration with no effect, plus the type forms that let a list, a dict, and an optional name it.
+
+**Today (probed against the binary, 2026-11-11).**
+`@dataclass` is "line 12, column 1: unexpected character '@'", and `class Task:` with a field under it is "unexpected ':'" at the colon.
+With `Report` a handler class with one field `count: int = 0`: `xs = [Report(), Report()]` checks, `print(xs)` shows `[Report(count=0), Report(count=0)]`, `for r in xs:` reads `r.count`, `d = {"a": Report(2)}` checks and `d["a"]` may be passed to a parameter of type `Report`, and `r.count = 5` outside the class stores the field.
+So a list of instances works where no type is written, and `-> list[Report]` is "list[Report] is not a type; the element type is int, str, or bool"; `Report | None` is "Report | None is not a type; the optional types are int | None, str | None, bool | None, and tuple[...] | None".
+`xs == xs` on that list prints `False`, and so does `Report() in xs`: `lists_equal` and `contains` compare elements with `scalars_equal`, which answers `False` for anything that is no scalar.
+`Report() == Report()` is "unsupported operand types for ==: Report and Report" from the checker.
+`xs[0].count` is "an attribute read needs a name on the left of the dot", `Report(count=1)` is "unexpected '='", `f"{r}"` is "an f-string field needs an int, str, or bool, not Report", and `str(r)` is "str() needs an int, str, or bool, not Report".
+`n.count` for an `int` is "'n' is not an except binding or a handler instance", and `n.count = 2` is "'n' is not a handler instance".
+A handler field `on: bool = True` is "a field default must be an int or str literal, [], or {}", and a parameter `r: Foo`, with no class `Foo`, checks.
+
+CPython (`python3 -I`, 3.14) shows the instance as `Task(name='fetch', needs=[], seconds=3, failures=0)`, compares two instances field by field (`==` and `in` both answer `True` for an equal one), stores `t.seconds = 4`, and refuses `lines: list[str] = []` with "mutable default <class 'list'> for field lines is not allowed: use default_factory" and a field without a default after one with a default with "non-default argument 'b' follows default argument 'a'".
+A class with annotations and no decorator takes no arguments: "P() takes no arguments".
+
+**Declaration.**
+`@dataclass` on the line above `class <Name>:` declares a data class, a `DataDef` node; `dataclass` comes from the ignored import line, `from dataclasses import dataclass`.
+The body is one or more field declarations, `<name>: <Type> [= <default>]`, as a handler class's are, and nothing else: no method (open question 1).
+`@` is a new token.
+Any other decorator name is refused, the decorator takes no arguments (open question 2), and a `class <Name>:` with no decorator is refused with a message that names it, since CPython gives such a class no constructor.
+The class name must not be that of an effect, an exception class, a handler class, a function, or another data class.
+
+**Fields.**
+A field is `int`, `str`, `bool`, a list type, or a dict type, with a default that is a literal of the type, `[]`, or `{}`; a field without a default cannot follow one with a default.
+`bool` is new, and handler classes get it too, with `True` and `False` as defaults: the two kinds of class share `collect_field`.
+`[]` and `{}` are evaluated per construction, as 1.9 has it for a handler class, where CPython's `dataclass()` refuses them and asks for `field(default_factory=list)`; the dialect keeps the one spelling it has (open question 3).
+A field is no tuple, no optional, and no data class (open question 4).
+
+**Use.**
+`Task("fetch", [], 3)` constructs an instance, positionally and in declaration order, with the trailing defaults optional; there are no keyword arguments (open question 5).
+`task.name` reads a field and `task.seconds = 4` stores one, on a name alone, as today (open question 6); `task.tries += 1` is the store it means (1.14).
+An instance is mutable, as CPython's is without `frozen=True`.
+`print()` shows CPython's form through `W_HandlerInstance.str()`.
+An instance takes no operator, `==` included (open question 7), no `len()`, `str()`, or f-string field, and `handle()` refuses it, since it fulfills no effect.
+
+**Types.**
+The class name is the type of its instances, as a handler class's is.
+`list[<Class>]`, `dict[str, <Class>]`, and `<Class> | None` are types where `<Class>` is a data class.
+The parser cannot tell a data class from a misspelling, so it accepts any name in the three places and the checker's first pass holds every written type (a parameter, a return, a field, in a function, an operation, and a method) to the rule: the name is `int`, `str`, `bool`, or a data class.
+A plain `<Name>` stays unchecked, as it is today.
+A list element and a dict value are then a scalar or an instance; `require_scalar` already lets an instance through, which is why the probe above checks.
+A tuple's elements stay scalars.
+`merged` gives `<Class> | None` for a class name and `None`: `can_be_absent` accepts any type that is no list, dict, optional, `None`, or unknown.
+That includes a handler class and an exception class, which no annotation can write as an optional; `merged` has no table to tell them from a data class, and the type is true of the value either way.
+Narrowing (1.16, 1.18) applies with no change, so `task = find(tasks, name)` then `if task is None: return` leaves `task` a `Task`.
+
+**Equality.**
+`xs == ys` and `x in xs` are refused where the element type is known and is no scalar; today they check and answer `False` at runtime, which is wrong for `xs == xs`.
+Through a list of unknown type the comparison still reaches `scalars_equal`, which raises "unsupported operand types for ==: Task and Task" for two instances in place of answering `False`; an instance against a scalar stays unequal.
+
+**Runtime.**
+An instance is a `W_HandlerInstance`, which holds a class name, the field names, and the values and needs nothing more; the interpreter keeps the data classes beside the handler classes and constructs both the same way.
+`handle()` on an instance of a data class is the existing "handle() argument is not a handler instance".
+`type_name()` answers the class name for an instance, where it says "object" today.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether a data class has methods.*
+    The Python version's `Clock` and `Report` are dataclasses with a method each; in the port they are handler classes, which is what a class with behaviour is in this dialect.
+    *The design leaves methods out: a function taking the instance does the work, and a method would need `self` typed outside a handler class and a call form `task.run()` beside `xs.append()`.*
+2.  *Whether `@dataclass(frozen=True)` or the book's `@record` is accepted.*
+    *The design takes the bare `@dataclass`, the form the ported programs have. A frozen form would refuse the field store and is a small addition when a program wants it.*
+3.  *Whether `field(default_factory=list)` is accepted.*
+    *The design keeps `[]` and `{}`, which a handler class has had since Milestone 9; the price is that the declaration is not one CPython would run.*
+4.  *Whether a field may be a data class, an optional, or a tuple.*
+    A field of the class's own type, `next: Node | None`, is the linked list.
+    *The design keeps a field to scalars, lists, and dicts: narrowing reads names, not fields, so an optional field could never be used, and no ported program nests a record in a record.*
+5.  *Whether the constructor takes keyword arguments.*
+    The Python version writes `Task("fetch", [], 3, failures=1)`.
+    *The design leaves them out, as 1.5 did; they belong to a milestone that gives them to every call.*
+6.  *Whether a field is read through any expression, `tasks[0].name`.*
+    *The design keeps the name on the left of the dot: `AttrRead` and `AttrAssign` hold a name, the `for` loop binds one, and the change would reach every place that reads them.*
+7.  *Whether `==` compares two instances field by field, as CPython does.*
+    *The design refuses it, as it refuses `==` on a tuple and a dict: a program compares the field it means.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2186,4 +2277,14 @@ EffectPython/
     *   *Acceptance test:*
         *   Accept, for `x` and `y` of type `int | None`: `take(x)` in the body of `if x is not None and x > 0:`, of `if not x is None:`, and of `while x is not None:`; `take(x) + take(y)` after `if x is None or y is None:` over `return 0` and in the body of `if not (x is None or y is None):`; and `best = best + i` under `if best is not None and best > i:` with `best = None` before the loop.
         *   Reject `take(x)` in the body of `if x is None or y is None:`, after `if x is not None and x > 0:` over a `return`, after `while x is not None:`, and in the body of `if x is not None and perform(A.get()) > 0:` where a clause assigns `x = None`.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+19. **Milestone 19: data classes (1.19)**
+    *   *Designed 2026-11-11.*
+    *   *Implementation (planned), in the order of Milestone 5:* the lexer's `@` and the parser with tests (the declaration, the three type forms with any name); the checker with tests (the declaration and its fields, the written types held to the rule, `can_be_absent`, the two refused comparisons, `bool` fields); then the runtime (the data classes beside the handler classes, `scalars_equal`, `type_name`).
+        The change is to `merged`, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   `build_plan.epy` has a `Task` data class with `needs: list[str]` and `failures: int = 0`, `build()` takes a `list[Task]`, and the four parallel lists and the failures dict are gone. Its recorded output does not change.
+        *   Accept a data class as a parameter, a return, a list element, a dict value, and an optional that an `is None` test narrows; a field store from outside the class; a `bool` field with a default in a data class and in a handler class.
+        *   Reject `list[Foo]`, `dict[str, Foo]`, and `Foo | None` for a name that is no data class, a handler class included; a data class with a method; a duplicate class or field name; a field without a default after one with a default; a field that is a tuple, an optional, or a data class; a constructor with too few or too many arguments or one of the wrong type; `==` on two instances, on two lists of them, and `in` on a list of them; and `handle()` on an instance.
+        *   `class Task:` with no decorator, `@other`, and `@dataclass(frozen=True)` are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
