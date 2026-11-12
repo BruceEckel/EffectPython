@@ -1,0 +1,12 @@
+# Runtime-only: a store that adds a key while a for walks the dict's
+# items is Python's error; exec_for_items finds the new size when the
+# walk would advance. A store to a key the dict has is allowed.
+
+def main() -> int:
+    counts = {"a": 1, "b": 2}
+    for word, count in counts.items():
+        counts[word] = count + 1
+    print(counts)
+    for word, count in counts.items():
+        counts[word + word] = count
+    return 0

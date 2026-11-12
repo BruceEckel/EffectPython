@@ -1103,3 +1103,38 @@ def test_a_method_or_power_runtime_error(statement, msg):
                       + '\n    return 0\n')
     assert info.value.msg == msg
 
+# --- for k, v in d.items() (Milestone 22) ------------------------------------
+
+@pytest.mark.parametrize('body, printed', [
+    ('for k, v in d.items():\n        print(k, v)', ['a 1', 'b 2']),
+    ('for k, v in d.items():\n        d[k] = v * 10\n    print(d)',
+     ["{'a': 10, 'b': 20}"]),
+    ('for k, v in d.items():\n        if k == "a":\n'
+     '            continue\n        print(k)\n        break\n'
+     '    print(k, v)', ['b', 'b 2']),
+    ('k = "z"\n    for k, v in {}.items():\n        print(k)\n'
+     '    print(k)', ['z']),
+    ('for k, v in pick(d).items():\n        print(k)',
+     ['pick', 'a', 'b']),
+], ids=['walk', 'store-to-a-key', 'break-and-continue', 'empty',
+        'target-once'])
+def test_a_for_over_items(body, printed):
+    exit_code, lines = run_main_body(
+        '    d = {"a": 1, "b": 2}\n    ' + body + '\n    return 0\n',
+        'def pick(d: dict[str, int]) -> dict[str, int]:\n'
+        '    print("pick")\n    return d\n')
+    assert (exit_code, lines) == (0, printed)
+
+@pytest.mark.parametrize('body, msg', [
+    ('for k, v in d.items():\n        d["c"] = 3',
+     'dict changed size during iteration'),
+    ('xs = [1]\n    if 1 == 1:\n        d = xs\n'
+     '    for k, v in d.items():\n        pass',
+     'items() needs a dict on the left of the dot, not list'),
+], ids=['resized', 'not-a-dict'])
+def test_a_for_over_items_runtime_error(body, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    d = {"a": 1}\n    ' + body
+                      + '\n    return 0\n')
+    assert info.value.msg == msg
+

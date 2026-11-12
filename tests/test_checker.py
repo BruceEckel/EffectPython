@@ -2569,9 +2569,9 @@ def test_a_method_or_a_power_is_accepted(body):
     ('def f() -> int:\n'
      '    ws = ["x", "y"]\n'
      '    d = {"a": 1}\n'
-     '    print(d.items())\n'
+     '    print(d.keys())\n'
      '    return 0\n',
-     "line 21: a dict has no method 'items'"),
+     "line 21: a dict has no method 'keys'"),
     ('def f() -> int:\n'
      '    ws = ["x", "y"]\n'
      '    d = {"a": 1}\n'
@@ -2604,6 +2604,116 @@ def test_a_method_or_a_power_is_accepted(body):
         'dict-method', 'list-method', 'int-method', 'power-of-str',
         'power-to-str'])
 def test_a_method_or_a_power_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(DATA + body)
+    assert info.value.msg == msg
+
+# --- for k, v in d.items() (Milestone 22) ------------------------------------
+
+@pytest.mark.parametrize('body', [
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    d = {"a": 1}\n'
+    '    n = 0\n'
+    '    for k, v in d.items():\n'
+    '        print(name(k))\n'
+    '        n += take(v)\n'
+    '    return n\n',
+    'def f() -> int:\n'
+    '    d = {"a": Task("a", [])}\n'
+    '    for k, t in d.items():\n'
+    '        t.seconds += 1\n'
+    '        return take(t.seconds)\n'
+    '    return 0\n',
+    '@dataclass\n'
+    'class Box:\n'
+    '    d: dict[str, int] = {}\n'
+    'def f() -> int:\n'
+    '    b = Box()\n'
+    '    for k, v in b.d.items():\n'
+    '        return take(v)\n'
+    '    return 0\n',
+    'def f() -> int:\n'
+    '    d = {"a": 1}\n'
+    '    for k, v in d.items():\n'
+    '        d[k] = v + 1\n'
+    '    return take(d["a"])\n',
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    d = {"a": 1}\n'
+    '    k = "z"\n'
+    '    v = 0\n'
+    '    for k, v in d.items():\n'
+    '        pass\n'
+    '    print(name(k))\n'
+    '    return take(v)\n',
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    if 1 == 1:\n'
+    '        d = {"a": 1}\n'
+    '    else:\n'
+    '        d = 1\n'
+    '    for k, v in d.items():\n'
+    '        print(name(k), v)\n'
+    '    return 0\n',
+    'def f() -> int:\n'
+    '    d = {"a": 1}\n'
+    '    for k, v in d.items():\n'
+    '        pass\n'
+    '    return take(v)\n',
+], ids=['slots', 'instances', 'field', 'store-in-body', 'names-after',
+        'unknown-target', 'value-after-the-loop'])
+def test_a_for_over_items_is_accepted(body):
+    check_source(DATA + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n'
+     '    xs = [1]\n'
+     '    for k, v in xs.items():\n'
+     '        pass\n'
+     '    return 0\n',
+     'line 20: items() needs a dict on the left of the dot, not '
+     'list[int]'),
+    ('def name(s: str) -> str:\n'
+     '    return s\n'
+     'def f() -> int:\n'
+     '    d = {"a": 1}\n'
+     '    for k, v in d.items():\n'
+     '        print(name(v))\n'
+     '    return 0\n',
+     'line 23: argument 1 of name() must be str, not int'),
+    ('def f() -> int:\n'
+     '    d = {"a": 1}\n'
+     '    for k, v in d.items():\n'
+     '        return take(k)\n'
+     '    return 0\n',
+     'line 21: argument 1 of take() must be int, not str'),
+    ('def f() -> int:\n'
+     '    d = {"a": 1}\n'
+     '    print(d.items())\n'
+     '    return 0\n',
+     'line 20: items() is allowed only in a for with two names: '
+     'for k, v in d.items()'),
+    ('def f() -> int:\n'
+     '    d = {"a": 1}\n'
+     '    for k in d.items():\n'
+     '        pass\n'
+     '    return 0\n',
+     'line 20: items() is allowed only in a for with two names: '
+     'for k, v in d.items()'),
+    ('def f() -> int:\n'
+     '    d = {}\n'
+     '    for k, v in d.items():\n'
+     '        return take(v)\n'
+     '    return 0\n',
+     "line 21: argument 1 of take() must be int, but 'v' has no "
+     'known type'),
+], ids=['on-a-list', 'value-slot', 'key-slot', 'outside-for',
+        'one-name', 'unrefined-value'])
+def test_a_for_over_items_misuse_is_rejected(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(DATA + body)
     assert info.value.msg == msg

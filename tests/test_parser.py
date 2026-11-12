@@ -1354,3 +1354,35 @@ def test_method_shapes(source, expected):
     module = parse('def main() -> int:\n    return %s\n' % source)
     assert shape(module.functions[0].body[0]) == ('Return', expected)
 
+# --- for k, v in d.items() (Milestone 22) ------------------------------------
+
+@pytest.mark.parametrize('iterable, target', [
+    ('d.items()', ('Name', 'd')),
+    ('self.d.items()', ('AttrRead', 'self', 'd')),
+    ('make().items()', ('Call', 'make', [])),
+], ids=['name', 'field', 'call'])
+def test_a_for_with_two_names_is_a_foritems(iterable, target):
+    module = parse('def main() -> int:\n    for k, v in %s:\n'
+                   '        pass\n' % iterable)
+    assert shape(module.functions[0].body[0]) == (
+        'ForItems', 'k', 'v', target, [('Pass',)])
+
+@pytest.mark.parametrize('header, msg', [
+    ('for k, v in d:',
+     'line 2, column 10: a for with two names walks a dict: '
+     'for k, v in d.items()'),
+    ('for k, v in d.items(1):',
+     'line 2, column 10: a for with two names walks a dict: '
+     'for k, v in d.items()'),
+    ('for k, v in d.keys():',
+     'line 2, column 10: a for with two names walks a dict: '
+     'for k, v in d.items()'),
+    ('for k, k in d.items():',
+     'line 2, column 12: the two names of a for must differ'),
+    ('for a, b, c in d.items():', "line 2, column 13: unexpected ','"),
+], ids=['no-call', 'arguments', 'other-method', 'same-name', 'three'])
+def test_for_items_syntax_errors(header, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    %s\n        pass\n' % header)
+    assert info.value.msg == msg
+

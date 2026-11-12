@@ -172,6 +172,19 @@ class For(Stmt):
         self.iterable = iterable  # Expr
         self.body = body          # list of Stmt
 
+class ForItems(Stmt):
+    """for key, value in target.items(): body, over a dict (plan
+       1.22). The parser folds it from the two-name for, as it folds
+       ForRange, since items() has no value anywhere else."""
+    _attrs_ = ['key', 'value', 'target', 'body']
+
+    def __init__(self, key, value, target, body, lineno=0):
+        Node.__init__(self, lineno)
+        self.key = key        # str
+        self.value = value    # str
+        self.target = target  # Expr: the dict
+        self.body = body      # list of Stmt
+
 class ForRange(Stmt):
     """for name in range(args): body, which the parser folds from a
        For whose iterable is a call to range, so the runtime counts

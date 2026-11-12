@@ -236,7 +236,8 @@ checker could not see; integer division or modulo by zero
 index out of range (list_index_error.epy); a key a dict lacks
 (runtime_missing_key.epy, and runtime_augmented_key.epy through the
 read of d[k] += 1), and a dict a store resizes while a for
-walks it (runtime_dict_resized.epy); and a recursion that outgrows
+walks it (runtime_dict_resized.epy, and runtime_items_resized.epy
+for a for over items()); and a recursion that outgrows
 the C stack, which RPython's stack check stops and the entry point
 (deep_recursion.epy) or run_body_callback
 (deep_recursion_in_body.epy) reports as "maximum recursion depth
@@ -534,6 +535,8 @@ class Interpreter(object):
             self.exec_index_aug_assign(stmt, env)
         elif isinstance(stmt, ast.For):
             self.exec_for(stmt, env)
+        elif isinstance(stmt, ast.ForItems):
+            self.exec_for_items(stmt, env)
         elif isinstance(stmt, ast.ForRange):
             self.exec_for_range(stmt, env)
         elif isinstance(stmt, ast.ExprStmt):
@@ -599,6 +602,27 @@ class Interpreter(object):
         size = len(w_dict.items_w)
         for key in w_dict.items_w.keys():
             env.define(stmt.name, W_Str(key))
+            if self.exec_pass(stmt.body, env):
+                break
+            if len(w_dict.items_w) != size:
+                raise EffectPythonRuntimeError(
+                    "dict changed size during iteration")
+
+    def exec_for_items(self, stmt, env):
+        """for k, v in d.items(): walk the keys as exec_for_dict
+        does, binding each with the value the dict holds for it when
+        the pass starts; a store to a key the dict has is allowed,
+        and one that changes the size is Python's error (plan
+        1.22)."""
+        w_dict = self.eval_expr(stmt.target, env)
+        if not isinstance(w_dict, W_Dict):
+            raise EffectPythonRuntimeError(
+                "items() needs a dict on the left of the dot, not %s" %
+                type_name(w_dict))
+        size = len(w_dict.items_w)
+        for key in w_dict.items_w.keys():
+            env.define(stmt.key, W_Str(key))
+            env.define(stmt.value, w_dict.items_w[key])
             if self.exec_pass(stmt.body, env):
                 break
             if len(w_dict.items_w) != size:

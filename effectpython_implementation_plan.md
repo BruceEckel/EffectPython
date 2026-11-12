@@ -1607,7 +1607,7 @@ A field of a double-quoted f-string takes a single-quoted literal, so `build_pla
 `build_plan.epy` is 110 lines, from 130: `joined()` and `power_of_two()` are gone, and three `if k in d: ... else: ...` statements are a `get()` each.
 `methods_and_power.epy` runs each form through the binary; `runtime_method_unknown.epy` and `runtime_negative_exponent.epy` reach the two runtime errors.
 
-### 1.22 `for k, v in d.items()` (designed 2026-11-12)
+### 1.22 `for k, v in d.items()` (designed and implemented 2026-11-12, open questions settled as recommended)
 
 The Python version of the build program ends with `for name, result in status.items():`, and the port walks the keys and reads `status[name]` on the next line.
 1.21's second open question left `items()` out because it needs a tuple as a loop target.
@@ -1638,6 +1638,13 @@ A store to an existing key during the walk is allowed, as in Python.
     *The design takes `items()` alone: a list cannot hold a tuple, so there is nothing else to unpack.*
 2.  *Whether `d.keys()` and `d.values()` come with it.*
     *The design leaves them out: `for k in d` is the first, and the second has no program yet.*
+
+Both were settled as recommended on 2026-11-12.
+
+**As implemented (2026-11-12).**
+The messages are "a for with two names walks a dict: for k, v in d.items()", "the two names of a for must differ", "items() needs a dict on the left of the dot, not list[int]" from the checker and with `type_name()` from the runtime, and "items() is allowed only in a for with two names: for k, v in d.items()" for the call anywhere else.
+A name the loop alone binds has its element type after the loop, as the name of a one-name `for` has, so `take(v)` after the loop checks.
+`runtime_items_resized.epy` stores to a key the dict has and then adds one.
 
 ### 1.23 Keyword arguments (designed 2026-11-12)
 
@@ -1696,6 +1703,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `@dataclass` on the line above `class <Name>:` with field declarations as a handler class has them, a default being an `int`, `str`, or `bool` literal, `[]`, or `{}`, giving a `DataDef` node; a method in the body, another decorator name, and a class with no base and no decorator are refused by name (1.19; Milestone 19, 2026-11-11)
     *   `<expr>.<attr>` where the expression is no name, a `FieldRead` node, and `<expr>.<attr> = <expr>` and `<expr>.<attr> op= <expr>`, a `FieldAssign` node with an empty or a given operator; a name on the left still gives `AttrRead` and `AttrAssign` (1.20; Milestone 20, 2026-11-12)
     *   `**`, in a `power` layer between `term` and `postfix` that groups to the right and sits under a unary minus on its left, with `**=` among the augmented operators; and the method calls `<str>.join(<list>)` and `<dict>.get(<key>[, <default>])`, which need no grammar, since a method call was already an `OpCall` or a `MethodCall` (1.21; Milestone 21, 2026-11-12)
+    *   `for <name>, <name> in <expr>.items(): <suite>`, a `ForItems` node holding the two names and the expression left of the dot; any other iterable after two names is refused (1.22; Milestone 22, 2026-11-12)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -1780,6 +1788,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   Data classes (1.19; Milestone 19, 2026-11-11): Pass 1 records each `DataDef` as a `HandlerInfo` with no effect and the kind "data class", in `Checker.records`, and `collect_field` serves both kinds of class, with `bool` a field type; `info_of` answers for a handler class or a data class where a constructor call, a field read, or a field store asks, and `check_handle` reads the handler classes alone; `require_type` holds each `list[T]`, `dict[str, T]`, and `T | None` written in a signature or a field to a scalar or a data class; `can_be_absent` accepts a class name, so `merged` gives `Task | None`; `comparable` refuses `==` on two lists of instances and `in` on one; and a field read on a name of unknown type is left to the runtime and noted.
         *   `FieldRead` and `FieldAssign` (1.20; Milestone 20, 2026-11-12): `check_field_read` types the target and reads the field from its class, leaves a target of unknown type to the runtime, and refuses any other type; `check_field_assign` types the value and then the target for `=`, needs an instance of a known class, and holds the value to the field as `AttrAssign` does, or the field and the value to the operator for an augmented store.
         *   Methods and `**` (1.21; Milestone 21, 2026-11-12): `check_method` chooses by the method's name among `check_join` (a `str` target, a `list[str]` argument, a `str` result), `check_get` (a dict target, a `str` key, the value type with a default of that type, or its optional without one), and `check_append`, which also refuses any other method by the target's kind; a target of unknown type is noted for `join()` and `get()` and left to the runtime; and `**` joins the operators of `int`.
+        *   `ForItems` (1.22; Milestone 22, 2026-11-12): `check_items_loop` types the target, which is a dict or unknown, binds the first name to `str` and the second to the dict's value type, and hands both to `check_loop_body`, which binds a second name at the start of each pass beside the first; afterwards each name is merged with the type it had before, as `check_loop` does for one.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2516,7 +2525,10 @@ EffectPython/
         *   `-2 ** 2` is `-4`, `2 ** 3 ** 2` is `512`, and `2 ** -1` is a runtime error.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 22. **Milestone 22: `for k, v in d.items()` (1.22)**
-    *   *Designed 2026-11-12.*
+    *   *Designed and done 2026-11-12.* The two open questions of 1.22 are settled as recommended.
+    *   *Done 2026-11-12.*
+        `ast_nodes.py` has `ForItems`; `parser.py` has `for_items_stmt`; `checker.py` has `check_items_loop` and the second name of `check_loop_body`; `interpreter.py` has `exec_for_items`.
+        `build_plan.epy` walks `status.items()`.
     *   *Implementation (planned):* the parser's second `for` production and `ForItems`; `check_loop_body` with a second name; `exec_for_items`.
         The change is to a loop's fixpoint, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*

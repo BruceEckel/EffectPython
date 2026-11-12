@@ -687,6 +687,27 @@ def for_stmt(p):
                             _line(p[0]))
     return ast.For(_text(p[1]), iterable, _stmts(p[5]), _line(p[0]))
 
+@pg.production('for_stmt : FOR NAME COMMA NAME IN expr COLON suite')
+def for_items_stmt(p):
+    """for k, v in d.items(): the one for with two names (plan
+    1.22). The call is an OpCall for a name on the left of the dot
+    and a MethodCall for anything else."""
+    iterable = _expr(p[5])
+    target = None
+    if isinstance(iterable, ast.OpCall):
+        if iterable.op == 'items' and len(iterable.args) == 0:
+            target = ast.Name(iterable.effect, iterable.lineno)
+    elif isinstance(iterable, ast.MethodCall):
+        if iterable.method == 'items' and len(iterable.args) == 0:
+            target = iterable.target
+    if target is None:
+        raise _error(p[2], "a for with two names walks a dict: "
+                     "for k, v in d.items()")
+    if _text(p[1]) == _text(p[3]):
+        raise _error(p[3], "the two names of a for must differ")
+    return ast.ForItems(_text(p[1]), _text(p[3]), target, _stmts(p[7]),
+                        _line(p[0]))
+
 @pg.production('while_stmt : WHILE expr COLON suite')
 def while_stmt(p):
     return ast.While(_expr(p[1]), _stmts(p[3]), _line(p[0]))

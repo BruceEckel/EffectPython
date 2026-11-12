@@ -950,6 +950,8 @@ class Checker(object):
                     "for needs a list, a dict, or range(), not %s" %
                     iterable)
             self.check_loop(stmt.name, element, stmt.body, scope, effects)
+        elif isinstance(stmt, ast.ForItems):
+            self.check_items_loop(stmt, scope, effects)
         elif isinstance(stmt, ast.ForRange):
             self.check_range(stmt.args, stmt.lineno, scope, effects)
             self.check_loop(stmt.name, "int", stmt.body, scope, effects)
@@ -1169,12 +1171,41 @@ class Checker(object):
         if old_type is not None:
             scope.types[name] = merged(old_type, scope.types[name])
 
+    def check_items_loop(self, stmt, scope, effects):
+        """for k, v in d.items() (plan 1.22): the key is str and the
+        value the dict's value type, unknown for a {} nothing has
+        refined or a target of unknown type, which the runtime holds
+        to a dict. Both names are bound on every pass and merged
+        with what they held before afterwards, as check_loop does
+        for one."""
+        held = self.type_of(stmt.target, scope, effects)
+        if is_dict(held):
+            value = value_of(held)
+        elif held == UNKNOWN:
+            value = UNKNOWN
+        else:
+            raise InvalidProgram(
+                stmt.lineno, "items() needs a dict on the left of the "
+                "dot, not %s" % held)
+        old_key = scope.types.get(stmt.key, None)
+        old_value = scope.types.get(stmt.value, None)
+        self.bind_element(scope, stmt.key, "str")
+        self.bind_element(scope, stmt.value, value)
+        self.check_loop_body(None, stmt.body, scope, effects, stmt.key,
+                             "str", stmt.value, value)
+        if old_key is not None:
+            scope.types[stmt.key] = merged(old_key, scope.types[stmt.key])
+        if old_value is not None:
+            scope.types[stmt.value] = merged(old_value,
+                                             scope.types[stmt.value])
+
     def bind_element(self, scope, name, element):
         scope.set_type(name, element)
         self.rebind(scope, name)
 
     def check_loop_body(self, test, body, scope, effects, name=None,
-                        element=UNKNOWN):
+                        element=UNKNOWN, second=None,
+                        second_element=UNKNOWN):
         """Check the test and the body from the types before the loop,
         merge what the body left with them, and check again from the
         merged types until nothing changes, so the body is checked
@@ -1182,7 +1213,8 @@ class Checker(object):
         code after the loop sees a name the body gives another type as
         unknown. A for binds its name afresh on every iteration, so
         each pass starts with the name bound to the element type,
-        whatever the body did to it.
+        whatever the body did to it; a for over d.items() binds a
+        second name the same way (plan 1.22).
         A break or continue may stand anywhere under a loop in the
         same function, a handle body or a clause included, since the
         runtime carries it out of a stacklet as it carries a return
@@ -1202,6 +1234,8 @@ class Checker(object):
             unbound = scope.unbound.copy()
             if name is not None:
                 self.bind_element(scope, name, element)
+            if second is not None:
+                self.bind_element(scope, second, second_element)
             dead = False
             if test is not None:
                 self.spoiled = {}
@@ -1530,6 +1564,10 @@ class Checker(object):
         if method != "append" and type_name == "str":
             raise InvalidProgram(
                 lineno, "a str has no method '%s'" % method)
+        if method == "items" and is_dict(type_name):
+            raise InvalidProgram(
+                lineno, "items() is allowed only in a for with two "
+                "names: for k, v in d.items()")
         if method != "append" and is_dict(type_name):
             raise InvalidProgram(
                 lineno, "a dict has no method '%s'" % method)

@@ -98,8 +98,7 @@ def main() -> int / []:
     for line in report.lines:
         print(line)
     counts = {}
-    for name in status:
-        result = status[name]
+    for name, result in status.items():
         print(padded(name, 8), result)
         counts[result] = counts.get(result, 0) + 1
     ordered = {}
