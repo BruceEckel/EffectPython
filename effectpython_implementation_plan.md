@@ -1334,6 +1334,61 @@ The two count errors are CPython's.
 The unpacking production is `postfix COMMA arg_list EQUALS expr`, with the action refusing a target that is no name ("cannot assign to this expression"), and the literal is `LPAREN expr COMMA arg_list RPAREN`; rply reports no conflict for either.
 An unpacking of a value of unknown type is not recorded in `Checker.unknowns`, which lists operators, tests, subscripts, and `len()` and `str()`.
 
+
+### 1.18 Narrowing through `and`, `or`, `not`, and `while` (designed 2026-11-11, not implemented)
+
+1.16 narrows at an `if` whose whole test is `<name> is None` or `<name> is not None`, and its third open question left the rest until a program had the form.
+`settings_none.epy` had it before Milestone 17 took the second optional away: `resolve()` tested `value is None` and `source is None` in two `if` statements where Python writes one `or`.
+The forms are the ones Python writes around an optional every day:
+
+```python
+    if x is not None and x > 0:
+    if x is None or y is None:
+        return 0
+    while node is not None:
+```
+
+**Today (probed against the checker, 2026-11-11).**
+With `x` and `y` of type `int | None`: `if x is not None and x > 0:` is "unsupported operand types for >: int | None and int", at the right operand; `if x is None or y is None:` over `return 0` leaves `take(x)` after it "argument 1 of take() must be int, not int | None"; `if not x is None:` gives the same for `take(x)` in its body; and so does `while x is not None:` for `take(x)` in the loop body.
+With `best = None` before a `for`, `if best is not None and best > i:` is "unsupported operand types for >: None and int" on the first pass.
+
+**What a test says.**
+A test gives two lists of facts, the ones that hold where it is true and the ones that hold where it is false, each fact a local name with whether it is `None`:
+
+*   `x is None` says `x` is `None` where it is true and is not `None` where it is false; `x is not None` the reverse.
+*   `not t` swaps the two lists of `t`.
+*   `a and b`, where it is true, says what `a` and `b` say where they are true; where it is false it says nothing, since either may be the false one.
+*   `a or b`, where it is false, says what `a` and `b` say where they are false; where it is true it says nothing.
+*   Any other test says nothing.
+
+A fact retypes its name as 1.16's `narrow` does: `None` for a name that is `None`, if it was optional or unknown; `T` for a `T | None` that is not `None`; and for a name of type `None` that is said not to be `None`, the unknown type and the answer that this path cannot run.
+
+**Where the facts apply.**
+
+*   The branches of an `if`: the true list for the body and the false list for the `orelse`, which for the one comparison is 1.16's rule.
+    The guard falls out as before: after `if x is None or y is None:` over a `return`, Milestone 15 gives the code after the `if` the other branch's types, where both names are narrowed.
+*   The right operand of `and` is typed with the left operand's true list applied, and the right operand of `or` with its false list, since Python evaluates the right operand in those cases alone.
+    The names get their types back after the operand.
+*   The body of a `while` is checked with the test's true list applied, on every pass.
+    Nothing is narrowed after the loop (open question 1).
+
+**A perform in the test.**
+A fact holds from the moment its comparison is evaluated, and a perform point later in the same test may run a clause that assigns the name: in `if x is not None and perform(A.get()) > 0:`, with a clause `x = None`, the body must not see `x` as an `int`.
+`widen_at_perform` already retypes such a name at the perform point, from the pass on which the clause's assignment is known.
+So when the right operand has been typed, a narrowed name whose type is no longer the narrowed one was widened inside it: the name gets the merge of its type before the narrowing and its type now, and its fact is dropped for the rest of the statement, so the branch is not narrowed by it either.
+A perform before the comparison does no harm, since the comparison is evaluated after it.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether the code after a `while` is narrowed by the test's false list.*
+    After `while x is not None:` the name is `None`, unless a `break` left the loop.
+    *The design leaves it out: it would have to know that no `break` reaches the end of the loop, and no program has needed the name after such a loop.*
+2.  *Whether a comparison's right operand narrows the code after the statement.*
+    In `ok = x is not None and x > 0`, outside an `if`, the operand is narrowed and nothing else is.
+    *The design narrows the operand alone: a `bool` in a name carries no fact.*
+3.  *Whether `==` against `None` narrows.*
+    *The design keeps `is` as the one test, as 1.16 does.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2109,4 +2164,12 @@ EffectPython/
         *   Accept `a, b = pair()` with `a` and `b` then passed to typed slots of their element types, and `take(t[0])` and `take(t[-2])` for a `tuple[int, str]`.
         *   Reject a count that differs, an unpacking of an `int`, `t[i]` with a name for the index, `t[2]` on a pair, `t[0] = 1`, a tuple as a list element, a dict value, and a field, a tuple element that is a list or `None`, and `==` and `len()` on a tuple.
         *   `(a,)`, `()`, and `return a, b` are syntax errors.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+18. **Milestone 18: narrowing through `and`, `or`, `not`, and `while` (1.18)**
+    *   *Designed 2026-11-11, not implemented.* The three open questions of 1.18 are not settled.
+    *   *Implementation (planned):* the checker alone. A function gives a test's facts for true and for false; `narrow` applies a list of them; `type_of` applies the left operand's list around the right operand of a `BoolOp` and restores the names; `check_if` and `check_loop_body` apply the lists to the branches and the body.
+        The change is to how a name's type changes across a suite, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   Accept, for `x` and `y` of type `int | None`: `take(x)` in the body of `if x is not None and x > 0:`, of `if not x is None:`, and of `while x is not None:`; `take(x) + take(y)` after `if x is None or y is None:` over `return 0` and in the body of `if not (x is None or y is None):`; and `best = best + i` under `if best is not None and best > i:` with `best = None` before the loop.
+        *   Reject `take(x)` in the body of `if x is None or y is None:`, after `if x is not None and x > 0:` over a `return`, after `while x is not None:`, and in the body of `if x is not None and perform(A.get()) > 0:` where a clause assigns `x = None`.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
