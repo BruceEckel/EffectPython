@@ -1251,6 +1251,73 @@ Giving the name the unknown type alone was tried first and is wrong: a branch th
 What remains is a typed slot in that branch: `best = take(best)` in the `else` is "argument 1 of take() must be int, but 'best' has no known type" on the first pass, since a slot refuses an unknown; `best = best + i` and `len(best)` pass.
 A name of a type that cannot be `None` (`x = 1`, then `if x is None:`) is left as the design says, both branches merged.
 
+
+### 1.17 Tuples (designed 2026-11-11, not implemented)
+
+The Python version of the settings program returns a value with the name of the layer it came from:
+
+```python
+def find(key: str, layers: list[Layer]) -> tuple[str, str] | None:
+    for layer in layers:
+        value = layer.get(key)
+        if value is not None:
+            return value, layer.name
+    return None
+```
+
+and `resolve()` unpacks it, `value, source = found`.
+`settings_layers.epy` and `settings_none.epy` have `Lookup.source` in its place, a second operation with a second clause, which walks the layers again for the name; each layer answers a key twice, and `resolve()` in `settings_none.epy` tests two optionals where the Python version tests one.
+1.16's first open question put `None` before the tuple because a pair that may be absent needs it; this section is the pair.
+
+**Today (probed against the binary, 2026-11-11).**
+`t = (1, "a")` is "line 4, column 11: unexpected ','", and so are `t = 1, "a"`, `a, b = 1`, `return 1, 2`, and `(1,)`; `()` is "unexpected ')'".
+`-> tuple[str, str]` reaches the production for `dict[str, T]` and is "'tuple' takes no key and value types; dict[str, ...] does", and `tuple[str, str, int]` is "unexpected ','".
+A bare `-> tuple` parses, as any name does where a type is written, and the function is then "function 'f' must return tuple, not int".
+
+**Syntax.**
+A tuple literal is two or more expressions in parentheses, `(a, b)`, a `TupleLiteral` node; `()` and `(a,)` stay syntax errors.
+The type is `tuple[T1, T2, ...]` with two or more of `int`, `str`, and `bool`, and `tuple[...] | None` is its optional.
+`<name>, <name>, ... = <expr>` is an `Unpack` statement, with names alone as targets.
+The bare forms `return a, b` and `t = a, b` are left out (open question 1).
+
+**Types.**
+A literal whose elements are an `int` and a `str` has the type `tuple[int, str]`; an element of unknown type makes the literal unknown, as it does a list literal, and an element that is a list, a dict, a tuple, `None`, or an optional is refused.
+A tuple type matches itself alone, and its optional by 1.16's rule; `merged` gives `tuple[...] | None` for a tuple type and `None`, as for a scalar.
+`a, b = t` needs as many names as `t` has elements and gives each name its element's type; a value of unknown type gives each name the unknown type and leaves the count to the runtime; any other type is refused.
+`t[0]` with an `int` literal for the index has that element's type, and a negative literal counts from the end; any other index is refused, since the checker could not say which element it names (open question 2).
+A tuple takes no operator, `==` included, no `len()`, no `for`, no `in`, no `str()` and no f-string field; `print()` takes it and shows Python's form, `('db.internal', 'file')`.
+It is no list element, no dict value, and no handler class field.
+It cannot be assigned to: `t[0] = 1` is refused.
+
+**Narrowing.**
+`found is None` narrows a `tuple[str, str] | None` by 1.16's rule with no change, so `if found is None: raise Missing(key)` over `value, source = found` is the Python version's `resolve()`.
+
+**Runtime.**
+`W_Tuple` holds its values and has no operation that changes it; `str()` gives Python's form through each element's `repr()`, as `W_List` does.
+`TupleLiteral` evaluates its elements left to right.
+`Unpack` evaluates the value and binds the names in order; on a value the checker left unknown it reports CPython's errors, "cannot unpack non-iterable int object", "too many values to unpack (expected 2, got 3)", and "not enough values to unpack (expected 3, got 2)".
+An index on a tuple is "tuple index out of range" past either end.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether a tuple may be written without parentheses.*
+    The Python version writes `return value, layer.name`, and `x = a, b` is legal Python.
+    The comma already separates arguments, list elements, and dict items, each inside brackets, so a bare tuple would be the one comma at statement level.
+    *The design asks for the parentheses: `return (value, layer.name)` is one character pair more, and the unpacking target, where Python never writes them, has none.*
+2.  *Whether `t[i]` is allowed, and with which index.*
+    The Python version reads `prefix[0]`.
+    *The design allows an `int` literal, which names one element and so one type, and refuses a computed index; unpacking is the form for the rest.*
+3.  *Whether a tuple may hold a list, a dict, a tuple, or an optional.*
+    *The design keeps the elements to the three scalars, as a list's are: no sample has the nested form, and each addition is a type the checker would have to carry through `matches` and `merged`.*
+4.  *Whether `==`, `len()`, `for`, and `in` take a tuple.*
+    CPython allows all four.
+    *The design leaves them out until a program has one: a tuple here is a way to return two values, and unpacking and printing are what that needs.*
+5.  *Whether an unpacking target may be a field or a subscript, or the value a list.*
+    `a, b = [1, 2]` and `self.x, self.y = t` are legal Python.
+    *The design takes names on the left and a tuple on the right.*
+6.  *Whether a tuple may be a parameter of an operation, a `resume()` value, and a handler method's return.*
+    *The design allows it wherever a type is written, fields aside: `Lookup.get` returning `tuple[str, str] | None` is the form the settings program wants.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2005,4 +2072,14 @@ EffectPython/
         *   Accept `take(x)` in the arm of `if x is not None:` and after the guard `if x is None:` over `return`, for an `x` of type `int | None`; reject it outside them with "argument 1 of take() must be int, not int | None".
         *   Reject an operator, `==`, a subscript, `len()`, `str()`, an f-string field, and a `for` on an optional, and `[x]`, `xs.append(x)` on a `[]`, `{"a": x}`, and `d["a"] = x` on a `{}` for an `x` of type `None`.
         *   `None = 1` and `x is y` are syntax errors.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+17. **Milestone 17: tuples (1.17)**
+    *   *Designed 2026-11-11, not implemented.* The six open questions of 1.17 are not settled.
+    *   *Implementation (planned), in the order of Milestone 5:* the parser with tests (the literal, the type form, `Unpack`), the checker with tests (the literal's type, `Unpack`, the literal index, the refusals, `merged` for a tuple and `None`), then the runtime (`W_Tuple`, `TupleLiteral`, `Unpack`, the index).
+        The change is to `merged`, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   `settings_none.epy` loses `Lookup.source` and its clause: `Lookup.get` returns `tuple[str, str] | None`, each layer answers with its value and its name, and `resolve()` unpacks the pair after one `is None` test. Its recorded output does not change. `settings_layers.epy` stays as it is.
+        *   Accept `a, b = pair()` with `a` and `b` then passed to typed slots of their element types, and `take(t[0])` and `take(t[-2])` for a `tuple[int, str]`.
+        *   Reject a count that differs, an unpacking of an `int`, `t[i]` with a name for the index, `t[2]` on a pair, `t[0] = 1`, a tuple as a list element, a dict value, and a field, a tuple element that is a list or `None`, and `==` and `len()` on a tuple.
+        *   `(a,)`, `()`, and `return a, b` are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
