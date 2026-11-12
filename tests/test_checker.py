@@ -10,8 +10,9 @@ Milestone 11 the bool rule for and, or, not, if, and while, and elif
 from Milestone 13 the f-string field rule (plan 1.13), and from
 Milestone 14 the augmented assignment rules (plan 1.14), and from
 Milestone 15 the rule for a clause or an arm that leaves (plan
-1.15), from Milestone 16 None and optional types (plan 1.16), and
-from Milestone 17 tuples (plan 1.17). The last
+1.15), from Milestone 16 None and optional types (plan 1.16), from
+Milestone 17 tuples (plan 1.17), and from Milestone 18 narrowing
+through and, or, not, and while (plan 1.18). The last
 tests read Checker.unknowns, the places an operand of unknown type
 passed the checker, counted on the last pass over a suite alone.
 
@@ -1671,12 +1672,6 @@ def test_an_optional_slot_takes_the_value_none_or_an_optional(body):
     ('def f() -> int | None:\n    x = 1\n',
      "line 20: function 'f' can reach its end without returning "
      'int | None'),
-    (MAYBE + '    if x is not None and x > 0:\n        return 1\n'
-     '    return 0\n',
-     'line 22: unsupported operand types for >: int | None and int'),
-    (MAYBE + '    while x is not None:\n        x = maybe(x)\n'
-     '    return 0\n',
-     'line 23: argument 1 of maybe() must be int, not int | None'),
     ('def f() -> int:\n    xs = [None]\n    return 0\n',
      'line 21: list elements must be int, str, or bool, not None'),
     (MAYBE + '    xs = [x]\n    return 0\n',
@@ -1711,10 +1706,82 @@ def test_an_optional_slot_takes_the_value_none_or_an_optional(body):
      'int'),
 ], ids=['slot', 'none-arm', 'after-if', 'operator', 'equality',
         'subscript', 'len', 'str', 'fstring', 'for', 'test', 'merged',
-        'return', 'no-return', 'and', 'while', 'list',
+        'return', 'no-return', 'list',
         'list-optional', 'append', 'dict', 'store', 'field',
         'dead-arm-slot', 'live-arm-in-loop', 'clause', 'resume'])
 def test_an_optional_is_refused_until_it_is_narrowed(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(OPT + body)
+    assert info.value.msg == msg
+
+BOTH = 'def f() -> int:\n    x = maybe(1)\n    y = maybe(2)\n'
+SPOILING = ('class A(Effect):\n    def get() -> int: ...\n'
+            'def f() -> int / []:\n    x = maybe(1)\n    try:\n'
+            '        with handle(A):\n            if %s:\n'
+            '                print(take(x))\n'
+            '    except A.get as eff:\n        x = None\n'
+            '        eff.resume(1)\n    return 0\n')
+
+@pytest.mark.parametrize('body', [
+    BOTH + '    if x is not None and x > 0:\n        return take(x)\n'
+    '    return 0\n',
+    BOTH + '    if x is not None and y is not None:\n'
+    '        return take(x) + take(y)\n    return 0\n',
+    BOTH + '    if x is None or y is None:\n        return 0\n'
+    '    return take(x) + take(y)\n',
+    BOTH + '    if x is None or x > 0:\n        return 1\n'
+    '    return take(x)\n',
+    BOTH + '    if not x is None:\n        return take(x)\n'
+    '    return 0\n',
+    BOTH + '    if not (x is None or y is None):\n'
+    '        return take(x) + take(y)\n    return 0\n',
+    BOTH + '    ok = x is not None and x > 0\n    return 0\n',
+    BOTH + '    while x is not None:\n        x = maybe(take(x))\n'
+    '    return 0\n',
+    BOTH + '    while x is not None and x > 0:\n'
+    '        x = maybe(take(x))\n    return 0\n',
+    'def f() -> int:\n    best = None\n    for i in range(3):\n'
+    '        if best is not None and best > i:\n'
+    '            best = best + i\n        else:\n'
+    '            best = i\n    return 0\n',
+    'def f() -> int:\n    x = None\n    y = 1\n'
+    '    while x is not None:\n        y = "s"\n        break\n'
+    '    return take(y)\n',
+    SPOILING % 'perform(A.get()) > 0 and x is not None',
+], ids=['and-operand', 'and-both', 'or-guard', 'or-operand', 'not',
+        'not-or', 'outside-an-if', 'while', 'while-and',
+        'none-before-loop', 'while-that-cannot-run',
+        'perform-before'])
+def test_a_compound_test_narrows_what_it_says(body):
+    check_source(OPT + body)
+
+@pytest.mark.parametrize('body, msg', [
+    (BOTH + '    if x is None or y is None:\n        return take(x)\n'
+     '    return 0\n',
+     'line 24: argument 1 of take() must be int, not int | None'),
+    (BOTH + '    if x is not None and x > 0:\n        return 1\n'
+     '    return take(x)\n',
+     'line 25: argument 1 of take() must be int, not int | None'),
+    (BOTH + '    if x is not None and y is not None:\n        return 1\n'
+     '    else:\n        return take(x)\n',
+     'line 26: argument 1 of take() must be int, not int | None'),
+    (BOTH + '    if x is not None or x > 0:\n        return 1\n'
+     '    return 0\n',
+     'line 23: unsupported operand types for >: None and int'),
+    (BOTH + '    while x is not None:\n        x = maybe(take(x))\n'
+     '    return take(x)\n',
+     'line 25: argument 1 of take() must be int, not int | None'),
+    (BOTH + '    if not (x is not None and y is not None):\n'
+     '        return take(x)\n    return 0\n',
+     'line 24: argument 1 of take() must be int, not int | None'),
+    (SPOILING % 'x is not None and perform(A.get()) > 0',
+     'line 27: argument 1 of take() must be int, not int | None'),
+    (SPOILING % 'x is not None and perform(A.get()) > take(x)',
+     'line 26: argument 1 of take() must be int, not int | None'),
+], ids=['or-body', 'after-and', 'and-false-branch', 'or-operand',
+        'after-while', 'not-and', 'perform-after',
+        'perform-in-operand'])
+def test_a_compound_test_narrows_no_more_than_it_says(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(OPT + body)
     assert info.value.msg == msg

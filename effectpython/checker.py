@@ -97,7 +97,13 @@ f-string field, a for, and a test; print() takes it. A list element
 or a dict value is no None and no optional (require_scalar). The
 test `name is None` or `name is not None` of an if retypes a local
 name for each branch (narrow): None where it is None, and T in the
-other for a T | None. Where the name's type is None the other branch
+other for a T | None. A test says the same through not, through and
+where it is true, and through or where it is false (facts), and what
+it says applies to the branches of an if, to the body of a while, and
+to the right operand of and and or, which runs only where the left
+one has not decided (plan 1.18). A name that a perform point later in
+the test widens, because a clause assigns it, loses its fact for the
+statement (widen_back). Where the name's type is None the other branch
 cannot run under these types, so it is checked with the name unknown
 and kept out of the types after the if, as a branch that leaves is;
 the first pass over a loop meets `best = None` before it that way
@@ -414,6 +420,41 @@ def keep_bound(types, left):
         if name not in types:
             types[name] = UNKNOWN
 
+class Fact(object):
+    """A local name with whether a test says it is None (plan 1.18)."""
+
+    def __init__(self, name, is_none):
+        self.name = name
+        self.is_none = is_none
+
+def facts(test, when):
+    """What a test says about its names where it evaluates to when:
+    `x is None` says x is None where it is True and is not where it
+    is False; not swaps the two; `a and b` says what both say where
+    it is True, and `a or b` where it is False, and neither says
+    anything on its other side, where either operand may have
+    decided (plan 1.18)."""
+    if isinstance(test, ast.IsNone):
+        operand = test.operand
+        if isinstance(operand, ast.Name):
+            return [Fact(operand.id, test.negated != when)]
+        return []
+    if isinstance(test, ast.Not):
+        return facts(test.operand, not when)
+    if isinstance(test, ast.BoolOp) and (test.op == "and") == when:
+        return facts(test.left, when) + facts(test.right, when)
+    return []
+
+class Narrowing(object):
+    """The names a list of facts retyped, each with its type before
+    and after, and whether a fact ruled the path out."""
+
+    def __init__(self):
+        self.names = []
+        self.before = []
+        self.after = []
+        self.dead = False
+
 def always_returns(stmts):
     """Whether the function returns or raises an exception before
     these statements run out, on every path the checker follows: the
@@ -534,6 +575,7 @@ class Checker(object):
         self.loop_depth = 0   # loops around the statement being checked
         self.boundaries = []  # types at each statement boundary, per suite
         self.loop_exits = []  # types at each break or continue, per loop
+        self.spoiled = {}     # names a perform in the test widened
         self.handles = []     # Pending of each enclosing handle statement
         self.fn = None        # the FunctionDef being checked
         self.what = ""        # "function" or "method"
@@ -785,6 +827,7 @@ class Checker(object):
         accumulator around it: a try suite's exception may arrive, and
         a clause's resume() may return to the body, after any
         statement."""
+        self.spoiled = {}
         self.dispatch_stmt(stmt, scope, effects)
         for acc in self.boundaries:
             absorb(acc, scope.types)
@@ -871,15 +914,22 @@ class Checker(object):
         does not reach the code after the if, which then has the
         other branch's types, with a name the leaving branch alone
         binds unknown (plan 1.15); two such branches are merged as
-        before, since no path is left to take the types from. A test
-        of a name against None retypes the name for each branch
-        (narrow, plan 1.16)."""
+        before, since no path is left to take the types from. What
+        the test says about a name and None where it is true retypes
+        the name for the body, and what it says where it is false for
+        the other branch (facts, narrow; plan 1.16, 1.18); the names
+        a perform point in the test spoiled are those of the test
+        just typed, taken before the body's statements empty the
+        list."""
+        spoiled = self.spoiled
         before = scope.types.copy()
-        body_left = self.narrow(stmt.test, scope, False)
+        body_left = self.narrow(facts(stmt.test, True), scope,
+                                spoiled).dead
         self.check_block(stmt.body, scope, effects)
         body_types = scope.types
         scope.types = before
-        else_left = self.narrow(stmt.test, scope, True)
+        else_left = self.narrow(facts(stmt.test, False), scope,
+                                spoiled).dead
         self.check_block(stmt.orelse, scope, effects)
         if leaves(stmt.body) or ends_in_return(stmt.body):
             body_left = True
@@ -893,36 +943,58 @@ class Checker(object):
         else:
             scope.types = merge_types(body_types, scope.types)
 
-    def narrow(self, test, scope, orelse):
-        """Retype the name of a test `name is None` or `name is not
-        None` for one branch of its if (plan 1.16): None where the
-        name is None, if it was optional or unknown, and T in the
-        other branch if it was T | None. A name whose type is None
-        cannot reach the other branch, so the answer is True, for
-        check_if to keep that branch out of the types after the if,
-        and the name is unknown while the branch is checked: the
-        first pass over a loop meets `best = None` before it that
-        way, and the pass after it has the optional. This is no
-        assignment, so it does not go through set_type, and a clause
-        binding or a handler instance is left alone."""
-        if not isinstance(test, ast.IsNone):
-            return False
-        operand = test.operand
-        if not isinstance(operand, ast.Name):
-            return False
-        name = operand.id
-        if name not in scope.types or name in scope.bindings:
-            return False
-        current = scope.types[name]
-        if test.negated == orelse:
-            if current == UNKNOWN or is_optional(current):
-                scope.types[name] = NONE
-        elif is_optional(current):
-            scope.types[name] = base_of(current)
-        elif current == NONE:
-            scope.types[name] = UNKNOWN
-            return True
-        return False
+    def narrow(self, found, scope, spoiled):
+        """Retype the name of each fact for the path the facts hold
+        on (plan 1.16, 1.18): None where the name is None, if it was
+        optional or unknown, and T where a T | None is not None. A
+        name whose type is None cannot be on a path that says it is
+        not, so the answer is marked dead, for check_if and
+        check_loop_body to keep that path out of the types after the
+        statement, and the name is unknown while the path is
+        checked: the first pass over a loop meets `best = None`
+        before it that way, and the pass after it has the optional.
+        This is no assignment, so it does not go through set_type;
+        a clause binding or a handler instance is left alone, and so
+        is a name a perform point in the test has spoiled."""
+        result = Narrowing()
+        for fact in found:
+            name = fact.name
+            if (name not in scope.types or name in scope.bindings
+                    or name in spoiled):
+                continue
+            current = scope.types[name]
+            if fact.is_none:
+                if current != UNKNOWN and not is_optional(current):
+                    continue
+                retyped = NONE
+            elif is_optional(current):
+                retyped = base_of(current)
+            elif current == NONE:
+                retyped = UNKNOWN
+                result.dead = True
+            else:
+                continue
+            scope.types[name] = retyped
+            result.names.append(name)
+            result.before.append(current)
+            result.after.append(retyped)
+        return result
+
+    def widen_back(self, narrowing, scope):
+        """Give the names an operand was narrowed for their types
+        back. A name whose type is no longer the narrowed one met a
+        perform point inside the operand, where a clause assigns it
+        (widen_at_perform), so it takes the merge of the type it had
+        and the type it has, and its fact holds no longer: the name
+        is spoiled for the rest of the statement (plan 1.18)."""
+        for i in range(len(narrowing.names)):
+            name = narrowing.names[i]
+            current = scope.types[name]
+            if current == narrowing.after[i]:
+                scope.types[name] = narrowing.before[i]
+            else:
+                scope.types[name] = merged(narrowing.before[i], current)
+                self.spoiled[name] = True
 
     def check_return(self, stmt, scope, effects):
         """The value must have the declared return type; a bare return
@@ -970,7 +1042,13 @@ class Checker(object):
         A break or continue may stand anywhere under a loop in the
         same function, a handle body or a clause included, since the
         runtime carries it out of a stacklet as it carries a return
-        (plan 1.10); a method is its own function."""
+        (plan 1.10); a method is its own function.
+        What a while test says where it is true retypes its names for
+        the body on every pass (plan 1.18). A body the test's facts
+        rule out, `while x is not None:` for an x of type None, is
+        checked and then left out: the types before the loop stand
+        for the pass, with the names the body bound, and the loop's
+        exits are those from before it."""
         self.loop_depth += 1
         before = scope.types.copy()
         exits = before.copy()
@@ -980,11 +1058,23 @@ class Checker(object):
             unbound = scope.unbound.copy()
             if name is not None:
                 self.bind_element(scope, name, element)
+            dead = False
             if test is not None:
+                self.spoiled = {}
                 self.require_bool(self.type_of(test, scope, effects),
                                   "while", test.lineno)
+                dead = self.narrow(facts(test, True), scope,
+                                   self.spoiled).dead
+            if dead:
+                exits = exits.copy()
             self.check_block(body, scope, effects)
-            after = merge_types(merge_types(before, scope.types), exits)
+            if dead:
+                self.loop_exits[-1] = exits
+                after = before.copy()
+                keep_bound(after, scope.types)
+            else:
+                after = merge_types(merge_types(before, scope.types),
+                                    exits)
             if (same_types(after, before)
                     and same_names(scope.unbound, unbound)):
                 break
@@ -1654,8 +1744,11 @@ class Checker(object):
         elif isinstance(expr, ast.BoolOp):
             self.require_bool(self.type_of(expr.left, scope, effects),
                               expr.op, expr.lineno)
+            narrowing = self.narrow(
+                facts(expr.left, expr.op == "and"), scope, self.spoiled)
             self.require_bool(self.type_of(expr.right, scope, effects),
                               expr.op, expr.lineno)
+            self.widen_back(narrowing, scope)
             return "bool"
         elif isinstance(expr, ast.Not):
             self.require_bool(self.type_of(expr.operand, scope, effects),

@@ -1,0 +1,41 @@
+# Milestone 18: narrowing through and, or, not, and while (plan 1.18).
+# A while test that narrows its name for the body; a guard with or,
+# after which both names are ints; the right operand of and, which
+# runs only where the left one found a value; and not.
+
+from effectpython import Effect, perform, handle
+
+def step(n: int) -> int | None:
+    if n <= 1:
+        return None
+    if n % 2 == 0:
+        return n // 2
+    return 3 * n + 1
+
+def steps(start: int) -> int:
+    count = 0
+    n = step(start)
+    while n is not None:
+        count += 1
+        n = step(n)
+    return count
+
+def total(a: int | None, b: int | None) -> int:
+    if a is None or b is None:
+        return 0
+    return a + b
+
+def positive(a: int | None) -> bool:
+    return a is not None and a > 0
+
+def shown(a: int | None) -> str:
+    if not a is None:
+        return str(a)
+    return "nothing"
+
+def main() -> int / []:
+    print(steps(6), steps(1))
+    print(total(1, 2), total(None, 2), total(1, None))
+    print(positive(None), positive(3), positive(0 - 3))
+    print(shown(step(8)), shown(step(1)))
+    return 0

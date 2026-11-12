@@ -1219,6 +1219,7 @@ Nothing else changes: `W_None` and its `str()` exist.
 3.  *Whether `not`, `and`, and `while` narrow.*
     `if x is not None and len(x) > 0:` is the form Python writes, and it needs the right operand of `and` checked from narrowed types.
     *The design narrows at an `if` (and so an `elif`) whose whole test is the one comparison, and leaves the rest until a program has the form; the nested `if` says the same in one more line.*
+    (1.18, Milestone 18, 2026-11-11, has the rest, the code after a `while` aside.)
 4.  *Whether a handler class field may be optional.*
     `FIELD_TYPES` is `int` and `str`, with list and dict types beside them.
     *The design leaves fields as they are.*
@@ -1335,7 +1336,7 @@ The unpacking production is `postfix COMMA arg_list EQUALS expr`, with the actio
 An unpacking of a value of unknown type is not recorded in `Checker.unknowns`, which lists operators, tests, subscripts, and `len()` and `str()`.
 
 
-### 1.18 Narrowing through `and`, `or`, `not`, and `while` (designed 2026-11-11, not implemented)
+### 1.18 Narrowing through `and`, `or`, `not`, and `while` (designed and implemented 2026-11-11, open questions settled as recommended)
 
 1.16 narrows at an `if` whose whole test is `<name> is None` or `<name> is not None`, and its third open question left the rest until a program had the form.
 `settings_none.epy` had it before Milestone 17 took the second optional away: `resolve()` tested `value is None` and `source is None` in two `if` statements where Python writes one `or`.
@@ -1393,6 +1394,8 @@ A perform before the comparison does no harm, since the comparison is evaluated 
     *The design narrows the operand alone: a `bool` in a name carries no fact.*
 3.  *Whether `==` against `None` narrows.*
     *The design keeps `is` as the one test, as 1.16 does.*
+
+All three were settled as recommended on 2026-11-11.
 
 ---
 
@@ -1487,6 +1490,7 @@ The static analyzer runs in three passes over the AST before execution:
             An `append` on a name of unknown type passes, as an unknown type does everywhere.
         *   `NoneLiteral` and `IsNone` (1.16; Milestone 16, 2026-11-11): `None` has the type `None` and `x is None` the type `bool`, whatever its operand's type; `matches` lets `T`, `None`, and `T | None` stand where `T | None` is wanted, `merged` gives `T | None` for a scalar `T` and `None`, an optional is refused wherever a `T` is wanted, `require_scalar` keeps `None` and an optional out of a list or a dict, and `narrow` retypes the name of an `if` test `name is None` for each branch (`check_if`).
         *   `TupleLiteral` and `Unpack` (1.17; Milestone 17, 2026-11-11): a literal has the type `tuple[T1, T2, ...]` of its elements, which `require_scalar` keeps to the three scalars; `check_unpack` needs a tuple with as many elements as names and gives each name its element's type, or the unknown type for a value of unknown type; `check_index` gives `t[0]` its element's type for an `int` literal index (`tuple_element`); `require_mutable` refuses a store; and `merged` gives `tuple[...] | None` for a tuple type and `None` (`can_be_absent`).
+        *   Narrowing through a test (1.18; Milestone 18, 2026-11-11): `facts(test, when)` lists what a test says about its names and `None` where it is true and where it is false, through `IsNone`, `Not`, and a `BoolOp` on the side where both operands are known; `narrow` applies a list, for the branches of an `if` (`check_if`), the body of a `while` (`check_loop_body`), and the right operand of a `BoolOp` (`type_of`), after which `widen_back` restores the names and marks one a perform point widened as `spoiled` for the statement.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2171,7 +2175,12 @@ EffectPython/
         *   `(a,)`, `()`, and `return a, b` are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 18. **Milestone 18: narrowing through `and`, `or`, `not`, and `while` (1.18)**
-    *   *Designed 2026-11-11, not implemented.* The three open questions of 1.18 are not settled.
+    *   *Designed and done 2026-11-11.* The three open questions of 1.18 are settled as recommended.
+    *   *Done 2026-11-11.*
+        `checker.py` has `Fact`, `facts`, and `Narrowing`; `narrow` takes a list of facts and the spoiled names and answers with what it retyped and whether a fact ruled the path out; `widen_back` restores an operand's names; `check_stmt` empties `spoiled` before each statement and `check_loop_body` before each pass's test, and `check_if` takes the list as the test left it before its body's statements empty it.
+        A `while` body the facts rule out is left out of the types after the loop, with the exits put back.
+        The parser and the runtime are unchanged.
+        `tests/programs/narrowed_tests.epy` runs each form, and the tutorial's subsection on `None` describes them; two cases of Milestone 16's rejection test, the `and` and the `while`, moved to the accepted side.
     *   *Implementation (planned):* the checker alone. A function gives a test's facts for true and for false; `narrow` applies a list of them; `type_of` applies the left operand's list around the right operand of a `BoolOp` and restores the names; `check_if` and `check_loop_body` apply the lists to the branches and the body.
         The change is to how a name's type changes across a suite, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*

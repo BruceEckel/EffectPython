@@ -950,8 +950,11 @@ An empty string is a value: `PREFIX` is set to `""`, and `prefix is None` is `Fa
 The `elif` is reached when `best` is not `None`, so `len(best)` there is the length of a `str`,
 and the function returns the optional, `None` for an empty list.
 
-The narrowing is at an `if` or `elif` whose whole test is the one comparison of a local name.
-`if x is not None and x > 0:` is two nested `if` statements here, and a `while` test does not narrow.
+The test may be part of a larger one.
+`not` turns it around; `a and b` says what both say where it is true, so `if x is not None and y is not None:` narrows both names in its body; and `a or b` says what both say where it is false, so after the guard `if x is None or y is None: return 0` both names have their types.
+The right operand of `and` and `or` runs only where the left one has not decided, and is checked that way: in `x is not None and x > 0`, the `x` of `x > 0` is an `int`.
+A `while` test narrows its names for the body, so `while n is not None:` walks until a function returns `None`; `tests/programs/narrowed_tests.epy` has each of these.
+The narrowed name is a local variable, and nothing is narrowed after a `while` loop.
 `is` has no other use: `x is y` is a syntax error.
 A handler class field, a list element, and a dict value cannot be optional.
 `tests/programs/settings_none.epy` is a longer program with the same forms, and `tests/programs/settings_layers.epy` does its job with a thrown exception in place of `None`.
