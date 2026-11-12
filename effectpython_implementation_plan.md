@@ -1710,6 +1710,9 @@ CPython 3.14, with `name = "ab"`, `n = 42`, and `m = -42`: `{name:8}` is `ab    
 A field is `{<expr>}` or `{<expr>:<spec>}`.
 The lexer splits the field's text at its first colon outside a string literal, lexes what stands before it as the expression, and emits what follows as one `FSTRING_SPEC` token, so the spec's characters never meet the expression lexer, which has no token for `^` and would read `08` as an `INT`.
 No expression of the dialect holds a colon outside a string: a dict literal would, and a brace inside a field is already refused.
+`_expand_fstring` finds the end of a field at the next `}` without looking at quotes, so `{d['}']}` is "unexpected character '''" today; the split has to track the quotes itself, and a `}` or a `{` cannot be a fill character.
+The test for an empty field, "valid expression required before '}'", moves to the text before the colon.
+`fstring_parts` has two productions that hold a field, the first part and a later one, so the spec goes into a `field` nonterminal that both read.
 The spec is `[[fill]align][0][width][d or s]`: an alignment `<`, `>`, or `^`, with any one character before it as the fill; a `0` for zero padding; a width in digits; and `d` or `s` to name the type.
 The parser reads it into a `Formatted` node around the field's expression, holding the fill, the alignment, the zero flag, the width, and the type letter, and refuses any other spec, the empty one included, with a message that gives the form.
 `FString` is unchanged: a field with a spec is a `Formatted` among its `exprs`.
