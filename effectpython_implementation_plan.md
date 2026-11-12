@@ -1826,6 +1826,7 @@ A constant's name must differ from every class, function, and built-in name, and
 Pass 1 collects the constants with the types of their literals.
 A read of a name the function has not bound is a read of the constant, if there is one, with its type; a method call on such a name, `SEP.join(xs)`, finds it the same way.
 Every binding of a local goes through `rebind`, except a parameter and a comprehension's name, so the refusal stands in `rebind` and at those two.
+`rebind` takes a scope and a name and no line, and its five callers are an assignment, an unpacking, `bind_element` for the three `for` forms, and the two clause checks, so the checker keeps the line of the statement or clause being checked for the message; `bind_element` runs again at the start of every pass over a loop, but the first call, at the `for` itself, is the one that refuses.
 
 **Runtime.**
 The interpreter evaluates the literals once, into an `Environment` that every function's environment has as its parent; `Environment.find` already walks parents, and `define` writes the function's own table.
