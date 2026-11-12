@@ -1619,6 +1619,7 @@ In CPython a store that adds a key during the walk is "dictionary changed size d
 **Syntax.**
 `for <name>, <name> in <expr>.items():` is a `ForItems` node holding the two names, the expression on the left of the dot, and the suite.
 The parser reads `for <name>, <name> in <expr>:` and its action refuses an iterable that is no call of `items` with no arguments, and two names that are the same.
+The call arrives in two shapes, since `attr_call` builds an `OpCall` for a name on the left of the dot and a `MethodCall` for anything else; the action takes the target from either, as a `Name` node for the first.
 There is no value for `d.items()` to be elsewhere, since a list holds no tuple (1.17), so `items()` outside this form stays refused, with a message that names the form.
 This is how `range()` is treated: a `for` over it is folded into `ForRange`, and the call has no meaning anywhere else (1.9).
 
@@ -1653,6 +1654,8 @@ Such a call is a `KeywordCall` node: the function's name, every argument express
 A call without keywords stays a `Call`, so nothing that reads one changes.
 The parser refuses a repeated keyword and a positional argument after a keyword in CPython's words.
 `perform(...)`, an operation's arguments, a method call, and the arguments of `handle(...)` take no keywords (open question 1).
+`perform` is read by the production that reads every call by name, so its action refuses the keywords; a method call and an operation's arguments have productions of their own and keep `args`.
+A constructor call written inside `handle(...)` has its own production too (`handle_arg`), and `Handle.constructions` is a list of `Call` that `check_handle` and the interpreter's `exec_handle` read, so `with handle(Worker(tries={})):` stays a syntax error; a handler built with keywords is bound to a name first.
 
 **Meaning.**
 A keyword names a parameter of a function or a field of a handler class or a data class.
@@ -1663,10 +1666,11 @@ A function has no defaults, so every parameter must be filled; a class may leave
 
 **Checker.**
 `check_keyword_call` finds each argument's parameter, types the arguments in the order written against the types of their parameters, as `check_args` does for a positional call, and then asks that nothing required is missing.
-The callee's row and the perform point are those of a `Call`.
+The callee's row and the perform point are those of a `Call`; `check_call` has both inline after its `check_args`, so they move to a function the two share.
 
 **Runtime.**
 The interpreter evaluates the arguments in order and arranges the values by the same rule, with a hole for a field left out, which `HandlerClass` fills from the default.
+`HandlerClass.construct` takes a positional prefix today and fills what follows it, so the holes need a second entry; its "Task() needs a value for field 'name'" serves a hole with no default.
 
 **Open questions (recommendations in italics).**
 
