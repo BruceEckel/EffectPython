@@ -90,6 +90,20 @@ class W_List(W_Root):
     def is_true(self):
         return len(self.items_w) > 0
 
+class W_Tuple(W_Root):
+    """A tuple (plan 1.17): two or more values, with no operation that
+    changes it; str() gives Python's form, as a list's does."""
+    _attrs_ = ['items_w']
+
+    def __init__(self, items_w):
+        self.items_w = items_w  # list of W_Root
+
+    def str(self):
+        parts = []
+        for w in self.items_w:
+            parts.append(w.repr())
+        return "(" + ", ".join(parts) + ")"
+
 class W_Dict(W_Root):
     """A dict with str keys (plan 1.12): mutable and shared by
     reference, as a W_List is, over an RPython dict, which keeps

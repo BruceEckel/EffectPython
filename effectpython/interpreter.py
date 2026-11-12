@@ -243,7 +243,7 @@ from effectpython.errors import (EffectError, EffectPythonRuntimeError,
                                  OneShotContinuationError, RaisedException,
                                  Unwind)
 from effectpython.model import (W_Root, W_Int, W_Str, W_Bool, W_List,
-                                W_Dict, W_EffectPayload, W_EffBinding,
+                                W_Tuple, W_Dict, W_EffectPayload, W_EffBinding,
                                 W_Exception, W_HandlerInstance, w_None,
                                 wrap_bool)
 
@@ -487,6 +487,11 @@ class Interpreter(object):
             raise ContinueSignal()
         elif isinstance(stmt, ast.Assign):
             env.define(stmt.name, self.eval_expr(stmt.value, env))
+        elif isinstance(stmt, ast.Unpack):
+            items_w = unpacked(self.eval_expr(stmt.value, env),
+                               len(stmt.names))
+            for i in range(len(stmt.names)):
+                env.define(stmt.names[i], items_w[i])
         elif isinstance(stmt, ast.AttrAssign):
             w_target = self.instance(env, stmt.target)
             i = self.field_index(w_target, stmt.attr)
@@ -498,7 +503,7 @@ class Interpreter(object):
             if isinstance(w_target, W_Dict):
                 w_target.items_w[dict_key(w_index)] = w_value
             else:
-                w_list = list_value(w_target)
+                w_list = mutable_list(w_target)
                 w_list.items_w[list_index(w_list, w_index)] = w_value
         elif isinstance(stmt, ast.IndexAugAssign):
             self.exec_index_aug_assign(stmt, env)
@@ -537,7 +542,7 @@ class Interpreter(object):
             w_value = self.eval_expr(stmt.value, env)
             w_target.items_w[key] = self.binop(stmt.op, w_old, w_value)
             return
-        w_list = list_value(w_target)
+        w_list = mutable_list(w_target)
         w_old = w_list.items_w[list_index(w_list, w_index)]
         w_value = self.eval_expr(stmt.value, env)
         w_new = self.binop(stmt.op, w_old, w_value)
@@ -954,8 +959,15 @@ class Interpreter(object):
                     raise EffectPythonRuntimeError(
                         "key '%s' not found" % key)
                 return w_target.items_w[key]
+            if isinstance(w_target, W_Tuple):
+                return w_target.items_w[tuple_index(w_target, w_index)]
             w_list = list_value(w_target)
             return w_list.items_w[list_index(w_list, w_index)]
+        elif isinstance(expr, ast.TupleLiteral):
+            items_w = []
+            for element in expr.elements:
+                items_w.append(self.eval_expr(element, env))
+            return W_Tuple(items_w)
         elif isinstance(expr, ast.DictLiteral):
             items_w = {}
             for i in range(len(expr.keys)):
@@ -1129,6 +1141,43 @@ def list_index(w_list, w_index):
         raise EffectPythonRuntimeError("list index out of range")
     return i
 
+def tuple_index(w_tuple, w_index):
+    """The position a subscript names in a tuple, as list_index gives
+    it for a list (plan 1.17)."""
+    i = int_value(w_index, "a tuple index")
+    count = len(w_tuple.items_w)
+    if i < 0:
+        i += count
+    if i < 0 or i >= count:
+        raise EffectPythonRuntimeError("tuple index out of range")
+    return i
+
+def mutable_list(w_value):
+    """The list a store goes into; a tuple takes none, in CPython's
+    words (plan 1.17)."""
+    if isinstance(w_value, W_Tuple):
+        raise EffectPythonRuntimeError(
+            "'tuple' object does not support item assignment")
+    return list_value(w_value)
+
+def unpacked(w_value, count):
+    """The values of a tuple for count names (plan 1.17); the checker
+    makes each error unreachable where it knows the value's type."""
+    if not isinstance(w_value, W_Tuple):
+        raise EffectPythonRuntimeError(
+            "cannot unpack %s; the value must be a tuple" %
+            type_name(w_value))
+    given = len(w_value.items_w)
+    if given > count:
+        raise EffectPythonRuntimeError(
+            "too many values to unpack (expected %d, got %d)" %
+            (count, given))
+    if given < count:
+        raise EffectPythonRuntimeError(
+            "not enough values to unpack (expected %d, got %d)" %
+            (count, given))
+    return w_value.items_w
+
 def list_method(w_target, method, args_w):
     """xs.append(v), the one method a list has."""
     w_list = list_value(w_target)
@@ -1247,4 +1296,6 @@ def type_name(w):
         return "list"
     elif isinstance(w, W_Dict):
         return "dict"
+    elif isinstance(w, W_Tuple):
+        return "tuple"
     return "object"

@@ -2,7 +2,8 @@
 from Milestone 11, the boolean operators and elif (plan 1.11);
 from Milestone 12, dicts and in (plan 1.12); from Milestone 13,
 f-strings (plan 1.13); from Milestone 14, augmented assignment
-(plan 1.14); from Milestone 16, None and is (plan 1.16).
+(plan 1.14); from Milestone 16, None and is (plan 1.16); from
+Milestone 17, tuples (plan 1.17).
 
 Run with:  pypy2 -m pytest
 These tests import no RPython modules, so they need no PYTHONPATH.
@@ -919,3 +920,55 @@ def test_the_operand_of_is_is_evaluated_once():
     exit_code, lines = run_main_body(
         '    print(val() is not None)\n    return 0\n', functions)
     assert (exit_code, lines) == (0, ['val', 'False'])
+
+# --- Tuples (Milestone 17) ---------------------------------------------------
+
+ONE_AND_TWO = ('def one() -> int:\n'
+               '    print("one")\n'
+               '    return 1\n'
+               'def two() -> int:\n'
+               '    print("two")\n'
+               '    return 2\n')
+EITHER_TUPLE = ('    if 1 == 1:\n'
+                '        x = (1, 2, 3)\n'
+                '    else:\n'
+                '        x = (1, 2)\n')
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print(("a", True, 3), (1, "b"))', ["('a', True, 3) (1, 'b')"]),
+    ('a, b = (1, "x")\n    print(a, b)', ['1 x']),
+    ('a, b = (one(), two())\n    print(a, b)', ['one', 'two', '1 2']),
+    ('a, b = (1, 2)\n    b, a = (a, b)\n    print(a, b)', ['2 1']),
+    ('t = (1, "x", True)\n    print(t[0], t[-1], t[1])', ['1 True x']),
+    ('t = (1, 2)\n    u = t\n    print(u, t is None)',
+     ['(1, 2) False']),
+], ids=['printed', 'unpack', 'left-to-right', 'swap', 'index',
+        'shared'])
+def test_tuples(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n', ONE_AND_TWO)
+    assert (exit_code, lines) == (0, printed)
+
+def test_a_tuple_of_unknown_type_is_indexed_by_a_computed_int():
+    exit_code, lines = run_main_body(
+        EITHER_TUPLE + '    i = 1\n    print(x[i], x[-1])\n    return 0\n')
+    assert (exit_code, lines) == (0, ['2 3'])
+
+@pytest.mark.parametrize('statement, msg', [
+    ('a, b = x', 'too many values to unpack (expected 2, got 3)'),
+    ('a, b, c, d = x',
+     'not enough values to unpack (expected 4, got 3)'),
+    ('a, b = x[0]', 'cannot unpack int; the value must be a tuple'),
+    ('print(x[3])', 'tuple index out of range'),
+    ('print(x[-4])', 'tuple index out of range'),
+    ('x[0] = 1', "'tuple' object does not support item assignment"),
+    ('x[0] += 1', "'tuple' object does not support item assignment"),
+    ('print(x == x)',
+     'unsupported operand types for ==: tuple and tuple'),
+], ids=['too-many', 'too-few', 'not-a-tuple', 'past-end',
+        'before-start', 'store', 'augmented-store', 'equality'])
+def test_a_tuple_misuse_is_a_runtime_error(statement, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(EITHER_TUPLE + '    ' + statement
+                      + '\n    return 0\n')
+    assert info.value.msg == msg

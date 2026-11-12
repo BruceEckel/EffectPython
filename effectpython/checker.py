@@ -106,6 +106,17 @@ return` needs no rule of its own, since the branch leaves. Narrowing
 is a retyping on a path, so a perform point in a narrowed branch
 widens the name again where a clause assigns it.
 
+A tuple type is tuple[T1, T2, ...] with two or more of the three
+scalars, and the literal (a, b) has the type its elements give it
+(plan 1.17). It matches itself alone and its optional. a, b = t
+needs a tuple with as many elements as names and gives each name
+its element's type (check_unpack). t[0] takes an int literal, which
+names one element and so one type (tuple_element). A tuple takes no
+operator, len(), for, in, str(), or f-string field, is no element of
+a list, a dict, or a tuple (require_scalar) and no field, and takes
+no store (require_mutable); print() takes it. A value of unknown
+type may be unpacked, and the runtime counts its elements.
+
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
 return type is not None must return or raise an exception on every
@@ -244,6 +255,20 @@ def is_list(type_name):
 def is_dict(type_name):
     return type_name == DICT or type_name.startswith("dict[")
 
+def is_tuple(type_name):
+    return type_name.startswith("tuple[") and not is_optional(type_name)
+
+def elements_of(type_name):
+    """The element types of tuple[T1, T2, ...] (plan 1.17)."""
+    end = len(type_name) - 1
+    assert end >= 6
+    return type_name[6:end].split(", ")
+
+def can_be_absent(type_name):
+    """Whether T | None is a type: a scalar or a tuple (plan 1.16,
+    1.17)."""
+    return type_name in SCALARS or is_tuple(type_name)
+
 def is_empty(type_name):
     """Whether the type is that of a [] or a {}, which the first store
     refines."""
@@ -297,13 +322,13 @@ def matches(actual, expected):
 def merged(a, b):
     """The type a name has where two paths meet and left it with types
     a and b: the one type, the list[T] that refines a [], the
-    optional T | None of a scalar T and None (plan 1.16), or
-    unknown."""
+    optional T | None of None and a T that is a scalar (plan 1.16)
+    or a tuple (plan 1.17), or unknown."""
     if a == b:
         return a
-    if a == NONE and b in SCALARS:
+    if a == NONE and can_be_absent(b):
         return b + OPTIONAL
-    if b == NONE and a in SCALARS:
+    if b == NONE and can_be_absent(a):
         return a + OPTIONAL
     if is_optional(a) and (b == NONE or b == base_of(a)):
         return a
@@ -802,6 +827,8 @@ class Checker(object):
                 actual = UNKNOWN
             scope.set_type(stmt.name, actual)
             self.rebind(scope, stmt.name)
+        elif isinstance(stmt, ast.Unpack):
+            self.check_unpack(stmt, scope, effects)
         elif isinstance(stmt, ast.AttrAssign):
             info = self.require_instance(scope, stmt.target, stmt.lineno)
             expected = self.require_field(info, stmt.attr, stmt.lineno)
@@ -1009,6 +1036,8 @@ class Checker(object):
                 raise InvalidProgram(
                     lineno, "a dict key must be str, not %s" % actual)
             return value_of(type_name)
+        if is_tuple(type_name):
+            return self.tuple_element(type_name, index, lineno)
         if type_name != UNKNOWN and not is_list(type_name):
             raise InvalidProgram(
                 lineno, "%s is not a list" % describe(target, type_name))
@@ -1021,6 +1050,51 @@ class Checker(object):
             return UNKNOWN
         return element_of(type_name)
 
+    def tuple_element(self, type_name, index, lineno):
+        """t[0] on a tuple: the index is an int literal, so that it
+        names one element and one type, and a negative one counts
+        from the end (plan 1.17)."""
+        if not isinstance(index, ast.IntLiteral):
+            raise InvalidProgram(
+                lineno, "a tuple index must be an int literal")
+        elements = elements_of(type_name)
+        i = index.value
+        if i < 0:
+            i += len(elements)
+        if i < 0 or i >= len(elements):
+            raise InvalidProgram(lineno, "tuple index out of range")
+        return elements[i]
+
+    def require_mutable(self, target, scope, lineno):
+        """A store through a subscript needs a list or a dict; a tuple
+        takes none, in the runtime's words (plan 1.17)."""
+        if is_tuple(self.type_of(target, scope, EffectSet())):
+            raise InvalidProgram(
+                lineno, "'tuple' object does not support item assignment")
+
+    def check_unpack(self, stmt, scope, effects):
+        """a, b = value: the value is a tuple with as many elements as
+        there are names, and each name takes its element's type; a
+        value of unknown type leaves the names unknown and the count
+        to the runtime (plan 1.17)."""
+        actual = self.type_of(stmt.value, scope, effects)
+        count = len(stmt.names)
+        if actual == UNKNOWN:
+            types = [UNKNOWN] * count
+        elif is_tuple(actual):
+            types = elements_of(actual)
+            if len(types) != count:
+                raise InvalidProgram(
+                    stmt.lineno, "cannot unpack %s into %d names" %
+                    (actual, count))
+        else:
+            raise InvalidProgram(
+                stmt.lineno, "cannot unpack %s; the value must be a "
+                "tuple" % actual)
+        for i in range(count):
+            scope.set_type(stmt.names[i], types[i])
+            self.rebind(scope, stmt.names[i])
+
     def check_index_assign(self, stmt, scope, effects):
         """xs[i] = v or d[k] = v: the value must have the element or the
         value type, and the first store into a name holding {} gives it
@@ -1029,6 +1103,7 @@ class Checker(object):
         clause that rebinds the container during the value's perform
         is seen at the target."""
         actual = self.type_of(stmt.value, scope, effects)
+        self.require_mutable(stmt.target, scope, stmt.lineno)
         element = self.check_index(stmt.target, stmt.index, stmt.lineno,
                                    scope, effects)
         kind = kind_of(self.type_of(stmt.target, scope, EffectSet()))
@@ -1042,7 +1117,8 @@ class Checker(object):
             raise InvalidProgram(
                 stmt.lineno, "the %s holds %s; cannot assign %s" %
                 (kind, element, actual))
-        if kind == "list" and not (is_list(actual) or is_dict(actual)):
+        if kind == "list" and not (is_list(actual) or is_dict(actual)
+                                   or is_tuple(actual)):
             self.require_scalar(actual, "list elements", stmt.lineno)
         else:
             self.require_scalar(actual, "dict values", stmt.lineno)
@@ -1057,9 +1133,10 @@ class Checker(object):
 
     def require_scalar(self, actual, what, lineno):
         """A list element or a dict value is an int, str, or bool where
-        its type is known: no list or dict (plan 1.9, 1.12), and no
-        None or optional, which no element type names (plan 1.16)."""
-        if is_list(actual) or is_dict(actual):
+        its type is known, and so is a tuple element: no list or
+        dict (plan 1.9, 1.12), no None or optional, which no element
+        type names (plan 1.16), and no tuple (plan 1.17)."""
+        if is_list(actual) or is_dict(actual) or is_tuple(actual):
             raise InvalidProgram(
                 lineno, "%s must be int, str, or bool, not a %s" %
                 (what, kind_of(actual)))
@@ -1074,6 +1151,7 @@ class Checker(object):
         takes. The result has the element's type, so the store needs
         no rule of its own, and {} gets no refinement, since a key
         must hold a value before anything is added to it."""
+        self.require_mutable(stmt.target, scope, stmt.lineno)
         element = self.check_index(stmt.target, stmt.index, stmt.lineno,
                                    scope, effects)
         actual = self.type_of(stmt.value, scope, effects)
@@ -1543,6 +1621,18 @@ class Checker(object):
             return self.check_fstring(expr, scope, effects)
         elif isinstance(expr, ast.In):
             return self.check_membership(expr, scope, effects)
+        elif isinstance(expr, ast.TupleLiteral):
+            types = []
+            untyped = False
+            for item in expr.elements:
+                actual = self.type_of(item, scope, effects)
+                self.require_scalar(actual, "tuple elements", expr.lineno)
+                if actual == UNKNOWN:
+                    untyped = True
+                types.append(actual)
+            if untyped:
+                return UNKNOWN
+            return "tuple[%s]" % ", ".join(types)
         elif isinstance(expr, ast.NoneLiteral):
             return NONE
         elif isinstance(expr, ast.IsNone):
@@ -1853,10 +1943,12 @@ def describe(target, type_name):
     return "a value of type %s" % type_name
 
 def kind_of(type_name):
-    """'list' or 'dict' for a container type, in a message about an
-    element that cannot be one."""
+    """'list', 'tuple', or 'dict' for a container type, in a message
+    about an element that cannot be one."""
     if is_list(type_name):
         return "list"
+    if is_tuple(type_name):
+        return "tuple"
     return "dict"
 
 def value_name(expr):

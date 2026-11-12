@@ -956,6 +956,56 @@ The narrowing is at an `if` or `elif` whose whole test is the one comparison of 
 A handler class field, a list element, and a dict value cannot be optional.
 `tests/programs/settings_none.epy` is a longer program with the same forms, and `tests/programs/settings_layers.epy` does its job with a thrown exception in place of `None`.
 
+### Two values at once
+
+A tuple is two or more values in parentheses, and `tuple[int, str]` is its type, one element type for each value:
+
+```python tests/programs/pair_return.epy
+from effectpython import Effect, perform, handle
+
+def divide(n: int, by: int) -> tuple[int, int]:
+    return (n // by, n % by)
+
+def widest(words: list[str]) -> tuple[str, int] | None:
+    best = None
+    for word in words:
+        if best is None:
+            best = (word, len(word))
+        elif len(word) > best[1]:
+            best = (word, len(word))
+    return best
+
+def main() -> int / []:
+    quotient, rest = divide(17, 5)
+    print(quotient, rest, divide(9, 3))
+    found = widest(["ab", "abcd", "abc"])
+    if found is not None:
+        word, width = found
+        print(word, width + 1, found[0], found[-1])
+    print(widest([]))
+    return 0
+```
+
+```text tests/programs/pair_return.expected
+3 2 (3, 0)
+abcd 5 abcd 4
+None
+```
+
+`divide` returns a pair, and `quotient, rest = divide(17, 5)` unpacks it into two names, each with its element's type.
+The names on the left must be as many as the tuple has elements, and the checker counts them.
+`print` shows a tuple as Python does.
+
+`found[0]` reads one element.
+The index is an `int` literal, positive or negative, since each position has a type of its own and the checker has to know which one is meant; `found[i]` is rejected.
+`widest` returns `tuple[str, int] | None`, the optional of a tuple, which works as the optional of a scalar does: `best` starts as `None`, the test narrows it, and `main` unpacks `found` inside `if found is not None:`.
+
+A tuple here is a way to hand back more than one value, and it does little else.
+The parentheses are required, so `return n // by, n % by` is a syntax error.
+The elements are `int`, `str`, or `bool`.
+A tuple cannot be changed, compared, measured with `len()`, or walked with `for`, and it cannot be a list element, a dict value, or a handler class field.
+`tests/programs/settings_none.epy` returns a setting's value with the name of the layer it came from as one pair from one operation.
+
 ## 10. What the checker catches
 
 Everything in this list is rejected before the program runs, with a line number:
@@ -971,6 +1021,7 @@ Everything in this list is rejected before the program runs, with a line number:
 - a list literal whose elements differ in type, an index or `append` on a value that is not a list, an `append` or an indexed assignment of the wrong element type, a `for` over a value that is neither a list nor `range()`, and `range()` anywhere else;
 - a `return` whose value is not the declared return type, and a function that can reach its end without returning one;
 - an optional (`str | None`) used as its type before an `is None` test has narrowed it, and `None` or an optional as a list element or a dict value;
+- an unpacking whose names differ in number from the tuple's elements or whose value is no tuple, a tuple index that is not an `int` literal or is out of range, and a store into a tuple;
 - `Exception` in a row, since a row names the classes that can reach a caller.
 
 A name that an `if`, a loop, a `try`, or a handled body can leave with two types has no type the checker can hold it to.

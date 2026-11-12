@@ -10,8 +10,8 @@ Milestone 11 the bool rule for and, or, not, if, and while, and elif
 from Milestone 13 the f-string field rule (plan 1.13), and from
 Milestone 14 the augmented assignment rules (plan 1.14), and from
 Milestone 15 the rule for a clause or an arm that leaves (plan
-1.15), and from Milestone 16 None and optional types (plan 1.16).
-The last
+1.15), from Milestone 16 None and optional types (plan 1.16), and
+from Milestone 17 tuples (plan 1.17). The last
 tests read Checker.unknowns, the places an operand of unknown type
 passed the checker, counted on the last pass over a suite alone.
 
@@ -1717,6 +1717,120 @@ def test_an_optional_slot_takes_the_value_none_or_an_optional(body):
 def test_an_optional_is_refused_until_it_is_narrowed(body, msg):
     with pytest.raises(InvalidProgram) as info:
         check_source(OPT + body)
+    assert info.value.msg == msg
+
+PAIRS = ('def take(n: int) -> int:\n    return n - 1\n'
+         'def name(s: str) -> str:\n    return s\n'
+         'def pair() -> tuple[int, str]:\n    return (1, "a")\n'
+         'def perhaps(i: int) -> tuple[int, str] | None:\n'
+         '    if i == 1:\n        return None\n    return (i, "a")\n'
+         'def main() -> int / []:\n    return 0\n')
+PAIR = 'def f() -> int:\n    t = pair()\n'
+UNSURE_X = ('def f() -> int:\n    if 1 == 1:\n        x = 1\n'
+            '    else:\n        x = "s"\n')
+
+@pytest.mark.parametrize('body', [
+    PAIR + '    a, b = t\n    print(name(b))\n    return take(a)\n',
+    PAIR + '    print(name(t[1]), name(t[-1]))\n'
+    '    return take(t[0]) + take(t[-2])\n',
+    'def f() -> int:\n    a, b, c = (1, "a", True)\n    if c:\n'
+    '        return take(a)\n    return 0\n',
+    'def f() -> int:\n    m = perhaps(1)\n    if m is None:\n'
+    '        return 0\n    a, b = m\n    return take(a)\n',
+    'def f() -> int:\n    m = None\n    if 1 == 1:\n'
+    '        m = (1, "a")\n    if m is None:\n        return 0\n'
+    '    return take(m[0])\n',
+    PAIR + '    print(t)\n    return 0\n',
+    UNSURE_X + '    a, b = x\n    print(a)\n    return 0\n',
+    'class A(Effect):\n'
+    '    def get(k: str) -> tuple[str, str] | None: ...\n'
+    'class H(Handler[A]):\n'
+    '    def get(self, k: str) -> tuple[str, str] | None:\n'
+    '        return (k, "h")\n'
+    'def f() -> int / []:\n    try:\n        with handle(A):\n'
+    '            r = perform(A.get("k"))\n'
+    '            if r is not None:\n                v, s = r\n'
+    '                print(name(v), name(s))\n'
+    '    except A.get as eff:\n        eff.resume((eff.k, "x"))\n'
+    '    return 0\n',
+], ids=['unpack', 'literal-index', 'three', 'narrowed', 'merged',
+        'print', 'unknown-value', 'operation'])
+def test_a_tuple_is_unpacked_indexed_and_passed(body):
+    check_source(PAIRS + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> tuple[int, str]:\n    return ("a", 1)\n',
+     "line 21: function 'f' must return tuple[int, str], not "
+     'tuple[str, int]'),
+    (PAIR + '    a, b, c = t\n    return 0\n',
+     'line 22: cannot unpack tuple[int, str] into 3 names'),
+    ('def f() -> int:\n    a, b = 1\n    return 0\n',
+     'line 21: cannot unpack int; the value must be a tuple'),
+    ('def f() -> int:\n    a, b = [1, 2]\n    return 0\n',
+     'line 21: cannot unpack list[int]; the value must be a tuple'),
+    ('def f() -> int:\n    a, b = perhaps(1)\n    return 0\n',
+     'line 21: cannot unpack tuple[int, str] | None; the value '
+     'must be a tuple'),
+    (PAIR + '    i = 0\n    return take(t[i])\n',
+     'line 23: a tuple index must be an int literal'),
+    (PAIR + '    return take(t[2])\n',
+     'line 22: tuple index out of range'),
+    (PAIR + '    return take(t[-3])\n',
+     'line 22: tuple index out of range'),
+    (PAIR + '    t[0] = 1\n    return 0\n',
+     "line 22: 'tuple' object does not support item assignment"),
+    (PAIR + '    t[0] += 1\n    return 0\n',
+     "line 22: 'tuple' object does not support item assignment"),
+    (PAIR + '    xs = [t]\n    return 0\n',
+     'line 22: list elements must be int, str, or bool, not a '
+     'tuple'),
+    (PAIR + '    xs = []\n    xs.append(t)\n    return 0\n',
+     'line 23: list elements must be int, str, or bool, not a '
+     'tuple'),
+    (PAIR + '    d = {"a": t}\n    return 0\n',
+     'line 22: dict values must be int, str, or bool, not a tuple'),
+    (PAIR + '    d = {}\n    d["a"] = t\n    return 0\n',
+     'line 23: dict values must be int, str, or bool, not a tuple'),
+    (PAIR + '    u = (t, 1)\n    return 0\n',
+     'line 22: tuple elements must be int, str, or bool, not a '
+     'tuple'),
+    ('def f() -> int:\n    u = (None, 1)\n    return 0\n',
+     'line 21: tuple elements must be int, str, or bool, not None'),
+    ('def f() -> int:\n    u = ([1], 1)\n    return 0\n',
+     'line 21: tuple elements must be int, str, or bool, not a '
+     'list'),
+    (PAIR + '    print(t == t)\n    return 0\n',
+     'line 22: unsupported operand types for ==: tuple[int, '
+     'str] and tuple[int, str]'),
+    (PAIR + '    return len(t)\n',
+     'line 22: len() needs a list, dict, or str, not tuple[int, '
+     'str]'),
+    (PAIR + '    for x in t:\n        print(x)\n    return 0\n',
+     'line 22: for needs a list, a dict, or range(), not '
+     'tuple[int, str]'),
+    (PAIR + '    print(1 in t)\n    return 0\n',
+     'line 22: in needs a list or dict, not tuple[int, str]'),
+    (PAIR + '    print(f"{t}")\n    return 0\n',
+     'line 22: an f-string field needs an int, str, or bool, '
+     'not tuple[int, str]'),
+    ('class H(Handler[FileIO]):\n    v: tuple[int, str]\n',
+     "line 21: field 'v' of handler class 'H' must be int, str, "
+     'list[...], or dict[str, ...], not tuple[int, str]'),
+    (PAIR + '    return take(t)\n',
+     'line 22: argument 1 of take() must be int, not tuple[int, '
+     'str]'),
+    (UNSURE_X + '    a, b = (x, 1)\n    return take(b)\n',
+     "line 26: argument 1 of take() must be int, but 'b' has no "
+     'known type'),
+], ids=['wrong-order', 'count', 'unpack-int', 'unpack-list',
+        'unpack-optional', 'index-name', 'index-past-end',
+        'index-before-start', 'store', 'augmented-store',
+        'list-element', 'append', 'dict-value', 'dict-store',
+        'nested', 'none-element', 'list-in-tuple', 'equality', 'len',
+        'for', 'in', 'fstring', 'field', 'slot', 'unknown-element'])
+def test_a_tuple_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(PAIRS + body)
     assert info.value.msg == msg
 
 UNSURE = ('    if 1 == 1:\n        x = 1\n    else:\n        x = "s"\n')

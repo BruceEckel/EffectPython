@@ -1,16 +1,17 @@
-# Milestone 16: None and optional types (plan 1.16). The job of
-# settings_layers.epy with a miss handed back as a value: Lookup.get
-# returns str | None, a layer that lacks the key performs outward,
-# and the outermost clause resumes None. resolve() turns a miss into
-# Missing where a setting is required, and address() and main() test
-# is None where it is not. first_set() keeps the first value a loop
-# finds, the name that starts as None before the loop.
+# Milestones 16 and 17: None, optional types, and tuples (plan 1.16,
+# 1.17). The job of settings_layers.epy with a miss handed back as a
+# value: Lookup.get returns tuple[str, str] | None, the value with
+# the name of the layer that had it; a layer that lacks the key
+# performs outward, and the outermost clause resumes None. resolve()
+# turns a miss into Missing where a setting is required and unpacks
+# the pair, and address() and main() test is None where a miss is
+# ordinary. first_set() keeps the first value a loop finds, the name
+# that starts as None before the loop.
 
 from effectpython import Effect, Handler, perform, handle
 
 class Lookup(Effect):
-    def get(key: str) -> str | None: ...
-    def source(key: str) -> str | None: ...
+    def get(key: str) -> tuple[str, str] | None: ...
 
 class Log(Effect):
     def note(text: str) -> int: ...
@@ -21,15 +22,11 @@ class Layer(Handler[Lookup]):
     name: str
     values: dict[str, str]
     hits: int = 0
-    def get(self, key: str) -> str | None / [Lookup]:
+    def get(self, key: str) -> tuple[str, str] | None / [Lookup]:
         if key in self.values:
             self.hits += 1
-            return self.values[key]
+            return (self.values[key], self.name)
         return perform(Lookup.get(key))
-    def source(self, key: str) -> str | None / [Lookup]:
-        if key in self.values:
-            return self.name
-        return perform(Lookup.source(key))
 
 class Journal(Handler[Log]):
     entries: list[str] = []
@@ -38,12 +35,10 @@ class Journal(Handler[Log]):
         return len(self.entries)
 
 def resolve(key: str) -> str / [Lookup, Log, Missing]:
-    value = perform(Lookup.get(key))
-    source = perform(Lookup.source(key))
-    if value is None:
+    found = perform(Lookup.get(key))
+    if found is None:
         raise Missing(key)
-    if source is None:
-        raise Missing(key)
+    value, source = found
     perform(Log.note(f"{key} = '{value}' ({source})"))
     return value
 
@@ -53,14 +48,16 @@ def address() -> str / [Lookup, Log, Missing]:
     prefix = perform(Lookup.get("prefix"))
     if prefix is None:
         return f"{host}:{port}"
-    return f"{host}:{port}{prefix}"
+    return f"{host}:{port}{prefix[0]}"
 
 def first_set(keys: list[str]) -> str | None / [Lookup]:
     found = None
     for key in keys:
         if found is None:
             found = perform(Lookup.get(key))
-    return found
+    if found is None:
+        return None
+    return found[0]
 
 def main() -> int / []:
     env = Layer("env", {"port": "9000", "prefix": ""})
@@ -88,12 +85,10 @@ def main() -> int / []:
                         if timeout is None:
                             print("timeout unset")
                         else:
-                            print("timeout", timeout)
+                            print("timeout", timeout[0])
                         print(first_set(["login", "user", "host"]),
                               first_set(["login", "token"]))
     except Lookup.get as eff:
-        eff.resume(None)
-    except Lookup.source as eff:
         eff.resume(None)
     print(env.name, "answered", env.hits)
     print(file.name, "answered", file.hits)

@@ -1252,7 +1252,7 @@ What remains is a typed slot in that branch: `best = take(best)` in the `else` i
 A name of a type that cannot be `None` (`x = 1`, then `if x is None:`) is left as the design says, both branches merged.
 
 
-### 1.17 Tuples (designed 2026-11-11, not implemented)
+### 1.17 Tuples (designed and implemented 2026-11-11, open questions settled as recommended)
 
 The Python version of the settings program returns a value with the name of the layer it came from:
 
@@ -1324,6 +1324,16 @@ The runtime's `Index` and `IndexAssign` send anything that is no dict to `list_v
 6.  *Whether a tuple may be a parameter of an operation, a `resume()` value, and a handler method's return.*
     *The design allows it wherever a type is written, fields aside: `Lookup.get` returning `tuple[str, str] | None` is the form the settings program wants.*
 
+All six were settled as recommended on 2026-11-11.
+
+**As implemented (2026-11-11).**
+Two messages differ from the runtime paragraph above.
+A value that is no tuple is "cannot unpack int; the value must be a tuple", from the checker and from the runtime, in place of CPython's "cannot unpack non-iterable int object": CPython unpacks a list and a `str`, so its word "non-iterable" would be false here for both.
+The two count errors are CPython's.
+`tuple[int]` reaches the production for `list[T]`, which now answers "a tuple has two or more element types: tuple[int, str]".
+The unpacking production is `postfix COMMA arg_list EQUALS expr`, with the action refusing a target that is no name ("cannot assign to this expression"), and the literal is `LPAREN expr COMMA arg_list RPAREN`; rply reports no conflict for either.
+An unpacking of a value of unknown type is not recorded in `Checker.unknowns`, which lists operators, tests, subscripts, and `len()` and `str()`.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1347,6 +1357,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   dict literals `{}` and `{<expr>: <expr>, ...}`, a `DictLiteral` node; the type form `dict[str, T]`; and `in` and `not in` in the comparison layer, an `In` node (1.12; Milestone 12, 2026-11-08)
     *   f-strings `f"..."` with `{<expr>}` fields, an `FString` node, from the token sequence `FSTRING_START`, `FSTRING_MIDDLE`, `LBRACE expr RBRACE`, `FSTRING_END` that the lexer expands one `FSTRING` token into (1.13; Milestone 13, 2026-11-08)
     *   `None`, a `NoneLiteral` node, and `<arith> is None` and `<arith> is not None` in the comparison layer, an `IsNone` node with a `negated` flag; `is` with anything else on its right is a syntax error (1.16; Milestone 16, 2026-11-11)
+    *   a tuple literal `(<expr>, <expr>, ...)` of two or more elements, a `TupleLiteral` node, and `<name>, <name>, ... = <expr>`, an `Unpack` node (1.17; Milestone 17, 2026-11-11)
     *   augmented assignment `<postfix> op= <expr>` for `+=`, `-=`, `*=`, `//=`, and `%=`, built as the `Assign` or `AttrAssign` over a `BinOp` it means for a name or a field target, and an `IndexAugAssign` node for a subscript target (1.14; Milestone 14, 2026-11-09)
     *   `for <name> in <expr>: <suite>`, a `For` node, or a `ForRange` node when the expression is a call to `range` (1.9; Milestone 9, 2026-11-07)
     *   indexed assignment `<expr>[<expr>] = <expr>`, an `IndexAssign` node; one production reads every assignment and sorts the target into `Assign`, `AttrAssign`, or `IndexAssign` (1.9; Milestone 9, 2026-11-07)
@@ -1357,7 +1368,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `finally: <suite>` after the clauses of either `try` form, or after a `try` suite with no clauses, filling `Try.finalbody`; on effect clauses the `Handle` is wrapped in a clause-less `Try` (1.8; Milestone 8, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
 *   **Expressions:** Integer/string literals, `True` and `False` (a `BoolLiteral`, added 2026-11-06, which `==` and `!=` compare), variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31). Milestone 9 adds list literals `[<exprs>]`, indexing `<expr>[<expr>]` (an `Index`), a method call on an expression `<expr>.<name>(<args>)` (a `MethodCall`; on a name it is the `OpCall` above, or a `Resume` or `Throw`), the built-in calls `len(...)`, `str(...)`, and `range(...)`, and a unary minus folded into the literal it negates or into `0 - x`; attribute reads, attribute calls, and indexing are postfix forms on an expression, with a name required on the left of an attribute read (1.9; Milestone 9, 2026-11-07).
-*   **Types:** a parameter, return, or field type is a name or `list[int]`, `list[str]`, or `list[bool]`, which the parser reads into one string (1.9; Milestone 9, 2026-11-07). `None` is a type, and `int | None`, `str | None`, and `bool | None` are the optional types, read into the strings `int | None` and so on (1.16; Milestone 16, 2026-11-11).
+*   **Types:** a parameter, return, or field type is a name or `list[int]`, `list[str]`, or `list[bool]`, which the parser reads into one string (1.9; Milestone 9, 2026-11-07). `None` is a type, and `int | None`, `str | None`, and `bool | None` are the optional types, read into the strings `int | None` and so on (1.16; Milestone 16, 2026-11-11). `tuple[T1, T2, ...]` with two or more of the three scalars is a type, read into the string `tuple[int, str]`, and `tuple[...] | None` is its optional (1.17; Milestone 17, 2026-11-11).
 
 Two constraints on the lexer, found when translating `experiments/rply_addition.py` (2026-10-28), which confirmed that `rply` 0.7.8 translates with this toolchain:
 
@@ -1415,6 +1426,7 @@ The static analyzer runs in three passes over the AST before execution:
             one assigned to another name loses its type, since the checker does not track which names share a list; a list is no element of a list (1.9, open question 5), in a literal or an `append`, which keeps `xss[0]` from naming one twice; and a literal with an element of unknown type is unknown, so nothing refines it as `[]` is refined.
             An `append` on a name of unknown type passes, as an unknown type does everywhere.
         *   `NoneLiteral` and `IsNone` (1.16; Milestone 16, 2026-11-11): `None` has the type `None` and `x is None` the type `bool`, whatever its operand's type; `matches` lets `T`, `None`, and `T | None` stand where `T | None` is wanted, `merged` gives `T | None` for a scalar `T` and `None`, an optional is refused wherever a `T` is wanted, `require_scalar` keeps `None` and an optional out of a list or a dict, and `narrow` retypes the name of an `if` test `name is None` for each branch (`check_if`).
+        *   `TupleLiteral` and `Unpack` (1.17; Milestone 17, 2026-11-11): a literal has the type `tuple[T1, T2, ...]` of its elements, which `require_scalar` keeps to the three scalars; `check_unpack` needs a tuple with as many elements as names and gives each name its element's type, or the unknown type for a value of unknown type; `check_index` gives `t[0]` its element's type for an `int` literal index (`tuple_element`); `require_mutable` refuses a store; and `merged` gives `tuple[...] | None` for a tuple type and `None` (`can_be_absent`).
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -1464,6 +1476,10 @@ class W_List(W_Root):
 class W_Dict(W_Root):
     """A dict with str keys (1.12; Milestone 12), over RPython's ordered dict; shared like a list"""
     def __init__(self, items_w): self.items_w = items_w  # dict[str, W_Root]
+
+class W_Tuple(W_Root):
+    """A tuple (1.17; Milestone 17): two or more values and no operation that changes it; str() gives Python's form"""
+    def __init__(self, items_w): self.items_w = items_w  # list[W_Root]
 
 class W_EffectPayload(W_Root):
     def __init__(self, effect_name, op_name, args_w):
@@ -2080,7 +2096,12 @@ EffectPython/
         *   `None = 1` and `x is y` are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 17. **Milestone 17: tuples (1.17)**
-    *   *Designed 2026-11-11, not implemented.* The six open questions of 1.17 are not settled.
+    *   *Designed and done 2026-11-11.* The six open questions of 1.17 are settled as recommended.
+    *   *Done 2026-11-11.*
+        `parser.py` reads the tuple type and its optional, the literal, and the unpacking; `ast_nodes.py` has `TupleLiteral` and `Unpack`; `model.py` has `W_Tuple`.
+        `checker.py` has `is_tuple`, `elements_of`, `can_be_absent` in `merged`, the tuple cases of `kind_of` and `require_scalar`, `check_unpack`, `tuple_element`, and `require_mutable`.
+        `interpreter.py` evaluates the literal and the unpacking (`unpacked`), indexes a tuple (`tuple_index`), and refuses a store (`mutable_list`).
+        `settings_none.epy` has lost `Lookup.source` and its clause, and its recorded output is unchanged; `pair_return.epy` is the tutorial's listing, in a subsection at the end of section 9.
     *   *Implementation (planned), in the order of Milestone 5:* the parser with tests (the literal, the type form, `Unpack`), the checker with tests (the literal's type, `Unpack`, the literal index, the refusals, `merged` for a tuple and `None`), then the runtime (`W_Tuple`, `TupleLiteral`, `Unpack`, the index).
         The change is to `merged`, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*

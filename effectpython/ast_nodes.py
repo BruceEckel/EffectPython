@@ -179,6 +179,16 @@ class Assign(Stmt):
         self.name = name    # str
         self.value = value  # Expr
 
+class Unpack(Stmt):
+    """name1, name2, ... = value: binds each name to an element of a
+       tuple (plan 1.17)"""
+    _attrs_ = ['names', 'value']
+
+    def __init__(self, names, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.names = names  # list of str
+        self.value = value  # Expr
+
 class AttrAssign(Stmt):
     """target.attr = value: assigns a field of a handler instance,
        such as self.writes = self.writes + 1 (plan 1.5)."""
@@ -353,6 +363,14 @@ class NoneLiteral(Expr):
 
 class ListLiteral(Expr):
     """[e1, e2, ...] or [] (plan 1.9)"""
+    _attrs_ = ['elements']
+
+    def __init__(self, elements, lineno=0):
+        Node.__init__(self, lineno)
+        self.elements = elements  # list of Expr
+
+class TupleLiteral(Expr):
+    """(e1, e2, ...) with two or more elements (plan 1.17)"""
     _attrs_ = ['elements']
 
     def __init__(self, elements, lineno=0):

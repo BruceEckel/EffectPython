@@ -6,7 +6,8 @@ for loop; from Milestone 10, break and continue; from Milestone 11,
 the boolean operators and elif (plan 1.11); from Milestone 12, dicts
 and in (plan 1.12); from Milestone 13, f-strings (plan 1.13);
 from Milestone 14, augmented assignment (plan 1.14); from
-Milestone 16, None and optional types (plan 1.16).
+Milestone 16, None and optional types (plan 1.16); from Milestone
+17, tuples (plan 1.17).
 
 Run with:  pypy2 -m pytest
 """
@@ -1172,9 +1173,81 @@ def test_none_syntax_errors(source, msg):
     ('list[int] | None', "line 1, column 20: unexpected '|'"),
     ('E | None',
      'line 1, column 10: E | None is not a type; the optional types '
-     'are int | None, str | None, and bool | None'),
+     'are int | None, str | None, bool | None, and tuple[...] | None'),
 ], ids=['union', 'none-first', 'list', 'class'])
 def test_optional_type_errors(written, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def f(x: %s) -> int:\n    return 0\n' % written)
+    assert info.value.msg == msg
+
+# --- Tuples (Milestone 17) ---------------------------------------------------
+
+@pytest.mark.parametrize('source, expected', [
+    ('t = (1, "a")',
+     ('Assign', 't',
+      ('TupleLiteral', [('IntLiteral', 1), ('StrLiteral', 'a')]))),
+    ('t = (a, b, c)',
+     ('Assign', 't',
+      ('TupleLiteral', [('Name', 'a'), ('Name', 'b'), ('Name', 'c')]))),
+    ('t = (a)', ('Assign', 't', ('Name', 'a'))),
+    ('a, b = t', ('Unpack', ['a', 'b'], ('Name', 't'))),
+    ('a, b, c = f()', ('Unpack', ['a', 'b', 'c'], ('Call', 'f', []))),
+    ('b, a = (a, b)',
+     ('Unpack', ['b', 'a'],
+      ('TupleLiteral', [('Name', 'a'), ('Name', 'b')]))),
+], ids=['pair', 'triple', 'parenthesized', 'unpack', 'unpack-three',
+        'swap'])
+def test_tuple_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    assert shape(module.functions[0].body[0]) == expected
+
+def test_an_unpack_carries_its_line():
+    module = parse('def main() -> int:\n    pass\n    a, b = t\n')
+    assert module.functions[0].body[1].lineno == 3
+
+@pytest.mark.parametrize('written', [
+    'tuple[int, str]', 'tuple[str, str, bool]',
+    'tuple[int, int, int, int]', 'tuple[str, str] | None',
+    'tuple[int, str, bool] | None'])
+def test_a_type_may_be_a_tuple_or_its_optional(written):
+    module = parse('def f(x: %s) -> %s:\n    return x\n'
+                   % (written, written))
+    fn = module.functions[0]
+    assert (fn.param_types, fn.return_type) == ([written], written)
+
+@pytest.mark.parametrize('source, msg', [
+    ('    t = (1,)\n', "line 2, column 12: unexpected ')'"),
+    ('    t = ()\n', "line 2, column 10: unexpected ')'"),
+    ('    t = 1, 2\n', "line 2, column 10: unexpected ','"),
+    ('    return 1, 2\n', "line 2, column 13: unexpected ','"),
+    ('    a, b.c = t\n',
+     'line 2, column 12: cannot assign to this expression'),
+    ('    a, 1 = t\n',
+     'line 2, column 10: cannot assign to this expression'),
+], ids=['one-element', 'empty', 'bare', 'bare-return', 'field-target',
+        'literal-target'])
+def test_tuple_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n' + source)
+    assert info.value.msg == msg
+
+@pytest.mark.parametrize('written, msg', [
+    ('tuple', 'line 1, column 10: tuple needs element types: '
+     'tuple[int, str]'),
+    ('tuple[int]', 'line 1, column 10: a tuple has two or more element '
+     'types: tuple[int, str]'),
+    ('tuple[int, list]',
+     'line 1, column 10: tuple[..., list] is not a type; an element '
+     'type is int, str, or bool'),
+    ('dict[str, int, int]',
+     "line 1, column 10: 'dict' takes no list of element types; "
+     "tuple[...] does"),
+    ('dict[str, int] | None',
+     'line 1, column 10: dict[...] | None is not a type; the optional '
+     'types are int | None, str | None, bool | None, and '
+     'tuple[...] | None'),
+], ids=['bare', 'one', 'element', 'dict-three', 'dict-optional'])
+def test_tuple_type_errors(written, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def f(x: %s) -> int:\n    return 0\n' % written)
     assert info.value.msg == msg

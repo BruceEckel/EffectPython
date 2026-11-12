@@ -1,0 +1,28 @@
+# Milestone 17: tuples (plan 1.17). A function that returns two
+# values as a pair, unpacked into two names; a literal index; a pair
+# printed; and a pair that may be absent, tested before it is
+# unpacked.
+
+from effectpython import Effect, perform, handle
+
+def divide(n: int, by: int) -> tuple[int, int]:
+    return (n // by, n % by)
+
+def widest(words: list[str]) -> tuple[str, int] | None:
+    best = None
+    for word in words:
+        if best is None:
+            best = (word, len(word))
+        elif len(word) > best[1]:
+            best = (word, len(word))
+    return best
+
+def main() -> int / []:
+    quotient, rest = divide(17, 5)
+    print(quotient, rest, divide(9, 3))
+    found = widest(["ab", "abcd", "abc"])
+    if found is not None:
+        word, width = found
+        print(word, width + 1, found[0], found[-1])
+    print(widest([]))
+    return 0

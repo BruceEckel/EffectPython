@@ -38,7 +38,10 @@ str, or bool; a bare list is rejected, since it needs an element
 type, and int | None, str | None, or bool | None is an optional
 type, with None on the right alone; None is a type and an
 expression, and is takes None alone on its right, giving an IsNone
-(plan 1.16). A for whose iterable is a call to range becomes a ForRange,
+(plan 1.16). tuple[T1, T2, ...] with two or more of the three scalars
+is a type, and so is its optional; (a, b) with two or more elements
+is a TupleLiteral, and a, b = value an Unpack, whose targets are
+names (plan 1.17). A for whose iterable is a call to range becomes a ForRange,
 and a unary minus is folded into the literal it negates or into
 0 - x (plan 1.9). break and continue are simple statements giving
 Break and Continue nodes (plan 1.10).
@@ -394,10 +397,15 @@ def plain_type(p):
     if _text(p[0]) == 'dict':
         raise _error(p[0], "dict needs a key and a value type: "
                      "dict[str, int], dict[str, str], or dict[str, bool]")
+    if _text(p[0]) == 'tuple':
+        raise _error(p[0], "tuple needs element types: tuple[int, str]")
     return _Type(_text(p[0]))
 
 @pg.production('type : NAME LBRACKET NAME RBRACKET')
 def list_type(p):
+    if _text(p[0]) == 'tuple':
+        raise _error(p[0], "a tuple has two or more element types: "
+                     "tuple[int, str]")
     if _text(p[0]) != 'list':
         raise _error(p[0], "'%s' takes no type parameter; list[...] does"
                      % _text(p[0]))
@@ -409,6 +417,8 @@ def list_type(p):
 
 @pg.production('type : NAME LBRACKET NAME COMMA NAME RBRACKET')
 def dict_type(p):
+    if _text(p[0]) == 'tuple':
+        return _Type(_tuple_type(p[0], [_text(p[2]), _text(p[4])]))
     if _text(p[0]) != 'dict':
         raise _error(p[0], "'%s' takes no key and value types; "
                      "dict[str, ...] does" % _text(p[0]))
@@ -420,6 +430,46 @@ def dict_type(p):
                      "is int, str, or bool" % value)
     return _Type('dict[str, %s]' % value)
 
+@pg.production('type : NAME LBRACKET NAME COMMA NAME COMMA name_list '
+               'RBRACKET')
+def long_tuple_type(p):
+    return _Type(_tuple_type(p[0], _long_elements(p)))
+
+@pg.production('type : NAME LBRACKET NAME COMMA NAME RBRACKET PIPE NONE')
+def optional_pair_type(p):
+    elements = [_text(p[2]), _text(p[4])]
+    return _Type(_optional_tuple(p[0], elements))
+
+@pg.production('type : NAME LBRACKET NAME COMMA NAME COMMA name_list '
+               'RBRACKET PIPE NONE')
+def optional_long_tuple_type(p):
+    return _Type(_optional_tuple(p[0], _long_elements(p)))
+
+def _long_elements(p):
+    rest = p[6]
+    assert isinstance(rest, _NameList)
+    return [_text(p[2]), _text(p[4])] + rest.items
+
+def _tuple_type(token, elements):
+    """tuple[T1, T2, ...] as one string, with two or more of int, str,
+    and bool (plan 1.17)."""
+    if _text(token) != 'tuple':
+        raise _error(token, "'%s' takes no list of element types; "
+                     "tuple[...] does" % _text(token))
+    for element in elements:
+        if element not in LIST_ELEMENTS:
+            raise _error(token, "tuple[..., %s] is not a type; an "
+                         "element type is int, str, or bool" % element)
+    return 'tuple[%s]' % ', '.join(elements)
+
+def _optional_tuple(token, elements):
+    if _text(token) != 'tuple':
+        raise _error(token, OPTIONALS % ('%s[...]' % _text(token)))
+    return '%s | None' % _tuple_type(token, elements)
+
+OPTIONALS = ("%s | None is not a type; the optional types are "
+             "int | None, str | None, bool | None, and tuple[...] | None")
+
 @pg.production('type : NONE')
 def none_type(p):
     return _Type('None')
@@ -428,9 +478,7 @@ def none_type(p):
 def optional_type(p):
     base = _text(p[0])
     if base not in LIST_ELEMENTS:
-        raise _error(p[0], "%s | None is not a type; the optional "
-                     "types are int | None, str | None, and bool | None"
-                     % base)
+        raise _error(p[0], OPTIONALS % base)
     return _Type('%s | None' % base)
 
 LIST_ELEMENTS = ['int', 'str', 'bool']
@@ -544,6 +592,18 @@ def assign(p):
         return ast.IndexAssign(target.target, target.index, value,
                                target.lineno)
     raise _error(p[1], "cannot assign to this expression")
+
+@pg.production('simple_stmt : postfix COMMA arg_list EQUALS expr')
+def unpack(p):
+    rest = p[2]
+    assert isinstance(rest, _ExprList)
+    first = _expr(p[0])
+    names = []
+    for target in [first] + rest.items:
+        if not isinstance(target, ast.Name):
+            raise _error(p[3], "cannot assign to this expression")
+        names.append(target.id)
+    return ast.Unpack(names, _expr(p[4]), first.lineno)
 
 @pg.production('simple_stmt : postfix augop expr')
 def aug_assign(p):
@@ -936,6 +996,12 @@ def dict_items(p):
 @pg.production('atom : LPAREN expr RPAREN')
 def parenthesized(p):
     return p[1]
+
+@pg.production('atom : LPAREN expr COMMA arg_list RPAREN')
+def tuple_literal(p):
+    rest = p[3]
+    assert isinstance(rest, _ExprList)
+    return ast.TupleLiteral([_expr(p[1])] + rest.items, _line(p[0]))
 
 @pg.production('args :')
 def args_empty(p):
