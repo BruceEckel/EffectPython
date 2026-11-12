@@ -1277,16 +1277,21 @@ A bare `-> tuple` parses, as any name does where a type is written, and the func
 **Syntax.**
 A tuple literal is two or more expressions in parentheses, `(a, b)`, a `TupleLiteral` node; `()` and `(a,)` stay syntax errors.
 The type is `tuple[T1, T2, ...]` with two or more of `int`, `str`, and `bool`, and `tuple[...] | None` is its optional.
+The optional needs a production of its own beside `type : NAME PIPE NONE`, whose message, "E | None is not a type; the optional types are int | None, str | None, and bool | None", gains the tuple.
+A bare `tuple` is refused as a bare `list` and `dict` are, "tuple needs element types: tuple[int, str]", where today it parses as a type no value has.
 `<name>, <name>, ... = <expr>` is an `Unpack` statement, with names alone as targets.
 The bare forms `return a, b` and `t = a, b` are left out (open question 1).
 
 **Types.**
 A literal whose elements are an `int` and a `str` has the type `tuple[int, str]`; an element of unknown type makes the literal unknown, as it does a list literal, and an element that is a list, a dict, a tuple, `None`, or an optional is refused.
-A tuple type matches itself alone, and its optional by 1.16's rule; `merged` gives `tuple[...] | None` for a tuple type and `None`, as for a scalar.
+A tuple type matches itself alone, and its optional by 1.16's rule; `merged` gives `tuple[...] | None` for a tuple type and `None`, as for a scalar, which means widening its test `in SCALARS`.
 `a, b = t` needs as many names as `t` has elements and gives each name its element's type; a value of unknown type gives each name the unknown type and leaves the count to the runtime; any other type is refused.
 `t[0]` with an `int` literal for the index has that element's type, and a negative literal counts from the end; any other index is refused, since the checker could not say which element it names (open question 2).
+That is a branch in `check_index` before "'t' is not a list", which a subscript on any value that is no list or dict gets today.
+The literal rule holds for a tuple type the checker knows: on a target of unknown type `check_index` asks for an `int` index as it does now, and the runtime indexes a tuple with it.
 A tuple takes no operator, `==` included, no `len()`, no `for`, no `in`, no `str()` and no f-string field; `print()` takes it and shows Python's form, `('db.internal', 'file')`.
 It is no list element, no dict value, and no handler class field.
+`require_scalar` words the first two through `kind_of`, which answers "dict" for anything that is not a list, so it needs a tuple case, or a tuple in a list would read "list elements must be int, str, or bool, not a dict"; a tuple's own elements are a third use of `require_scalar`, "tuple elements must be int, str, or bool, not None".
 It cannot be assigned to: `t[0] = 1` is refused.
 
 **Narrowing.**
@@ -1297,6 +1302,7 @@ It cannot be assigned to: `t[0] = 1` is refused.
 `TupleLiteral` evaluates its elements left to right.
 `Unpack` evaluates the value and binds the names in order; on a value the checker left unknown it reports CPython's errors, "cannot unpack non-iterable int object", "too many values to unpack (expected 2, got 3)", and "not enough values to unpack (expected 3, got 2)".
 An index on a tuple is "tuple index out of range" past either end.
+The runtime's `Index` and `IndexAssign` send anything that is no dict to `list_value`, which is "int is not a list" for an `int`, so a tuple needs a branch in each: the element for a read, and for a store, which only a tuple of unknown type can reach, CPython's "'tuple' object does not support item assignment".
 
 **Open questions (recommendations in italics).**
 
