@@ -1,0 +1,3 @@
+exit 1
+1 0
+error: join() needs a str on the left of the dot, not dict

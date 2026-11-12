@@ -1,0 +1,11 @@
+# Runtime-only: an if leaves v with two types, so the checker lets
+# join() through; str_join finds the dict on the left of the dot.
+
+def main() -> int:
+    if 1 == 1:
+        v = {"a": 1}
+    else:
+        v = ", "
+    print(v.get("a"), v.get("b", 0))
+    print(v.join(["a", "b"]))
+    return 0

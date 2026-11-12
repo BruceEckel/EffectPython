@@ -3,9 +3,9 @@
 # with a longer wait each time, and skips a task whose dependency did
 # not succeed. Written in Python first and then ported. Until
 # Milestone 19 the tasks were four parallel lists and a dict; Task is
-# now the data class the Python version has. joined(), padded(), and
-# power_of_two() stand in for str.join(), the format spec {name:8},
-# and 2 ** n.
+# now the data class the Python version has, and from Milestone 21
+# str.join(), dict.get(), and 2 ** n are Python's own. padded() still
+# stands in for the format spec {name:8}.
 
 from dataclasses import dataclass
 from effectpython import Effect, Handler, perform, handle
@@ -37,10 +37,7 @@ class Timer(Handler[Clock]):
 class Worker(Handler[Work]):
     tries: dict[str, int] = {}
     def attempt(self, task: Task) -> int / [Clock, Failed]:
-        if task.name in self.tries:
-            self.tries[task.name] += 1
-        else:
-            self.tries[task.name] = 1
+        self.tries[task.name] = self.tries.get(task.name, 0) + 1
         now = perform(Clock.sleep(task.seconds))
         if self.tries[task.name] <= task.failures:
             raise Failed(task.name)
@@ -52,31 +49,17 @@ class Report(Handler[Log]):
         self.lines.append(text)
         return len(self.lines)
 
-def power_of_two(n: int) -> int:
-    result = 1
-    for i in range(n):
-        result *= 2
-    return result
-
 def run(task: Task) -> bool / [Work, Clock, Log]:
     for n in range(1, 4):
         try:
             now = perform(Work.attempt(task))
         except Failed:
             perform(Log.note(f"{task.name}: attempt {n} failed"))
-            perform(Clock.sleep(power_of_two(n)))
+            perform(Clock.sleep(2 ** n))
             continue
         perform(Log.note(f"{task.name}: ok at t={now}"))
         return True
     return False
-
-def joined(words: list[str]) -> str:
-    text = ""
-    for word in words:
-        if text != "":
-            text += ", "
-        text += word
-    return text
 
 def padded(text: str, width: int) -> str:
     while len(text) < width:
@@ -88,12 +71,12 @@ def build(tasks: list[Task]) -> dict[str, str] / [Work, Clock, Log]:
     for task in tasks:
         blocked = []
         for need in task.needs:
-            if need not in status or status[need] != "ok":
+            if status.get(need, "") != "ok":
                 blocked.append(need)
         if len(blocked) > 0:
             status[task.name] = "skipped"
             perform(Log.note(
-                f"{task.name}: skipped, needs {joined(blocked)}"))
+                f"{task.name}: skipped, needs {', '.join(blocked)}"))
         elif run(task):
             status[task.name] = "ok"
         else:
@@ -118,10 +101,7 @@ def main() -> int / []:
     for name in status:
         result = status[name]
         print(padded(name, 8), result)
-        if result in counts:
-            counts[result] += 1
-        else:
-            counts[result] = 1
+        counts[result] = counts.get(result, 0) + 1
     ordered = {}
     for result in ["failed", "ok", "skipped"]:
         if result in counts:

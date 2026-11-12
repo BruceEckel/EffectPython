@@ -812,7 +812,8 @@ def except_clause(p):
 @pg.production('not_test : comparison')
 @pg.production('comparison : arith')
 @pg.production('arith : term')
-@pg.production('term : postfix')
+@pg.production('term : power')
+@pg.production('power : postfix')
 @pg.production('postfix : atom')
 def pass_through_expr(p):
     return p[0]
@@ -852,18 +853,30 @@ def compare(p):
     left = _expr(p[0])
     return ast.Compare(_text(p[1]), left, _expr(p[2]), left.lineno)
 
-@pg.production('term : MINUS postfix')
+@pg.production('term : MINUS power')
 def negate(p):
     """A unary minus folds into the literal it negates, and elsewhere
-    into 0 - x, so no node is added for it (plan 1.9)."""
-    operand = _expr(p[1])
-    if isinstance(operand, ast.IntLiteral):
-        return ast.IntLiteral(-operand.value, _line(p[0]))
-    return ast.BinOp('-', ast.IntLiteral(0, _line(p[0])), operand,
-                     _line(p[0]))
+    into 0 - x, so no node is added for it (plan 1.9). Its operand
+    is a power, so -2 ** 2 is 0 - (2 ** 2), as in Python."""
+    return _negated(p[0], _expr(p[1]))
 
+def _negated(minus, operand):
+    if isinstance(operand, ast.IntLiteral):
+        return ast.IntLiteral(-operand.value, _line(minus))
+    return ast.BinOp('-', ast.IntLiteral(0, _line(minus)), operand,
+                     _line(minus))
+
+@pg.production('power : postfix DOUBLESTAR MINUS power')
+def power_of_negative(p):
+    """2 ** -n parses, and the runtime refuses the exponent, which
+    would give a float (plan 1.21)."""
+    left = _expr(p[0])
+    return ast.BinOp('**', left, _negated(p[2], _expr(p[3])),
+                     left.lineno)
+
+@pg.production('power : postfix DOUBLESTAR power')
 @pg.production('arith : arith addop term')
-@pg.production('term : term mulop postfix')
+@pg.production('term : term mulop power')
 def binop(p):
     left = _expr(p[0])
     return ast.BinOp(_text(p[1]), left, _expr(p[2]), left.lineno)
@@ -882,6 +895,7 @@ def binop(p):
 @pg.production('augop : PLUSEQUALS')
 @pg.production('augop : MINUSEQUALS')
 @pg.production('augop : STAREQUALS')
+@pg.production('augop : DOUBLESTAREQUALS')
 @pg.production('augop : DOUBLESLASHEQUALS')
 @pg.production('augop : PERCENTEQUALS')
 def operator(p):

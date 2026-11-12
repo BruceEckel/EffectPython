@@ -80,7 +80,8 @@ And the annotations are required, not optional:
 every value has a type the checker knows, so the arithmetic here is `int`, a comparison and `small` are `bool`, and `repeat` builds a `str`.
 An f-string such as `f"{text} {word}"` builds a `str` from its fields, each an `int`, a `str`, or a `bool`, with no format specs;
 `"a" + str(n)` says the same thing the long way, and the two agree on every value.
-`times -= 1` is `times = times - 1`, and `+=`, `*=`, `//=`, and `%=` abbreviate the other operators the same way;
+`2 ** n` is integer power, with Python's precedence (`-2 ** 2` is `-4`); a negative exponent is a runtime error, since its result would be a `float`.
+`times -= 1` is `times = times - 1`, and `+=`, `*=`, `//=`, `%=`, and `**=` abbreviate the other operators the same way;
 on a list element or a dict value, `xs[i] += 1`, the target is evaluated once, as in Python.
 `and`, `or`, and `not` combine `bool` values as Python's do, with the same precedence and the same short circuit, and take `bool` operands alone:
 `if n:` on an `int` is a checker error, `if needs a bool, not int`, where Python would test the number for zero.
@@ -807,6 +808,7 @@ squared 3
 ```
 
 The list operations are the literal `[1, 2]` or `[]`, `len(xs)`, `xs[i]` with a negative index counting from the end, `xs[i] = v`, `xs.append(v)`, and `==` and `!=` element by element.
+`", ".join(words)` joins a `list[str]` into one `str`.
 `print(xs)` shows the list as Python does, so a list of strings prints as `['a', 'b']`.
 Lists are shared by reference, as Python's are:
 `collector.entries` is the same list `note` appended to, and a function that appends to a parameter appends to the caller's list.
@@ -885,8 +887,9 @@ True False True
 `{}` starts a dict of no value type yet, and the first store `d[k] = v` settles it, as the first `append` settles a `[]`.
 `d[k]` reads, `d[k] = v` stores, `k in d` and `k not in d` test for a key, `len(d)` counts, and `for k in d` walks the keys in the order they were stored;
 `in` also tests a list for an element.
-A key the dict lacks is a runtime error, `key 'b' not found`, so a program tests with `in` first,
-and a store that adds a key while a `for` walks the dict is the error Python raises for the same program, `dict changed size during iteration`.
+A key the dict lacks is a runtime error, `key 'b' not found`, so a program tests with `in` first or asks with `get`:
+`d.get(k, 0)` is the value, or `0` for a missing key, and `d.get(k)` is an optional, `None` for a missing key (the subsection on a value that may be absent has optionals).
+A store that adds a key while a `for` walks the dict is the error Python raises for the same program, `dict changed size during iteration`.
 A dict is shared by reference, as a list is: the clause above stores into `table` while the body is suspended, and the body's next read sees the key.
 A dict field's default is `{}`, fresh for each instance.
 A `break` in a handled body ends the loop around the `handle` statement, and a `break` in a clause abandons the suspended body before it ends the loop,

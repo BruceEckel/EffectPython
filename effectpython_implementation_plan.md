@@ -1553,7 +1553,7 @@ The messages are "'int' object has no attribute 'seconds'" for a read, from the 
 The parser's "an attribute read needs a name on the left of the dot" is gone.
 `runtime_field_expression.epy` reaches the runtime's error through a list of unknown type.
 
-### 1.21 `str.join()`, `dict.get()`, and `**` (designed 2026-11-12)
+### 1.21 `str.join()`, `dict.get()`, and `**` (designed and implemented 2026-11-12, open questions settled as recommended)
 
 The third port wrote a helper for each of three things Python has built in: `joined()` for `", ".join(blocked)`, `power_of_two()` for `2 ** n`, and an `if name in d: ... else: ...` for each `d.get(name, 0)`.
 
@@ -1597,6 +1597,16 @@ A negative exponent would give a `float`, which the dialect lacks, so the runtim
 3.  *Whether a negative literal exponent is refused by the checker.*
     *The design leaves it to the runtime, which must refuse a computed one anyway.*
 
+All three were settled as recommended on 2026-11-12.
+
+**As implemented (2026-11-12).**
+The checker's messages are "join() needs a str on the left of the dot, not list[str]", "argument 1 of join() must be list[str], not list[int]", "get() needs a dict on the left of the dot, not list[str]", "get() takes 1 to 2 arguments (0 given)", "the default of get() must be int, not str", "a str has no method 'upper'", "a dict has no method 'items'", and "unsupported operand types for **: str and int".
+The runtime's are the first and the third with `type_name()`, "join() needs a list of str, not int" for an argument that is no list, and CPython's "sequence item 1: expected str instance, int found".
+A `join()` argument of unknown type is refused, since the argument is a typed slot.
+A field of a double-quoted f-string takes a single-quoted literal, so `build_plan.epy` writes `f"... needs {', '.join(blocked)}"`; the same quote inside the field, which Python accepts from 3.12, is "f-string: expecting '}'", since the lexer reads an f-string up to the next quote of its kind.
+`build_plan.epy` is 110 lines, from 130: `joined()` and `power_of_two()` are gone, and three `if k in d: ... else: ...` statements are a `get()` each.
+`methods_and_power.epy` runs each form through the binary; `runtime_method_unknown.epy` and `runtime_negative_exponent.epy` reach the two runtime errors.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1605,13 +1615,14 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`, and from 2026-11-11 `None` and `is`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`, and from 2026-11-08 `{` and `}`, and from 2026-11-11 `|`, in a type alone). Milestone 19 adds `@` (2026-11-11). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`, and from 2026-11-11 `None` and `is`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`, and from 2026-11-08 `{` and `}`, and from 2026-11-11 `|`, in a type alone). Milestone 19 adds `@` (2026-11-11), and Milestone 21 `**` and `**=` (2026-11-12). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from <module> import <names>`, accepted and ignored whatever the module
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
     *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <int or str literal, or [] for a list field>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; Milestone 5, 2026-10-31)
     *   `@dataclass` on the line above `class <Name>:` with field declarations as a handler class has them, a default being an `int`, `str`, or `bool` literal, `[]`, or `{}`, giving a `DataDef` node; a method in the body, another decorator name, and a class with no base and no decorator are refused by name (1.19; Milestone 19, 2026-11-11)
     *   `<expr>.<attr>` where the expression is no name, a `FieldRead` node, and `<expr>.<attr> = <expr>` and `<expr>.<attr> op= <expr>`, a `FieldAssign` node with an empty or a given operator; a name on the left still gives `AttrRead` and `AttrAssign` (1.20; Milestone 20, 2026-11-12)
+    *   `**`, in a `power` layer between `term` and `postfix` that groups to the right and sits under a unary minus on its left, with `**=` among the augmented operators; and the method calls `<str>.join(<list>)` and `<dict>.get(<key>[, <default>])`, which need no grammar, since a method call was already an `OpCall` or a `MethodCall` (1.21; Milestone 21, 2026-11-12)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -1695,6 +1706,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   Narrowing through a test (1.18; Milestone 18, 2026-11-11): `facts(test, when)` lists what a test says about its names and `None` where it is true and where it is false, through `IsNone`, `Not`, and a `BoolOp` on the side where both operands are known; `narrow` applies a list, for the branches of an `if` (`check_if`), the body of a `while` (`check_loop_body`), and the right operand of a `BoolOp` (`type_of`), after which `widen_back` restores the names and marks one a perform point widened as `spoiled` for the statement.
         *   Data classes (1.19; Milestone 19, 2026-11-11): Pass 1 records each `DataDef` as a `HandlerInfo` with no effect and the kind "data class", in `Checker.records`, and `collect_field` serves both kinds of class, with `bool` a field type; `info_of` answers for a handler class or a data class where a constructor call, a field read, or a field store asks, and `check_handle` reads the handler classes alone; `require_type` holds each `list[T]`, `dict[str, T]`, and `T | None` written in a signature or a field to a scalar or a data class; `can_be_absent` accepts a class name, so `merged` gives `Task | None`; `comparable` refuses `==` on two lists of instances and `in` on one; and a field read on a name of unknown type is left to the runtime and noted.
         *   `FieldRead` and `FieldAssign` (1.20; Milestone 20, 2026-11-12): `check_field_read` types the target and reads the field from its class, leaves a target of unknown type to the runtime, and refuses any other type; `check_field_assign` types the value and then the target for `=`, needs an instance of a known class, and holds the value to the field as `AttrAssign` does, or the field and the value to the operator for an augmented store.
+        *   Methods and `**` (1.21; Milestone 21, 2026-11-12): `check_method` chooses by the method's name among `check_join` (a `str` target, a `list[str]` argument, a `str` result), `check_get` (a dict target, a `str` key, the value type with a default of that type, or its optional without one), and `check_append`, which also refuses any other method by the target's kind; a target of unknown type is noted for `join()` and `get()` and left to the runtime; and `**` joins the operators of `int`.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2419,7 +2431,10 @@ EffectPython/
         *   An augmented store evaluates its target once.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 21. **Milestone 21: `str.join()`, `dict.get()`, and `**` (1.21)**
-    *   *Designed 2026-11-12.*
+    *   *Designed and done 2026-11-12.* The three open questions of 1.21 are settled as recommended.
+    *   *Done 2026-11-12.*
+        `lexer.py` has the two tokens; `parser.py` has the `power` layer and `_negated`; `checker.py` has `check_method`, `check_join`, and `check_get`, and `**` in `OPERATORS`; `interpreter.py` has `call_method`, `str_join`, `dict_get`, and `power`.
+        `build_plan.epy` uses all three, with its recorded output unchanged.
     *   *Implementation (planned):* the lexer's two tokens and the `power` layer; the checker's method dispatch and `**` in `OPERATORS`; the interpreter's method dispatch and `binop`.
     *   *Acceptance test:*
         *   `build_plan.epy` loses `joined()` and `power_of_two()` and uses `get()` for its tallies, with its recorded output unchanged.

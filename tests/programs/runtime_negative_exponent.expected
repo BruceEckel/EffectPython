@@ -1,0 +1,2 @@
+exit 1
+error: a negative exponent needs a float, which the dialect lacks

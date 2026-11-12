@@ -55,6 +55,8 @@ RULES = [
     ('ARROW', r'->'),
     ('PLUSEQUALS', r'\+='),
     ('MINUSEQUALS', r'-='),
+    ('DOUBLESTAREQUALS', r'\*\*='),
+    ('DOUBLESTAR', r'\*\*'),
     ('STAREQUALS', r'\*='),
     ('DOUBLESLASHEQUALS', r'//='),
     ('PERCENTEQUALS', r'%='),

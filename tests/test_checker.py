@@ -2422,6 +2422,192 @@ def test_a_field_through_an_expression_misuse_is_rejected(body, msg):
         check_source(DATA + body)
     assert info.value.msg == msg
 
+# --- join(), get(), and ** (Milestone 21) ------------------------------------
+
+@pytest.mark.parametrize('body', [
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    ws = ["x", "y"]\n'
+    '    d = {"a": 1}\n'
+    '    sep = ", "\n'
+    '    print(name(", ".join(ws)), name(sep.join([])))\n'
+    '    return 0\n',
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    xs = []\n'
+    '    print(name("".join(xs)))\n'
+    '    xs.append("s")\n'
+    '    return 0\n',
+    'def f() -> int:\n'
+    '    ws = ["x", "y"]\n'
+    '    d = {"a": 1}\n'
+    '    return take(d.get("a", 0)) + take(d.get("b", 2))\n',
+    'def f() -> int:\n'
+    '    ws = ["x", "y"]\n'
+    '    d = {"a": 1}\n'
+    '    n = d.get("a")\n'
+    '    if n is None:\n'
+    '        return 0\n'
+    '    return take(n)\n',
+    'def f() -> int:\n'
+    '    d = {"a": Task("a", [])}\n'
+    '    t = d.get("a")\n'
+    '    if t is None:\n'
+    '        return 0\n'
+    '    return take(t.seconds)\n',
+    'def f() -> int:\n'
+    '    d = {}\n'
+    '    for k in ["a", "a"]:\n'
+    '        d[k] = d.get(k, 0) + 1\n'
+    '    return take(d["a"])\n',
+    'def f() -> int:\n'
+    '    n = 3\n'
+    '    n **= 2\n'
+    '    return take(2 ** n) + take(-n ** 2)\n',
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    if 1 == 1:\n'
+    '        v = "s"\n'
+    '    else:\n'
+    '        v = {"a": 1}\n'
+    '    print(v.get("a"), v.get("a", 0))\n'
+    '    return len(name(v.join(["a"])))\n',
+], ids=['join', 'join-empty-name', 'get-default', 'get-optional',
+        'get-instance', 'get-on-empty', 'power', 'unknown-target'])
+def test_a_method_or_a_power_is_accepted(body):
+    check_source(DATA + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(ws.join(ws))\n'
+     '    return 0\n',
+     'line 21: join() needs a str on the left of the dot, not '
+     'list[str]'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(", ".join([1, 2]))\n'
+     '    return 0\n',
+     'line 21: argument 1 of join() must be list[str], not '
+     'list[int]'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(", ".join("ab"))\n'
+     '    return 0\n',
+     'line 21: argument 1 of join() must be list[str], not str'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(", ".join(ws, ws))\n'
+     '    return 0\n',
+     'line 21: join() takes 1 arguments (2 given)'),
+    ('def f() -> int:\n'
+     '    if 1 == 1:\n'
+     '        v = "s"\n'
+     '    else:\n'
+     '        v = {"a": 1}\n'
+     '    print(", ".join(v))\n'
+     '    return 0\n',
+     "line 23: argument 1 of join() must be list[str], but 'v' "
+     'has no known type'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(ws.get("a"))\n'
+     '    return 0\n',
+     'line 21: get() needs a dict on the left of the dot, not '
+     'list[str]'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(d.get(1))\n'
+     '    return 0\n',
+     'line 21: a dict key must be str, not int'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(d.get("a", "x"))\n'
+     '    return 0\n',
+     'line 21: the default of get() must be int, not str'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(d.get("a", None))\n'
+     '    return 0\n',
+     'line 21: the default of get() must be int, not None'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(d.get())\n'
+     '    return 0\n',
+     'line 21: get() takes 1 to 2 arguments (0 given)'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    return take(d.get("a"))\n',
+     'line 21: argument 1 of take() must be int, not int | None'),
+    ('def f() -> int:\n'
+     '    if 1 == 1:\n'
+     '        v = "s"\n'
+     '    else:\n'
+     '        v = {"a": 1}\n'
+     '    return take(v.get("a", 0))\n',
+     'line 23: argument 1 of take() must be int, but the value '
+     'has no known type'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print("a".upper())\n'
+     '    return 0\n',
+     "line 21: a str has no method 'upper'"),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(d.items())\n'
+     '    return 0\n',
+     "line 21: a dict has no method 'items'"),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(ws.pop())\n'
+     '    return 0\n',
+     "line 21: a list has no method 'pop'"),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    n = 1\n'
+     '    print(n.pop())\n'
+     '    return 0\n',
+     "line 22: 'n' is not a list"),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print("a" ** 2)\n'
+     '    return 0\n',
+     'line 21: unsupported operand types for **: str and int'),
+    ('def f() -> int:\n'
+     '    ws = ["x", "y"]\n'
+     '    d = {"a": 1}\n'
+     '    print(2 ** "a")\n'
+     '    return 0\n',
+     'line 21: unsupported operand types for **: int and str'),
+], ids=['join-on-list', 'join-ints', 'join-str', 'join-arity',
+        'join-unknown-argument', 'get-on-list', 'get-key',
+        'get-default-type', 'get-default-none', 'get-arity',
+        'get-optional-slot', 'get-unknown-slot', 'str-method',
+        'dict-method', 'list-method', 'int-method', 'power-of-str',
+        'power-to-str'])
+def test_a_method_or_a_power_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(DATA + body)
+    assert info.value.msg == msg
+
 # --- dict[str, T] and in (Milestone 12) --------------------------------------
 
 TOTAL = ('def total(d: dict[str, int]) -> int:\n    n = 0\n'

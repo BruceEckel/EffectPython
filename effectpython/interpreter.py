@@ -220,7 +220,9 @@ two instances met by the == of two lists
 (scalars_equal; runtime_instance_compare.epy), a field read on a
 value that is no instance (the AttrRead branch of eval_expr;
 runtime_field_unknown.epy; and field_owner for a FieldRead;
-runtime_field_expression.epy), a subscript, append, for, or in target
+runtime_field_expression.epy), a method on a value of the wrong kind (call_method;
+runtime_method_unknown.epy), a negative exponent (power;
+runtime_negative_exponent.epy), a subscript, append, for, or in target
 (runtime_subscript_unknown.epy, runtime_append_unknown_target.epy,
 and runtime_for_unknown.epy), a len() or str() argument or an
 f-string field (runtime_len_unknown.epy, runtime_str_unknown.epy,
@@ -990,7 +992,7 @@ class Interpreter(object):
                 args_w.append(self.eval_expr(arg, env))
             w_target = env.find(expr.effect)
             if w_target is not None:
-                return list_method(w_target, expr.op, args_w)
+                return call_method(w_target, expr.op, args_w)
             if expr.effect + "." + expr.op not in self.operations:
                 raise EffectPythonRuntimeError(
                     "name '%s' is not defined" % expr.effect)
@@ -1000,7 +1002,7 @@ class Interpreter(object):
             args_w = []
             for arg in expr.args:
                 args_w.append(self.eval_expr(arg, env))
-            return list_method(w_target, expr.method, args_w)
+            return call_method(w_target, expr.method, args_w)
         elif isinstance(expr, ast.ListLiteral):
             items_w = []
             for element in expr.elements:
@@ -1126,6 +1128,8 @@ class Interpreter(object):
                 if b == 0:
                     raise EffectPythonRuntimeError("integer modulo by zero")
                 return W_Int(a % b)
+            elif op == "**":
+                return W_Int(power(a, b))
         elif isinstance(w_left, W_Str) and isinstance(w_right, W_Str):
             if op == "+":
                 return W_Str(w_left.val + w_right.val)
@@ -1244,6 +1248,73 @@ def unpacked(w_value, count):
             "not enough values to unpack (expected %d, got %d)" %
             (count, given))
     return w_value.items_w
+
+def power(base, exponent):
+    """base ** exponent by squaring. A negative exponent would give
+    a float (plan 1.21)."""
+    if exponent < 0:
+        raise EffectPythonRuntimeError(
+            "a negative exponent needs a float, which the dialect lacks")
+    result = 1
+    while exponent > 0:
+        if exponent & 1:
+            result = result * base
+        base = base * base
+        exponent >>= 1
+    return result
+
+def call_method(w_target, method, args_w):
+    """s.join(xs), d.get(k) or d.get(k, default), and xs.append(v),
+    chosen by the method's name (plan 1.21)."""
+    if method == "join":
+        return str_join(w_target, args_w)
+    if method == "get":
+        return dict_get(w_target, args_w)
+    if method != "append":
+        if isinstance(w_target, W_Str):
+            raise EffectPythonRuntimeError(
+                "a str has no method '%s'" % method)
+        if isinstance(w_target, W_Dict):
+            raise EffectPythonRuntimeError(
+                "a dict has no method '%s'" % method)
+    return list_method(w_target, method, args_w)
+
+def str_join(w_target, args_w):
+    if not isinstance(w_target, W_Str):
+        raise EffectPythonRuntimeError(
+            "join() needs a str on the left of the dot, not %s" %
+            type_name(w_target))
+    if len(args_w) != 1:
+        raise EffectPythonRuntimeError(
+            "join() takes 1 arguments (%d given)" % len(args_w))
+    w_words = args_w[0]
+    if not isinstance(w_words, W_List):
+        raise EffectPythonRuntimeError(
+            "join() needs a list of str, not %s" % type_name(w_words))
+    words = []
+    for i in range(len(w_words.items_w)):
+        w_word = w_words.items_w[i]
+        if not isinstance(w_word, W_Str):
+            raise EffectPythonRuntimeError(
+                "sequence item %d: expected str instance, %s found" %
+                (i, type_name(w_word)))
+        words.append(w_word.val)
+    return W_Str(w_target.val.join(words))
+
+def dict_get(w_target, args_w):
+    if not isinstance(w_target, W_Dict):
+        raise EffectPythonRuntimeError(
+            "get() needs a dict on the left of the dot, not %s" %
+            type_name(w_target))
+    if len(args_w) < 1 or len(args_w) > 2:
+        raise EffectPythonRuntimeError(
+            "get() takes 1 to 2 arguments (%d given)" % len(args_w))
+    key = dict_key(args_w[0])
+    if key in w_target.items_w:
+        return w_target.items_w[key]
+    if len(args_w) == 2:
+        return args_w[1]
+    return w_None
 
 def list_method(w_target, method, args_w):
     """xs.append(v), the one method a list has."""

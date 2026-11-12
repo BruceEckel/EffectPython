@@ -1,0 +1,8 @@
+# Runtime-only: the checker types ** as int and int and does not
+# look at the value; power() refuses an exponent below zero, which
+# would give a float.
+
+def main() -> int:
+    n = 1
+    print(2 ** -n)
+    return 0

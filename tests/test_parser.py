@@ -1317,3 +1317,40 @@ def test_field_shapes(source, expected):
     module = parse('def main() -> int:\n    %s\n' % source)
     assert shape(module.functions[0].body[0]) == expected
 
+# --- join(), get(), and ** (Milestone 21) ------------------------------------
+
+TWO = ('IntLiteral', 2)
+THREE = ('IntLiteral', 3)
+
+@pytest.mark.parametrize('source, expected', [
+    ('2 ** 3', ('BinOp', '**', TWO, THREE)),
+    ('2 ** 3 ** 2', ('BinOp', '**', TWO, ('BinOp', '**', THREE, TWO))),
+    ('-2 ** 3',
+     ('BinOp', '-', ('IntLiteral', 0), ('BinOp', '**', TWO, THREE))),
+    ('2 ** -3', ('BinOp', '**', TWO, ('IntLiteral', -3))),
+    ('2 * 3 ** 2',
+     ('BinOp', '*', TWO, ('BinOp', '**', THREE, TWO))),
+    ('2 ** 3 * 2',
+     ('BinOp', '*', ('BinOp', '**', TWO, THREE), TWO)),
+    ('-2', ('IntLiteral', -2)),
+], ids=['power', 'right-to-left', 'minus-on-the-left',
+        'minus-on-the-right', 'under-times', 'before-times', 'literal'])
+def test_power_shapes(source, expected):
+    module = parse('def main() -> int:\n    return %s\n' % source)
+    assert shape(module.functions[0].body[0]) == ('Return', expected)
+
+def test_an_augmented_power_is_the_assignment_it_means():
+    module = parse('def main() -> int:\n    x **= 2\n')
+    assert shape(module.functions[0].body[0]) == (
+        'Assign', 'x', ('BinOp', '**', ('Name', 'x'), TWO))
+
+@pytest.mark.parametrize('source, expected', [
+    ('", ".join(ws)',
+     ('MethodCall', ('StrLiteral', ', '), 'join', [('Name', 'ws')])),
+    ('d.get("a", 0)',
+     ('OpCall', 'd', 'get', [('StrLiteral', 'a'), ('IntLiteral', 0)])),
+], ids=['join-on-a-literal', 'get-on-a-name'])
+def test_method_shapes(source, expected):
+    module = parse('def main() -> int:\n    return %s\n' % source)
+    assert shape(module.functions[0].body[0]) == ('Return', expected)
+

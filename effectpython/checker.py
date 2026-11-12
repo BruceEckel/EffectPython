@@ -143,6 +143,12 @@ expression that is no name, ts[0].name, is a FieldRead or a
 FieldAssign with the same rules (check_field_read,
 check_field_assign; plan 1.20).
 
+A method call is chosen by the method's name (check_method, plan
+1.21): s.join(xs) needs a str and a list[str] and is a str;
+d.get(k, default) has the dict's value type and d.get(k) its
+optional; xs.append(v) is the list's. ** takes two ints and gives
+one; the runtime refuses a negative exponent.
+
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
 return type is not None must return or raise an exception on every
@@ -259,7 +265,8 @@ LIST = "list"
 DICT = "dict"
 SCALARS = ["int", "str", "bool"]
 OPERATORS = {
-    "int": ["+", "-", "*", "//", "%", "<", "<=", ">", ">=", "==", "!="],
+    "int": ["+", "-", "*", "//", "%", "**", "<", "<=", ">", ">=", "==",
+            "!="],
     "str": ["+", "==", "!="],
     "bool": ["==", "!="],
     LIST: ["==", "!="],
@@ -1446,11 +1453,86 @@ class Checker(object):
                 "not %s" % expected)
         return "bool"
 
+    def check_method(self, target, method, args, lineno, scope, effects):
+        """A method call, chosen by the method's name: s.join(xs),
+        d.get(k) or d.get(k, default), and xs.append(v) (plan 1.21).
+        Any other name is refused by check_append, in the words of
+        the target's kind."""
+        if method == "join":
+            return self.check_join(target, args, lineno, scope, effects)
+        if method == "get":
+            return self.check_get(target, args, lineno, scope, effects)
+        return self.check_append(target, method, args, lineno, scope,
+                                 effects)
+
+    def check_join(self, target, args, lineno, scope, effects):
+        """s.join(xs): a str on the left, a list[str] argument, and
+        a str result. A target of unknown type is left to the
+        runtime and noted."""
+        held = self.type_of(target, scope, effects)
+        if held == UNKNOWN:
+            self._note_unknown(BUILTIN, lineno)
+        elif held != "str":
+            raise InvalidProgram(
+                lineno, "join() needs a str on the left of the dot, "
+                "not %s" % held)
+        self.check_args(["words"], ["list[str]"], args, "join()", lineno,
+                        scope, effects)
+        return "str"
+
+    def check_get(self, target, args, lineno, scope, effects):
+        """d.get(k, default) has the dict's value type, which the
+        default must have, and d.get(k) its optional, since a missing
+        key gives None. The result has no known type where the
+        dict's value type has none: a target of unknown type, which
+        is noted, or a {} nothing has refined."""
+        held = self.type_of(target, scope, effects)
+        if held == UNKNOWN:
+            self._note_unknown(BUILTIN, lineno)
+        elif not is_dict(held):
+            raise InvalidProgram(
+                lineno, "get() needs a dict on the left of the dot, "
+                "not %s" % held)
+        if len(args) < 1 or len(args) > 2:
+            raise InvalidProgram(
+                lineno, "get() takes 1 to 2 arguments (%d given)" %
+                len(args))
+        key = self.type_of(args[0], scope, effects)
+        if not matches(key, "str"):
+            raise InvalidProgram(
+                lineno, "a dict key must be str, not %s" % key)
+        value = UNKNOWN
+        if is_dict(held):
+            value = value_of(held)
+        if len(args) == 1:
+            if value == UNKNOWN:
+                return UNKNOWN
+            return value + OPTIONAL
+        actual = self.type_of(args[1], scope, effects)
+        if value == UNKNOWN:
+            return UNKNOWN
+        self.require_known(args[1], actual, value,
+                           "the default of get() must be %s" % value,
+                           lineno)
+        if not matches(actual, value):
+            raise InvalidProgram(
+                lineno, "the default of get() must be %s, not %s" %
+                (value, actual))
+        return value
+
     def check_append(self, target, method, args, lineno, scope, effects):
         """xs.append(v) on a list: the one method a list has. A name
         holding [] takes the element type of the first value appended,
-        so the next append must match it."""
+        so the next append must match it. A method that no kind has
+        is refused here, by the target's kind where it is a str or a
+        dict."""
         type_name = self.type_of(target, scope, effects)
+        if method != "append" and type_name == "str":
+            raise InvalidProgram(
+                lineno, "a str has no method '%s'" % method)
+        if method != "append" and is_dict(type_name):
+            raise InvalidProgram(
+                lineno, "a dict has no method '%s'" % method)
         if type_name != UNKNOWN and not is_list(type_name):
             raise InvalidProgram(
                 lineno, "%s is not a list" % describe(target, type_name))
@@ -1873,7 +1955,7 @@ class Checker(object):
             return self.check_index(expr.target, expr.index, expr.lineno,
                                     scope, effects)
         elif isinstance(expr, ast.MethodCall):
-            return self.check_append(expr.target, expr.method, expr.args,
+            return self.check_method(expr.target, expr.method, expr.args,
                                      expr.lineno, scope, effects)
         elif isinstance(expr, ast.BinOp):
             left = self.type_of(expr.left, scope, effects)
@@ -1914,7 +1996,7 @@ class Checker(object):
             return op.return_type
         elif isinstance(expr, ast.OpCall):
             if expr.effect in scope.types:
-                return self.check_append(
+                return self.check_method(
                     ast.Name(expr.effect, expr.lineno), expr.op, expr.args,
                     expr.lineno, scope, effects)
             raise InvalidProgram(

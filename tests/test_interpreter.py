@@ -1059,3 +1059,47 @@ def test_a_field_through_an_expression_runtime_error(statement, msg):
                       + '\n    return 0\n', POINT)
     assert info.value.msg == msg
 
+# --- join(), get(), and ** (Milestone 21) ------------------------------------
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print(", ".join(["a", "b"]), "".join([]) == "")', ['a, b True']),
+    ('sep = "-"\n    print(sep.join(["solo"]))', ['solo']),
+    ('d = {"a": 1}\n    print(d.get("a"), d.get("b"), d.get("b", 7))',
+     ['1 None 7']),
+    ('d = {"a": 1}\n    print(d.get("a", one()), d)',
+     ['one', "1 {'a': 1}"]),
+    ('print(2 ** 10, 2 ** 0, 0 ** 0, -2 ** 2, 2 ** 3 ** 2)',
+     ['1024 1 1 -4 512']),
+    ('x = 3\n    x **= 2\n    xs = [2]\n    xs[0] **= 3\n'
+     '    print(x, xs)', ['9 [8]']),
+], ids=['join', 'join-name', 'get', 'get-evaluates-default', 'power',
+        'augmented-power'])
+def test_methods_and_power(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n',
+        'def one() -> int:\n    print("one")\n    return 1\n')
+    assert (exit_code, lines) == (0, printed)
+
+@pytest.mark.parametrize('statement, msg', [
+    ('print(v.join(["a"]))',
+     'join() needs a str on the left of the dot, not int'),
+    ('print(", ".join(v))', 'join() needs a list of str, not int'),
+    ('print(", ".join(["a", v]))',
+     'sequence item 1: expected str instance, int found'),
+    ('print(v.get("a"))',
+     'get() needs a dict on the left of the dot, not int'),
+    ('d = {"a": 1}\n    print(d.get(v))',
+     'a dict key must be str, not int'),
+    ('s = "a"\n    if v == 1:\n        s = "b"\n    else:\n'
+     '        s = 2\n    print(s.upper())', "a str has no method 'upper'"),
+    ('print(2 ** (0 - v))',
+     'a negative exponent needs a float, which the dialect lacks'),
+], ids=['join-on-int', 'join-of-int', 'join-item', 'get-on-int',
+        'get-key', 'str-method', 'negative-exponent'])
+def test_a_method_or_power_runtime_error(statement, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    if 1 == 1:\n        v = 1\n    else:\n'
+                      '        v = "s"\n    ' + statement
+                      + '\n    return 0\n')
+    assert info.value.msg == msg
+

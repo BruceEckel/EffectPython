@@ -1,0 +1,23 @@
+# str.join(), dict.get() with and without a default, and ** with
+# Python's precedence (plan 1.21).
+
+def tally(words: list[str]) -> dict[str, int]:
+    counts = {}
+    for word in words:
+        counts[word] = counts.get(word, 0) + 1
+    return counts
+
+def main() -> int / []:
+    words = ["b", "a", "b"]
+    sep = ", "
+    print(sep.join(words), "-".join(["solo"]), "".join([]) == "")
+    counts = tally(words)
+    print(counts.get("b", 0), counts.get("z", 0), counts.get("z"))
+    n = counts.get("a")
+    if n is not None:
+        print(n + 1)
+    print(-2 ** 2, 2 ** 3 ** 2, 2 ** 0, 3 * 2 ** 2, 2 ** 2 * 3)
+    x = 3
+    x **= 2
+    print(x, -x ** 2)
+    return 0
