@@ -1607,6 +1607,75 @@ A field of a double-quoted f-string takes a single-quoted literal, so `build_pla
 `build_plan.epy` is 110 lines, from 130: `joined()` and `power_of_two()` are gone, and three `if k in d: ... else: ...` statements are a `get()` each.
 `methods_and_power.epy` runs each form through the binary; `runtime_method_unknown.epy` and `runtime_negative_exponent.epy` reach the two runtime errors.
 
+### 1.22 `for k, v in d.items()` (designed 2026-11-12)
+
+The Python version of the build program ends with `for name, result in status.items():`, and the port walks the keys and reads `status[name]` on the next line.
+1.21's second open question left `items()` out because it needs a tuple as a loop target.
+
+**Today (probed against the binary, 2026-11-12).**
+`for k, v in d.items():` is "unexpected ','" at the comma, as `for a, b in [1, 2]:` is; `for k in d.items():` and `print(d.items())` are "a dict has no method 'items'", from `check_append`.
+In CPython a store that adds a key during the walk is "dictionary changed size during iteration".
+
+**Syntax.**
+`for <name>, <name> in <expr>.items():` is a `ForItems` node holding the two names, the expression on the left of the dot, and the suite.
+The parser reads `for <name>, <name> in <expr>:` and its action refuses an iterable that is no call of `items` with no arguments, and two names that are the same.
+There is no value for `d.items()` to be elsewhere, since a list holds no tuple (1.17), so `items()` outside this form stays refused, with a message that names the form.
+This is how `range()` is treated: a `for` over it is folded into `ForRange`, and the call has no meaning anywhere else (1.9).
+
+**Checker.**
+The target is a dict type: the first name is `str` and the second the dict's value type, or unknown for a `{}` nothing has refined.
+A target of unknown type gives `str` and unknown, and the runtime requires the dict; any other type is refused.
+Each name is bound afresh at the start of every pass, as the one name of a `for` is, so `check_loop_body` takes a second name and type beside the first, and afterwards each name has its type merged with the type it had before, by `check_loop`'s rule.
+
+**Runtime.**
+`exec_for_items` evaluates the target once, requires a `W_Dict`, and walks the keys in insertion order, binding the key and the value the dict holds for it at that moment; a store that changes the size is "dict changed size during iteration", as in `exec_for_dict`.
+A store to an existing key during the walk is allowed, as in Python.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether `for a, b in <list of tuples>:` is accepted.*
+    *The design takes `items()` alone: a list cannot hold a tuple, so there is nothing else to unpack.*
+2.  *Whether `d.keys()` and `d.values()` come with it.*
+    *The design leaves them out: `for k in d` is the first, and the second has no program yet.*
+
+### 1.23 Keyword arguments (designed 2026-11-12)
+
+The Python version of the build program writes `Task("fetch", [], 3, failures=1)`; the port writes `Task("fetch", [], 3, 1)`, and a reader has to count fields to know what the `1` is.
+1.5 and 1.19 both left keyword arguments to a milestone that gives them to every call.
+
+**Today (probed against the binary, 2026-11-12).**
+`Task("a", failures=1)` and `area(2, height=3)` are "unexpected '='" at the equals sign.
+CPython accepts `area(height=3, width=2)` and `Task("a", failures=1)`, which leaves `seconds` at its default; `area(2, width=3)` is "area() got multiple values for argument 'width'", `area(2, depth=3)` is "area() got an unexpected keyword argument 'depth'", `area(2, height=3, height=4)` is the syntax error "keyword argument repeated: height", and `area(width=2, 3)` the syntax error "positional argument follows keyword argument".
+
+**Syntax.**
+A call by name, `<name>(...)`, may end its arguments with `<name> = <expr>` pairs.
+Such a call is a `KeywordCall` node: the function's name, every argument expression in the order written, and the keywords, which name the last of them.
+A call without keywords stays a `Call`, so nothing that reads one changes.
+The parser refuses a repeated keyword and a positional argument after a keyword in CPython's words.
+`perform(...)`, an operation's arguments, a method call, and the arguments of `handle(...)` take no keywords (open question 1).
+
+**Meaning.**
+A keyword names a parameter of a function or a field of a handler class or a data class.
+The arguments are evaluated in the order written, as Python evaluates them, and then each goes to its parameter: the positional ones to the first parameters, each keyword to the one it names.
+A keyword that names no parameter, or one a positional argument already filled, is refused in CPython's words.
+A function has no defaults, so every parameter must be filled; a class may leave out any field with a default, not only the trailing ones, so `Task("a", failures=1)` is legal where the positional form has to write the `0` for `seconds`.
+`print()`, `len()`, `str()`, `range()`, and an exception class take no keywords.
+
+**Checker.**
+`check_keyword_call` finds each argument's parameter, types the arguments in the order written against the types of their parameters, as `check_args` does for a positional call, and then asks that nothing required is missing.
+The callee's row and the perform point are those of a `Call`.
+
+**Runtime.**
+The interpreter evaluates the arguments in order and arranges the values by the same rule, with a hole for a field left out, which `HandlerClass` fills from the default.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether operations, methods, and `handle(...)` arguments take keywords.*
+    `perform(Log.note(text="x"))` is legal Python.
+    *The design stops at calls by name: an operation's payload is positional in the runtime's `W_EffectPayload` and in a clause's `eff.<name>` lookup, and no program has asked.*
+2.  *Whether a function parameter may have a default.*
+    *The design leaves defaults to fields, where they are today.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2441,4 +2510,24 @@ EffectPython/
         *   Accept `", ".join(ws)`, `sep.join([])`, `d.get("a", 0)` as an `int`, `d.get("a")` narrowed by `is None`, `2 ** n`, and `x **= 2`.
         *   Reject `join()` on a list and of a `list[int]`, `get()` on a list, with an `int` key, and with a default of the wrong type, `d.get("a")` passed to an `int` slot, `"a" ** 2`, and a method no kind has.
         *   `-2 ** 2` is `-4`, `2 ** 3 ** 2` is `512`, and `2 ** -1` is a runtime error.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+22. **Milestone 22: `for k, v in d.items()` (1.22)**
+    *   *Designed 2026-11-12.*
+    *   *Implementation (planned):* the parser's second `for` production and `ForItems`; `check_loop_body` with a second name; `exec_for_items`.
+        The change is to a loop's fixpoint, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   `build_plan.epy` walks `status.items()` in its report, with its recorded output unchanged.
+        *   Accept the loop over a `dict[str, int]` with the value passed to an `int` slot and the key to a `str` slot, over a dict of instances, and over a field.
+        *   Reject `items()` on a list, `for k, v in d:`, `for k, k in d.items():`, `d.items()` outside a `for`, and the value passed to a slot of another type.
+        *   A store that adds a key during the walk is a runtime error; a store to an existing key is not.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+23. **Milestone 23: keyword arguments (1.23)**
+    *   *Designed 2026-11-12.*
+    *   *Implementation (planned):* the parser's keyword list and `KeywordCall`; `check_keyword_call`; the interpreter's arrangement and `HandlerClass`'s holes.
+    *   *Acceptance test:*
+        *   `build_plan.epy` writes `failures=1` in its three constructor calls that set it, with its recorded output unchanged.
+        *   Accept `area(height=3, width=2)`, `area(2, height=3)`, `Task("a", failures=1)` with a default field skipped, and a keyword argument that performs.
+        *   Reject an unknown keyword, a keyword for a parameter a positional argument filled, a missing parameter, a missing field without a default, a keyword value of the wrong type, and a keyword on `print()` and on an exception class.
+        *   A repeated keyword, a positional argument after a keyword, and a keyword in `perform(...)` and in a method call are syntax errors.
+        *   The arguments are evaluated in the order written.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
