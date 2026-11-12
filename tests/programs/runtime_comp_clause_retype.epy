@@ -1,0 +1,21 @@
+# Runtime-only: the clause gives n a str while the comprehension is
+# suspended at its first perform, so the second item reads a str where
+# the first read an int. The element is checked again from the types a
+# pass left, as a loop body is, so the checker sees n with two types
+# and leaves the + to the runtime.
+
+from effectpython import Effect, perform, handle
+
+class Num(Effect):
+    def get() -> int: ...
+
+def main() -> int / []:
+    n = 0
+    try:
+        with handle(Num):
+            ys = [n + perform(Num.get()) for i in range(3)]
+            print(ys)
+    except Num.get as eff:
+        n = "s"
+        eff.resume(1)
+    return 0

@@ -152,7 +152,10 @@ binds a str and the dict's value type (check_items_loop, plan 1.22).
 A call by name may end in keyword arguments (check_keyword_call,
 plan 1.23): each argument is typed in the order written against the
 parameter or field it goes to, and a class may leave out any field
-that has a default.
+that has a default. A list comprehension is list[T] of its element
+expression, with its name bound as a for binds one and put back
+afterwards; its condition and element are checked to a fixpoint, as
+a loop body is (check_list_comp, plan 1.25).
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -942,18 +945,8 @@ class Checker(object):
             self.require_loop(stmt, "'continue' not properly in loop")
             absorb(self.loop_exits[-1], scope.types)
         elif isinstance(stmt, ast.For):
-            iterable = self.type_of(stmt.iterable, scope, effects)
-            if iterable == UNKNOWN or iterable == LIST:
-                element = UNKNOWN
-            elif is_list(iterable):
-                element = element_of(iterable)
-            elif is_dict(iterable):
-                element = "str"
-            else:
-                raise InvalidProgram(
-                    stmt.lineno,
-                    "for needs a list, a dict, or range(), not %s" %
-                    iterable)
+            element = self.element_for(
+                self.type_of(stmt.iterable, scope, effects), stmt.lineno)
             self.check_loop(stmt.name, element, stmt.body, scope, effects)
         elif isinstance(stmt, ast.ForItems):
             self.check_items_loop(stmt, scope, effects)
@@ -1175,6 +1168,86 @@ class Checker(object):
         self.check_loop_body(None, body, scope, effects, name, element)
         if old_type is not None:
             scope.types[name] = merged(old_type, scope.types[name])
+
+    def element_for(self, iterable, lineno):
+        """The type a for statement or a comprehension binds its
+        name to over an iterable of this type: a list's element type,
+        str for a dict's keys, and unknown where the checker cannot
+        see."""
+        if iterable == UNKNOWN or iterable == LIST:
+            return UNKNOWN
+        if is_list(iterable):
+            return element_of(iterable)
+        if is_dict(iterable):
+            return "str"
+        raise InvalidProgram(
+            lineno, "for needs a list, a dict, or range(), not %s" %
+            iterable)
+
+    def check_list_comp(self, expr, scope, effects):
+        """[element for name in iterable if condition] (plan 1.25).
+        The iterable is typed once, as it is evaluated once. The
+        condition and the element run once per item, so they are
+        checked as a loop body is: from the types before, and again
+        from those merged with what a pass left, until nothing
+        changes. An expression assigns no name, but a perform point,
+        a [] handed to a typed slot, and an append to a [] each
+        retype one. The name is the comprehension's own: before each
+        merge it gets back its type, its place among the unbound
+        names, and its clause binding, set here without set_type so
+        that it does not count as a name a clause wrote. What the
+        condition says about a name and None narrows the element
+        (plan 1.18)."""
+        name = expr.name
+        iterable = expr.iterable
+        if isinstance(iterable, ast.Call) and iterable.func == "range":
+            self.check_range(iterable.args, expr.lineno, scope, effects)
+            element = "int"
+        else:
+            element = self.element_for(
+                self.type_of(iterable, scope, effects), expr.lineno)
+        had_type = name in scope.types
+        old_type = scope.types.get(name, UNKNOWN)
+        was_unbound = name in scope.unbound
+        old_binding = scope.bindings.get(name, None)
+        before = scope.types.copy()
+        while True:
+            mark = len(self.unknowns)
+            unbound = scope.unbound.copy()
+            scope.types[name] = element
+            if was_unbound:
+                del scope.unbound[name]
+            if old_binding is not None:
+                del scope.bindings[name]
+            narrowing = Narrowing()
+            if expr.condition is not None:
+                self.require_bool(
+                    self.type_of(expr.condition, scope, effects), "if",
+                    expr.lineno)
+                narrowing = self.narrow(facts(expr.condition, True),
+                                        scope, self.spoiled)
+            actual = self.type_of(expr.element, scope, effects)
+            self.widen_back(narrowing, scope)
+            self.require_scalar(actual, "list elements", expr.lineno)
+            if had_type:
+                scope.types[name] = old_type
+            else:
+                del scope.types[name]
+            if was_unbound:
+                scope.unbound[name] = True
+            if old_binding is not None:
+                scope.bindings[name] = old_binding
+            after = merge_types(before, scope.types)
+            if (same_types(after, before)
+                    and same_names(scope.unbound, unbound)):
+                break
+            self._drop_unknowns(mark)
+            before = after
+            scope.types = after.copy()
+        scope.types = after
+        if actual == UNKNOWN:
+            return UNKNOWN
+        return "list[%s]" % actual
 
     def check_items_loop(self, stmt, scope, effects):
         """for k, v in d.items() (plan 1.22): the key is str and the
@@ -1992,6 +2065,8 @@ class Checker(object):
             if element == UNKNOWN:
                 return LIST
             return "list[%s]" % element
+        elif isinstance(expr, ast.ListComp):
+            return self.check_list_comp(expr, scope, effects)
         elif isinstance(expr, ast.DictLiteral):
             return self.check_dict_literal(expr, scope, effects)
         elif isinstance(expr, ast.FString):

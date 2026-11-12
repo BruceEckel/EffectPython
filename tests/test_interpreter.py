@@ -1206,3 +1206,57 @@ def test_a_format_spec_runtime_error(value, spec, msg):
                       '    return 0\n' % (value, spec))
     assert info.value.msg == msg
 
+# --- List comprehensions (Milestone 25) --------------------------------------
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print([x * x for x in xs], [x for x in xs if x > 1])',
+     ['[1, 4, 9] [2, 3]']),
+    ('print([i for i in range(3)], [i for i in range(2, 4)])',
+     ['[0, 1, 2] [2, 3]']),
+    ('d = {"a": 1, "b": 0}\n    print([k for k in d if d[k] > 0])',
+     ["['a']"]),
+    ('x = "kept"\n    ys = [x for x in xs]\n    print(x, ys)',
+     ['kept [1, 2, 3]']),
+    ('print([x for x in xs if x > 9], [x for x in []])', ['[] []']),
+    ('print([say(x) for x in xs if say(x) > 1])',
+     ['say 1', 'say 2', 'say 2', 'say 3', 'say 3', '[2, 3]']),
+    ('ys = [1, 2]\n'
+     '    print([y for y in ys if y > 1 or len(ys) > 3], ys)',
+     ['[2] [1, 2]']),
+    ('zs = [x for x in xs]\n    zs.append(4)\n    print(xs, zs)',
+     ['[1, 2, 3] [1, 2, 3, 4]']),
+], ids=['list', 'range', 'dict', 'name-kept', 'empty',
+        'condition-first', 'walked-list', 'a-new-list'])
+def test_a_list_comprehension(statement, printed):
+    exit_code, lines = run_main_body(
+        '    xs = [1, 2, 3]\n    ' + statement + '\n    return 0\n', SAY)
+    assert (exit_code, lines) == (0, printed)
+
+def test_a_comprehension_unbinds_a_name_it_alone_bound():
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    ys = [q for q in [1]]\n    print(q)\n'
+                      '    return 0\n')
+    assert info.value.msg == "name 'q' is not defined"
+
+def test_a_comprehension_gives_its_name_back_after_an_exception():
+    exit_code, lines = run_main_body(
+        '    x = "kept"\n    try:\n        ys = [boom(x) for x in [1]]\n'
+        '    except NotFound:\n        print(x)\n    return 0\n',
+        'def boom(n: int) -> int:\n    raise NotFound("n")\n')
+    assert (exit_code, lines) == (0, ['kept'])
+
+@pytest.mark.parametrize('statement, msg', [
+    ('print([x for x in v])', 'int is not a list'),
+    ('print([x for x in [1] if v])', 'if needs a bool, not int'),
+    ('d = {"a": 1}\n    print([grow(d, k) for k in d])',
+     'dict changed size during iteration'),
+], ids=['iterable', 'condition', 'resized'])
+def test_a_list_comprehension_runtime_error(statement, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    if 1 == 1:\n        v = 1\n    else:\n'
+                      '        v = "s"\n    ' + statement
+                      + '\n    return 0\n',
+                      'def grow(d: dict[str, int], k: str) -> int:\n'
+                      '    d[k + k] = 1\n    return 1\n')
+    assert info.value.msg == msg
+

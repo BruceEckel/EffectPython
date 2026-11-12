@@ -1,0 +1,37 @@
+# List comprehensions (plan 1.25): over a list, a range, and a dict's
+# keys, with and without a condition, with a perform in the element,
+# and with the name given back afterwards.
+
+from dataclasses import dataclass
+from effectpython import Effect, perform, handle
+
+@dataclass
+class Item:
+    name: str
+    price: int
+
+class Tax(Effect):
+    def on(price: int) -> int: ...
+
+def cheap(items: list[Item], limit: int) -> list[str]:
+    return [item.name for item in items if item.price < limit]
+
+def taxed(items: list[Item]) -> list[int] / [Tax]:
+    return [item.price + perform(Tax.on(item.price)) for item in items]
+
+def main() -> int / []:
+    items = [Item("pen", 3), Item("book", 20), Item("ink", 8)]
+    x = "kept"
+    squares = [x * x for x in range(1, 5)]
+    print(squares, x)
+    print(cheap(items, 10), cheap(items, 1))
+    stock = {"pen": 4, "ink": 0}
+    print([name for name in stock if stock[name] > 0])
+    try:
+        with handle(Tax):
+            print(taxed(items))
+    except Tax.on as eff:
+        eff.resume(eff.price // 4)
+    grown = [1, 2]
+    print([n for n in grown if n > 1 or len(grown) > 3], grown)
+    return 0

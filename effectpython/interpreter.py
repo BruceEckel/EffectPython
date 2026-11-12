@@ -50,7 +50,9 @@ FieldAssign (plan 1.20), which evaluate the target as any expression
 and find the instance with field_owner. A KeywordCall (plan 1.23)
 evaluates its arguments in the order written and then arranges the
 values by parameter or field (arranged); a field no argument filled
-is a None that construct_slots fills from the default.
+is a None that construct_slots fills from the default. A ListComp
+(plan 1.25) walks its iterable as the for statements do and gives
+its name back in a finally (eval_list_comp).
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -221,7 +223,8 @@ paths that leave a name with two types: runtime_zero_trip_retype.epy,
 runtime_break_carried.epy, runtime_try_midsuite.epy,
 runtime_clause_before_resume.epy, runtime_finally_after_return.epy,
 runtime_finally_midsuite.epy, runtime_finally_break.epy,
-runtime_finally_unwind.epy, and runtime_clause_after_assign.epy),
+runtime_finally_unwind.epy, runtime_clause_after_assign.epy, and,
+inside a comprehension, runtime_comp_clause_retype.epy),
 two instances met by the == of two lists
 (scalars_equal; runtime_instance_compare.epy), a field read on a
 value that is no instance (the AttrRead branch of eval_expr;
@@ -1057,6 +1060,8 @@ class Interpreter(object):
             for element in expr.elements:
                 items_w.append(self.eval_expr(element, env))
             return W_List(items_w)
+        elif isinstance(expr, ast.ListComp):
+            return self.eval_list_comp(expr, env)
         elif isinstance(expr, ast.Index):
             w_target = self.eval_expr(expr.target, env)
             w_index = self.eval_expr(expr.index, env)
@@ -1131,6 +1136,67 @@ class Interpreter(object):
                               exception_value(w_value, "throw"))
         else:
             raise EffectPythonRuntimeError("unknown expression node")
+
+    def eval_list_comp(self, expr, env):
+        """A new list of the element expression's value for each item
+        the condition passes (plan 1.25). The walk is the for
+        statement's: a list by index against its live length, a
+        dict's keys with the size test, and a range by counting. The
+        name is the comprehension's own, so it is put back whatever
+        ends the walk, as answer_with_clause puts a clause's back."""
+        name = expr.name
+        had_name = name in env.vars
+        w_old = env.vars.get(name, None)
+        items_w = []
+        try:
+            self.walk_list_comp(expr, env, items_w)
+        finally:
+            if had_name:
+                env.vars[name] = w_old
+            elif name in env.vars:
+                del env.vars[name]
+        return W_List(items_w)
+
+    def walk_list_comp(self, expr, env, items_w):
+        iterable = expr.iterable
+        if isinstance(iterable, ast.Call) and iterable.func == "range":
+            args_w = []
+            for arg in iterable.args:
+                args_w.append(self.eval_expr(arg, env))
+            if len(args_w) < 1 or len(args_w) > 2:
+                raise EffectPythonRuntimeError(
+                    "range() takes 1 to 2 arguments (%d given)" %
+                    len(args_w))
+            stop = int_value(args_w[len(args_w) - 1], "range()")
+            i = 0
+            if len(args_w) == 2:
+                i = int_value(args_w[0], "range()")
+            while i < stop:
+                self.list_comp_item(expr, env, W_Int(i), items_w)
+                i += 1
+            return
+        w_iterable = self.eval_expr(iterable, env)
+        if isinstance(w_iterable, W_Dict):
+            size = len(w_iterable.items_w)
+            for key in w_iterable.items_w.keys():
+                self.list_comp_item(expr, env, W_Str(key), items_w)
+                if len(w_iterable.items_w) != size:
+                    raise EffectPythonRuntimeError(
+                        "dict changed size during iteration")
+            return
+        w_list = list_value(w_iterable)
+        i = 0
+        while i < len(w_list.items_w):
+            self.list_comp_item(expr, env, w_list.items_w[i], items_w)
+            i += 1
+
+    def list_comp_item(self, expr, env, w_item, items_w):
+        env.define(expr.name, w_item)
+        condition = expr.condition
+        if condition is not None:
+            if not truth(self.eval_expr(condition, env), "if"):
+                return
+        items_w.append(self.eval_expr(expr.element, env))
 
     def call_with_keywords(self, name, args_w, keywords):
         """A call whose last arguments are keywords (plan 1.23):

@@ -2907,6 +2907,149 @@ def test_a_format_spec_misuse_is_rejected(body, msg):
         check_source(DATA + body)
     assert info.value.msg == msg
 
+# --- List comprehensions (Milestone 25) --------------------------------------
+
+@pytest.mark.parametrize('body', [
+    'def total(ns: list[int]) -> int:\n'
+    '    return len(ns)\n'
+    'def f() -> int:\n'
+    '    xs = [1, 2, 3]\n'
+    '    return total([x * x for x in xs])\n',
+    'def total(ns: list[int]) -> int:\n'
+    '    return len(ns)\n'
+    'def f() -> int:\n'
+    '    xs = [1, 2, 3]\n'
+    '    return total([x for x in xs if x > 1])\n',
+    'def total(ns: list[int]) -> int:\n'
+    '    return len(ns)\n'
+    'def f() -> int:\n'
+    '    return total([i * 2 for i in range(1, 4)])\n',
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    d = {"a": 1}\n'
+    '    ks = [k for k in d if d[k] > 0]\n'
+    '    return len(name(ks[0]))\n',
+    'def f() -> int:\n'
+    '    ts = [Task("a", []), Task("b", [], 2)]\n'
+    '    slow = [t for t in ts if t.seconds > 1]\n'
+    '    names = [t.name for t in ts]\n'
+    '    return take(slow[0].seconds) + len(names)\n',
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    xs = [1, 2, 3]\n'
+    '    x = "outer"\n'
+    '    ys = [x + 1 for x in xs]\n'
+    '    return len(name(x)) + take(ys[0])\n',
+    'def total(ns: list[int]) -> int:\n'
+    '    return len(ns)\n'
+    'def maybe(i: int) -> int | None:\n'
+    '    if i == 1:\n'
+    '        return None\n'
+    '    return i\n'
+    'def f() -> int:\n'
+    '    xs = [1, 2, 3]\n'
+    '    m = maybe(2)\n'
+    '    return total([x + m for x in xs if m is not None])\n',
+    'def total(ns: list[int]) -> int:\n'
+    '    return len(ns)\n'
+    'def f() -> int:\n'
+    '    return total([x + 1 for x in []])\n',
+    'def total(ns: list[int]) -> int:\n'
+    '    return len(ns)\n'
+    'class Num(Effect):\n'
+    '    def get() -> int: ...\n'
+    'def f() -> int / []:\n'
+    '    n = 0\n'
+    '    try:\n'
+    '        with handle(Num):\n'
+    '            return total([n + perform(Num.get()) for i in '
+    'range(3)])\n'
+    '    except Num.get as eff:\n'
+    '        n = 5\n'
+    '        eff.resume(1)\n'
+    '    return n\n',
+], ids=['list', 'condition', 'range', 'dict-keys', 'instances',
+        'name-kept', 'narrowed', 'empty-iterable', 'performs'])
+def test_a_list_comprehension_is_accepted(body):
+    check_source(DATA + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n'
+     '    xs = [1, 2, 3]\n'
+     '    ys = [[x] for x in xs]\n'
+     '    return 0\n',
+     'line 20: list elements must be int, str, or bool, not a list'),
+    ('def f() -> int:\n'
+     '    xs = [1, 2, 3]\n'
+     '    ys = [None for x in xs]\n'
+     '    return 0\n',
+     'line 20: list elements must be int, str, or bool, not None'),
+    ('def f() -> int:\n'
+     '    xs = [1, 2, 3]\n'
+     '    ys = [x for x in xs if x]\n'
+     '    return 0\n',
+     'line 20: if needs a bool, not int'),
+    ('def f() -> int:\n'
+     '    ys = [x for x in 5]\n'
+     '    return 0\n',
+     'line 19: for needs a list, a dict, or range(), not int'),
+    ('def f() -> int:\n'
+     '    xs = [1, 2, 3]\n'
+     '    ys = [y for y in xs]\n'
+     '    return y\n',
+     "line 21: name 'y' is not defined"),
+    ('def name(s: str) -> str:\n'
+     '    return s\n'
+     'def f() -> int:\n'
+     '    xs = [1, 2, 3]\n'
+     '    return len(name([x for x in xs]))\n',
+     'line 22: argument 1 of name() must be str, not list[int]'),
+    ('def name(s: str) -> str:\n'
+     '    return s\n'
+     'def f() -> int:\n'
+     '    xs = [1, 2, 3]\n'
+     '    ys = [name(x) for x in xs]\n'
+     '    return 0\n',
+     'line 22: argument 1 of name() must be str, not int'),
+    ('def maybe(i: int) -> int | None:\n'
+     '    if i == 1:\n'
+     '        return None\n'
+     '    return i\n'
+     'def f() -> int:\n'
+     '    xs = [1, 2, 3]\n'
+     '    ys = [maybe(x) for x in xs]\n'
+     '    return 0\n',
+     'line 24: list elements must be int, str, or bool, not int | '
+     'None'),
+    ('def maybe(i: int) -> int | None:\n'
+     '    if i == 1:\n'
+     '        return None\n'
+     '    return i\n'
+     'def f() -> int:\n'
+     '    xs = [1, 2, 3]\n'
+     '    m = maybe(2)\n'
+     '    ys = [x + m for x in xs]\n'
+     '    return 0\n',
+     'line 25: unsupported operand types for +: int and int | None'),
+    ('def f() -> int:\n'
+     '    ys = [i for i in range()]\n'
+     '    return 0\n',
+     'line 19: range() takes 1 to 2 arguments (0 given)'),
+], ids=['list-element', 'none-element', 'condition-type', 'iterable',
+        'name-after', 'slot', 'element-slot', 'optional-element',
+        'not-narrowed', 'range-arity'])
+def test_a_list_comprehension_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(DATA + body)
+    assert info.value.msg == msg
+
+
+def test_a_comprehension_is_checked_again_after_a_clause_retypes():
+    source = read_program('runtime_comp_clause_retype.epy')
+    assert unknowns_in(source) == [(16, checker.OPERANDS)]
+
 # --- dict[str, T] and in (Milestone 12) --------------------------------------
 
 TOTAL = ('def total(d: dict[str, int]) -> int:\n    n = 0\n'

@@ -470,6 +470,20 @@ class FString(Expr):
         self.literals = literals  # list of str
         self.exprs = exprs        # list of Expr
 
+class ListComp(Expr):
+    """[element for name in iterable] or [element for name in
+       iterable if condition] (plan 1.25). The name is the
+       comprehension's own: it is put back afterwards. An iterable
+       that is a Call to range is counted, as a ForRange is."""
+    _attrs_ = ['element', 'name', 'iterable', 'condition']
+
+    def __init__(self, element, name, iterable, condition, lineno=0):
+        Node.__init__(self, lineno)
+        self.element = element      # Expr
+        self.name = name            # str
+        self.iterable = iterable    # Expr
+        self.condition = condition  # Expr or None
+
 class Formatted(Expr):
     """expr:spec inside an f-string field (plan 1.24): the field's
        expression with the parts of its format spec. It stands among

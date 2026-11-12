@@ -810,6 +810,8 @@ squared 3
 
 The list operations are the literal `[1, 2]` or `[]`, `len(xs)`, `xs[i]` with a negative index counting from the end, `xs[i] = v`, `xs.append(v)`, and `==` and `!=` element by element.
 `", ".join(words)` joins a `list[str]` into one `str`.
+A list comprehension builds a list from another: `[x * x for x in xs if x > 1]`, over anything a `for` walks, with one `for` and at most one `if`.
+Its name is its own, as in Python 3: an `x` bound before it keeps its value, and `tests/programs/list_comp.epy` runs the forms.
 `print(xs)` shows the list as Python does, so a list of strings prints as `['a', 'b']`.
 Lists are shared by reference, as Python's are:
 `collector.entries` is the same list `note` appended to, and a function that appends to a parameter appends to the caller's list.

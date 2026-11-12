@@ -1745,7 +1745,7 @@ The messages are "f-string: a format spec is [[fill]align][0][width][d or s], no
 `build_plan.epy` is 103 lines: `padded()` is gone and the report line is the Python version's, `f"{name:8} {result}"`.
 `runtime_format_spec.epy` reaches the runtime's refusal of a `bool` through a name of unknown type.
 
-### 1.25 List comprehensions (designed 2026-11-12)
+### 1.25 List comprehensions (designed and implemented 2026-11-12, open questions settled as recommended)
 
 The Python version of the build program finds the dependencies that did not succeed with
 
@@ -1792,6 +1792,17 @@ The name is put back before the merge, with its type, its place among the unboun
 3.  *Whether the name leaks, as a `for` statement's does.*
     *The design gives it Python 3's scope: a port that reuses a name outside the brackets must mean what the original meant.*
 
+All three were settled as recommended on 2026-11-12.
+
+**As implemented (2026-11-12).**
+The fixpoint has a program that needs it.
+In `runtime_comp_clause_retype.epy` the element is `n + perform(Num.get())` and the clause assigns `n = "s"`: the first item reads an `int`, and the second, after the clause ran, a `str`.
+One check of the element would type `n` as `int` at the read, which stands before the perform point; the second pass starts from the types the first left, finds `n` with two types, and notes the `+` as an operand of unknown type, which the runtime then refuses with "unsupported operand types for +: str and int".
+The iterable is typed once, before the passes, as it is evaluated once.
+The messages are the existing ones: "for needs a list, a dict, or range(), not int", "if needs a bool, not int", and "list elements must be int, str, or bool, not None".
+A second `for` or `if`, two names, a dict comprehension, and a generator expression are "unexpected 'for'" or its like from the parser.
+`build_plan.epy` is 100 lines, with `blocked` built in one; `list_comp.epy` runs the forms through the binary, a perform in the element among them.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1811,6 +1822,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `for <name>, <name> in <expr>.items(): <suite>`, a `ForItems` node holding the two names and the expression left of the dot; any other iterable after two names is refused (1.22; Milestone 22, 2026-11-12)
     *   keyword arguments `<name> = <expr>` after the positional arguments of a call by name, giving a `KeywordCall` node with every argument in the order written and the keywords' names; a call without them stays a `Call` (1.23; Milestone 23, 2026-11-12)
     *   a format spec in an f-string field, `{<expr>:<spec>}` with the spec `[[fill]align][0][width][d or s]`: the lexer splits the field at its first colon outside a string literal and emits the spec as one `FSTRING_SPEC` token, and the parser reads it into a `Formatted` node around the field's expression (1.24; Milestone 24, 2026-11-12)
+    *   list comprehensions `[<expr> for <name> in <expr>]` and `[<expr> for <name> in <expr> if <expr>]`, a `ListComp` node with the condition or nothing (1.25; Milestone 25, 2026-11-12)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -1898,6 +1910,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `ForItems` (1.22; Milestone 22, 2026-11-12): `check_items_loop` types the target, which is a dict or unknown, binds the first name to `str` and the second to the dict's value type, and hands both to `check_loop_body`, which binds a second name at the start of each pass beside the first; afterwards each name is merged with the type it had before, as `check_loop` does for one.
         *   `KeywordCall` (1.23; Milestone 23, 2026-11-12): `check_keyword_call` takes the names and types from a function's parameters or a class's fields, finds each argument's slot (`keyword_slots`), types the arguments in the order written against their slots as `check_args` does, asks that every parameter, or every field without a default, is filled, and for a function adds the row and the perform point through `called`, which `check_call` shares.
         *   `Formatted` (1.24; Milestone 24, 2026-11-12): `check_fstring` hands a field with a spec to `check_formatted`, which types the expression and holds it to `int` or `str` and to the spec's type letter; a value of unknown type passes to the runtime.
+        *   `ListComp` (1.25; Milestone 25, 2026-11-12): `check_list_comp` types the iterable once, binds the name to its element type (`element_for`, which the `For` statement shares, or `int` for a call to `range`), and checks the condition and the element from the types before and again from those merged with what a pass left, until nothing changes; the condition's facts narrow the element; the name gets back its type, its unbound state, and its clause binding before each merge; and the result is `list[T]` of the element, or unknown.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2671,7 +2684,9 @@ EffectPython/
         *   `{x:}`, `{x:8.2}`, `{x:,}`, `{x:=5}`, and `{x:{w}}` are syntax errors, and `{d["a:b"]}` reads the colon as part of the string.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 25. **Milestone 25: list comprehensions (1.25)**
-    *   *Designed 2026-11-12.*
+    *   *Designed and done 2026-11-12.* The three open questions of 1.25 are settled as recommended.
+    *   *Done 2026-11-12.*
+        `ast_nodes.py` has `ListComp`; `parser.py` has its two productions; `checker.py` has `check_list_comp` and `element_for`; `interpreter.py` has `eval_list_comp`, `walk_list_comp`, and `list_comp_item`.
     *   *Implementation (planned):* the parser's two productions and `ListComp`; the checker's shared element rule and the comprehension's fixpoint; the interpreter's `eval_list_comp`.
         The change adds a fixpoint, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*

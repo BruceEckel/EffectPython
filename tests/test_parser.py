@@ -1475,3 +1475,39 @@ def test_format_spec_syntax_errors(field, msg):
         parse('def main() -> int:\n    x = f"{%s}"\n' % field)
     assert info.value.msg == msg
 
+# --- List comprehensions (Milestone 25) --------------------------------------
+
+X = ('Name', 'x')
+XS = ('Name', 'xs')
+
+@pytest.mark.parametrize('source, expected', [
+    ('[x for x in xs]', ('ListComp', X, 'x', XS, None)),
+    ('[x * 2 for x in xs if x > 1]',
+     ('ListComp', ('BinOp', '*', X, TWO), 'x', XS,
+      ('Compare', '>', X, ONE))),
+    ('[x for x in range(2)]',
+     ('ListComp', X, 'x', ('Call', 'range', [TWO]), None)),
+    ('[x for x in xs if x in ys and x > 1]',
+     ('ListComp', X, 'x', XS,
+      ('BoolOp', 'and', ('In', X, ('Name', 'ys'), False),
+       ('Compare', '>', X, ONE)))),
+    ('[x]', ('ListLiteral', [X])),
+], ids=['plain', 'condition', 'range', 'in-in-the-condition', 'literal'])
+def test_list_comp_shapes(source, expected):
+    module = parse('def main() -> int:\n    return %s\n' % source)
+    assert shape(module.functions[0].body[0]) == ('Return', expected)
+
+@pytest.mark.parametrize('source, msg', [
+    ('[x for x in xs for y in ys]', "line 2, column 27: unexpected 'for'"),
+    ('[x for x in xs if a if b]', "line 2, column 32: unexpected 'if'"),
+    ('[x for x, y in d.items()]', "line 2, column 20: unexpected ','"),
+    ('[x, y for x in xs]', "line 2, column 18: unexpected 'for'"),
+    ('{x: 1 for x in xs}', "line 2, column 18: unexpected 'for'"),
+    ('(x for x in xs)', "line 2, column 15: unexpected 'for'"),
+], ids=['two-fors', 'two-ifs', 'two-names', 'two-elements', 'dict',
+        'generator'])
+def test_list_comp_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    return %s\n' % source)
+    assert info.value.msg == msg
+

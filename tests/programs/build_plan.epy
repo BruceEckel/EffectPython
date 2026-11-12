@@ -63,10 +63,7 @@ def run(task: Task) -> bool / [Work, Clock, Log]:
 def build(tasks: list[Task]) -> dict[str, str] / [Work, Clock, Log]:
     status = {}
     for task in tasks:
-        blocked = []
-        for need in task.needs:
-            if status.get(need, "") != "ok":
-                blocked.append(need)
+        blocked = [n for n in task.needs if status.get(n, "") != "ok"]
         if len(blocked) > 0:
             status[task.name] = "skipped"
             perform(Log.note(

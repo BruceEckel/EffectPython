@@ -1047,6 +1047,16 @@ def list_literal(p):
     assert isinstance(elements, _ExprList)
     return ast.ListLiteral(elements.items, _line(p[0]))
 
+@pg.production('atom : LBRACKET expr FOR NAME IN expr RBRACKET')
+def list_comp(p):
+    return ast.ListComp(_expr(p[1]), _text(p[3]), _expr(p[5]), None,
+                        _line(p[0]))
+
+@pg.production('atom : LBRACKET expr FOR NAME IN expr IF expr RBRACKET')
+def list_comp_filtered(p):
+    return ast.ListComp(_expr(p[1]), _text(p[3]), _expr(p[5]),
+                        _expr(p[7]), _line(p[0]))
+
 @pg.production('atom : FSTRING_START FSTRING_END')
 def empty_fstring(p):
     return ast.FString([""], [], _line(p[0]))
