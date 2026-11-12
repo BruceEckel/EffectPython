@@ -1361,6 +1361,7 @@ A test gives two lists of facts, the ones that hold where it is true and the one
 *   `a or b`, where it is false, says what `a` and `b` say where they are false; where it is true it says nothing.
 *   Any other test says nothing.
 
+A clause binding or a handler instance is no such name, as in 1.16.
 A fact retypes its name as 1.16's `narrow` does: `None` for a name that is `None`, if it was optional or unknown; `T` for a `T | None` that is not `None`; and for a name of type `None` that is said not to be `None`, the unknown type and the answer that this path cannot run.
 
 **Where the facts apply.**
@@ -1369,13 +1370,17 @@ A fact retypes its name as 1.16's `narrow` does: `None` for a name that is `None
     The guard falls out as before: after `if x is None or y is None:` over a `return`, Milestone 15 gives the code after the `if` the other branch's types, where both names are narrowed.
 *   The right operand of `and` is typed with the left operand's true list applied, and the right operand of `or` with its false list, since Python evaluates the right operand in those cases alone.
     The names get their types back after the operand.
+    An operand that cannot run, the `best > i` of `best is not None and best > i` while `best` is `None`, is typed with the name unknown, so `check_operands` notes an unknown operand there; under a loop the pass is followed by another and `_drop_unknowns` forgets it, and outside one the note stays, for a test that is always false.
 *   The body of a `while` is checked with the test's true list applied, on every pass.
     Nothing is narrowed after the loop (open question 1).
+    Where a fact says the body cannot run (`x = None`, then `while x is not None:`), `check_loop_body` has to keep that pass out of the types after the loop: it merges the body's end and `loop_exits[-1]`, which a `break` or `continue` in the body has absorbed into, with the types before, and the name would be unknown in both.
+    1.16 keeps such a branch of an `if` out of its merge; the loop needs the same, the types before the loop standing for the pass and the exits put back as they were before it.
 
 **A perform in the test.**
 A fact holds from the moment its comparison is evaluated, and a perform point later in the same test may run a clause that assigns the name: in `if x is not None and perform(A.get()) > 0:`, with a clause `x = None`, the body must not see `x` as an `int`.
 `widen_at_perform` already retypes such a name at the perform point, from the pass on which the clause's assignment is known.
 So when the right operand has been typed, a narrowed name whose type is no longer the narrowed one was widened inside it: the name gets the merge of its type before the narrowing and its type now, and its fact is dropped for the rest of the statement, so the branch is not narrowed by it either.
+The test is typed in `dispatch_stmt` before `check_if` runs, and in `check_loop_body` at the start of each pass, so the dropped names have to be kept on the checker from the one to the other, emptied before each test; a test holds no statement, so no other test is typed in between.
 A perform before the comparison does no harm, since the comparison is evaluated after it.
 
 **Open questions (recommendations in italics).**
