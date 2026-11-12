@@ -1450,8 +1450,11 @@ An instance takes no operator, `==` included (open question 7), no `len()`, `str
 
 **Types.**
 The class name is the type of its instances, as a handler class's is.
+Three places in the checker ask whether a type is `in self.handlers` before they read a field or check a constructor (`require_instance`, the `AttrRead` branch of `type_of`, and `check_call`), and each has to ask the data classes too; `check_handle` asks the handler classes alone and stays as it is, so `handle(task)` is "'task' is not an effect or a handler instance" and `handle(Task(...))` is "'Task' is not a handler class".
+The messages of `collect_field`, `require_field`, and the field store say "handler class 'C'", and the two messages of the probe above say "a handler instance"; each needs the data class's word where the class is one.
 `list[<Class>]`, `dict[str, <Class>]`, and `<Class> | None` are types where `<Class>` is a data class.
-The parser cannot tell a data class from a misspelling, so it accepts any name in the three places and the checker's first pass holds every written type (a parameter, a return, a field, in a function, an operation, and a method) to the rule: the name is `int`, `str`, `bool`, or a data class.
+The parser cannot tell a data class from a misspelling, so it accepts any name in the three places and the checker's first pass holds every written type (a parameter and a return of a function and of an operation, and a field) to the rule: the name is `int`, `str`, `bool`, or a data class.
+A method needs no check of its own, since `check_signature` holds its types to its operation's.
 A plain `<Name>` stays unchecked, as it is today.
 A list element and a dict value are then a scalar or an instance; `require_scalar` already lets an instance through, which is why the probe above checks.
 A tuple's elements stay scalars.
@@ -1464,8 +1467,10 @@ Narrowing (1.16, 1.18) applies with no change, so `task = find(tasks, name)` the
 Through a list of unknown type the comparison still reaches `scalars_equal`, which raises "unsupported operand types for ==: Task and Task" for two instances in place of answering `False`; an instance against a scalar stays unequal.
 
 **Runtime.**
-An instance is a `W_HandlerInstance`, which holds a class name, the field names, and the values and needs nothing more; the interpreter keeps the data classes beside the handler classes and constructs both the same way.
-`handle()` on an instance of a data class is the existing "handle() argument is not a handler instance".
+An instance is a `W_HandlerInstance`, which holds a class name, the field names, and the values and needs nothing more.
+The interpreter's `HandlerClass` reads its node's effect and methods, which a `DataDef` lacks, so it takes the name, the fields, the effect, and the methods in place of the node, and a data class has an empty effect and no methods; `construct` serves both.
+`install` tests `isinstance(w_instance, W_HandlerInstance)` and then looks the class up in `self.handlers`, which would be a `KeyError` for a data class, so the data classes are kept in a table of their own and the test also asks for the class among the handlers before it answers "handle() argument is not a handler instance".
+`instance` and `field_index` word their errors "a handler instance" and "handler class 'C'", as the checker does.
 `type_name()` answers the class name for an instance, where it says "object" today.
 
 **Open questions (recommendations in italics).**
