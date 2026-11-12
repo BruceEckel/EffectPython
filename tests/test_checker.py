@@ -3050,6 +3050,234 @@ def test_a_comprehension_is_checked_again_after_a_clause_retypes():
     source = read_program('runtime_comp_clause_retype.epy')
     assert unknowns_in(source) == [(16, checker.OPERANDS)]
 
+# --- Module constants (Milestone 26) -----------------------------------------
+
+@pytest.mark.parametrize('body', [
+    'LIMIT = 3\n'
+    'SEP = ", "\n'
+    'DEBUG = False\n'
+    'LOW = -1\n'
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    if DEBUG:\n'
+    '        print(name(SEP))\n'
+    '    return take(LIMIT) + take(LOW)\n',
+    'def f() -> int:\n'
+    '    return take(LATER)\n'
+    'LATER = 7\n',
+    'LIMIT = 3\n'
+    'SEP = ", "\n'
+    'DEBUG = False\n'
+    'LOW = -1\n'
+    'def name(s: str) -> str:\n'
+    '    return s\n'
+    'def f() -> int:\n'
+    '    return len(name(SEP.join(["a", "b"])))\n',
+    'LIMIT = 3\n'
+    'SEP = ", "\n'
+    'DEBUG = False\n'
+    'LOW = -1\n'
+    'class H(Handler[DBQuery]):\n'
+    '    def execute(self, sql: str) -> str:\n'
+    '        return SEP\n',
+    'LIMIT = 3\n'
+    'SEP = ", "\n'
+    'DEBUG = False\n'
+    'LOW = -1\n'
+    'def f() -> int / []:\n'
+    '    try:\n'
+    '        with handle(DBQuery):\n'
+    '            return len(perform(DBQuery.execute("q")))\n'
+    '    except DBQuery.execute as eff:\n'
+    '        eff.resume(SEP)\n'
+    '    return LIMIT\n',
+    'LIMIT = 3\n'
+    'SEP = ", "\n'
+    'DEBUG = False\n'
+    'LOW = -1\n'
+    'def f() -> int:\n'
+    '    n = 0\n'
+    '    for i in range(1, LIMIT + 1):\n'
+    '        n += i\n'
+    '    return take(n)\n',
+    'LIMIT = 3\n'
+    'SEP = ", "\n'
+    'DEBUG = False\n'
+    'LOW = -1\n'
+    'def f() -> int:\n'
+    '    t = Task(SEP, [], seconds=LIMIT)\n'
+    '    return take(t.seconds)\n',
+], ids=['read', 'below-its-use', 'method-target', 'in-a-method',
+        'in-a-clause', 'range', 'field'])
+def test_a_module_constant_is_accepted(body):
+    check_source(DATA + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    LIMIT = 4\n'
+     '    return 0\n',
+     "line 23: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    LIMIT += 1\n'
+     '    return 0\n',
+     "line 23: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    for LIMIT in [1]:\n'
+     '        pass\n'
+     '    return 0\n',
+     "line 23: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    for LIMIT in range(2):\n'
+     '        pass\n'
+     '    return 0\n',
+     "line 23: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    for k, LIMIT in {"a": 1}.items():\n'
+     '        pass\n'
+     '    return 0\n',
+     "line 23: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    a, LIMIT = (1, 2)\n'
+     '    return 0\n',
+     "line 23: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'class Bad(Exception): ...\n'
+     'def f() -> int:\n'
+     '    try:\n'
+     '        raise Bad("x")\n'
+     '    except Bad as LIMIT:\n'
+     '        pass\n'
+     '    return 0\n',
+     "line 26: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int / []:\n'
+     '    try:\n'
+     '        with handle(DBQuery):\n'
+     '            return 1\n'
+     '    except DBQuery.execute as LIMIT:\n'
+     '        LIMIT.resume("x")\n'
+     '    return 0\n',
+     "line 26: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    xs = [LIMIT for LIMIT in [1]]\n'
+     '    return 0\n',
+     "line 23: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f(LIMIT: int) -> int:\n'
+     '    return 0\n',
+     "line 22: 'LIMIT' is a module constant; a function cannot "
+     'bind it'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def name(s: str) -> str:\n'
+     '    return s\n'
+     'def f() -> int:\n'
+     '    return len(name(LIMIT))\n',
+     'line 25: argument 1 of name() must be str, not int'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    return LIMIT + SEP\n',
+     'line 23: unsupported operand types for +: int and str'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'LIMIT = 4\n',
+     "line 22: constant 'LIMIT' is declared twice"),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def SEP() -> int:\n'
+     '    return 0\n',
+     "line 19: constant 'SEP' is declared twice"),
+    ('Task = 1\n',
+     "line 18: constant 'Task' is declared twice"),
+    ('FileIO = 1\n',
+     "line 18: constant 'FileIO' is declared twice"),
+    ('len = 1\n',
+     "line 18: 'len' is a built-in"),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    LIMIT.x = 1\n'
+     '    return 0\n',
+     "line 23: 'LIMIT' is not a handler instance or a data class "
+     'instance'),
+    ('LIMIT = 3\n'
+     'SEP = ", "\n'
+     'DEBUG = False\n'
+     'LOW = -1\n'
+     'def f() -> int:\n'
+     '    return LIMIT.x\n',
+     "line 23: 'int' object has no attribute 'x'"),
+    ('def f() -> int:\n'
+     '    return NOPE\n',
+     "line 19: name 'NOPE' is not defined"),
+], ids=['assignment', 'augmented', 'for', 'for-range', 'for-items',
+        'unpack', 'except-as', 'effect-clause', 'comprehension',
+        'parameter', 'slot', 'operands', 'twice', 'function-name',
+        'class-name', 'effect-name', 'built-in', 'field-store',
+        'field-read', 'undefined'])
+def test_a_module_constant_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(DATA + body)
+    assert info.value.msg == msg
+
 # --- dict[str, T] and in (Milestone 12) --------------------------------------
 
 TOTAL = ('def total(d: dict[str, int]) -> int:\n    n = 0\n'

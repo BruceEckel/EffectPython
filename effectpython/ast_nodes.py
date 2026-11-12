@@ -23,14 +23,18 @@ class Node(BaseBox):
 
 class Module(Node):
     """A whole .epy file: its effect declarations, its handler classes,
-       its exception classes, its data classes, and its function
-       definitions, each in source order. The import line (from
-       effectpython import ...) leaves no node."""
-    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions', 'records']
+       its exception classes, its data classes, its constants, and
+       its function definitions, each in source order. The import
+       line (from effectpython import ...) leaves no node."""
+    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions', 'records',
+               'constants']
 
     def __init__(self, functions, effects=None, handlers=None,
-                 exceptions=None, records=None, lineno=0):
+                 exceptions=None, records=None, constants=None, lineno=0):
         Node.__init__(self, lineno)
+        if constants is None:
+            constants = []
+        self.constants = constants    # list of ConstantDef
         if records is None:
             records = []
         self.records = records        # list of DataDef
@@ -103,6 +107,16 @@ class FieldDef(Node):
         self.name = name        # str
         self.type = type        # str
         self.default = default  # a literal, [], {}, or None
+
+class ConstantDef(Node):
+    """NAME = literal at module level (plan 1.26): an int, str, or
+       bool every function may read and none may bind."""
+    _attrs_ = ['name', 'value']
+
+    def __init__(self, name, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name    # str
+        self.value = value  # IntLiteral, StrLiteral, or BoolLiteral
 
 class ExceptionDef(Node):
     """class Name(Exception): ...   (plan 1.6). The body is ... or pass;

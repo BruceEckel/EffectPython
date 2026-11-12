@@ -1,0 +1,11 @@
+# In Python the assignment would make LIMIT a local for the whole
+# function, and the read above it "cannot access local variable". The
+# checker refuses the binding, so no read of a constant's name can
+# mean anything but the constant (require_local).
+
+LIMIT = 3
+
+def main() -> int / []:
+    print(LIMIT)
+    LIMIT = 4
+    return 0

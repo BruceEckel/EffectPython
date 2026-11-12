@@ -186,7 +186,7 @@ def test_while():
     ('def f() -> int:\n    x = (1\n',
      "line 2, column 9: '(' was never closed"),
     ('def f() -> int:\n', 'unexpected end of input'),
-    ('x = 1\n', "line 1, column 1: unexpected 'x'"),
+    ('x + 1\n', "line 1, column 3: unexpected '+'"),
 ])
 def test_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
@@ -1509,5 +1509,31 @@ def test_list_comp_shapes(source, expected):
 def test_list_comp_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def main() -> int:\n    return %s\n' % source)
+    assert info.value.msg == msg
+
+# --- Module constants (Milestone 26) -----------------------------------------
+
+def test_module_constants_are_constantdefs():
+    module = parse('LIMIT = 3\nSEP = ", "\nDEBUG = False\nLOW = -1\n')
+    assert shape(module.constants) == [
+        ('ConstantDef', 'LIMIT', ('IntLiteral', 3)),
+        ('ConstantDef', 'SEP', ('StrLiteral', ', ')),
+        ('ConstantDef', 'DEBUG', ('BoolLiteral', False)),
+        ('ConstantDef', 'LOW', ('IntLiteral', -1))]
+
+@pytest.mark.parametrize('source, msg', [
+    ('X = [1]\n', None), ('X = f()\n', None), ('X = Y\n', None),
+    ('X = 1 + 2\n', None), ('X = None\n', None),
+    ('X: int = 1\n', "line 1, column 2: unexpected ':'"),
+    ('X += 1\n', "line 1, column 3: unexpected '+='"),
+    ('X, Y = (1, 2)\n', "line 1, column 2: unexpected ','"),
+], ids=['list', 'call', 'name', 'expression', 'none', 'annotated',
+        'augmented', 'unpacking'])
+def test_module_constant_syntax_errors(source, msg):
+    if msg is None:
+        msg = ('line 1, column 3: a module constant is an int, str, or '
+               'bool literal')
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
     assert info.value.msg == msg
 

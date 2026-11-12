@@ -84,6 +84,7 @@ a field may carry a width and an alignment as Python's does, `f"{name:8}"`, `f"{
 `2 ** n` is integer power, with Python's precedence (`-2 ** 2` is `-4`); a negative exponent is a runtime error, since its result would be a `float`.
 `times -= 1` is `times = times - 1`, and `+=`, `*=`, `//=`, `%=`, and `**=` abbreviate the other operators the same way;
 on a list element or a dict value, `xs[i] += 1`, the target is evaluated once, as in Python.
+A name at module level may hold an `int`, `str`, or `bool` literal, `RETRIES = 3`, and every function may read it; none may assign it or reuse the name for a local.
 `and`, `or`, and `not` combine `bool` values as Python's do, with the same precedence and the same short circuit, and take `bool` operands alone:
 `if n:` on an `int` is a checker error, `if needs a bool, not int`, where Python would test the number for zero.
 

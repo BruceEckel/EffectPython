@@ -1,0 +1,2 @@
+exit 1
+error: line 10: 'LIMIT' is a module constant; a function cannot bind it

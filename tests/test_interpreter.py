@@ -1260,3 +1260,19 @@ def test_a_list_comprehension_runtime_error(statement, msg):
                       '    d[k + k] = 1\n    return 1\n')
     assert info.value.msg == msg
 
+# --- Module constants (Milestone 26) -----------------------------------------
+
+CONSTANTS = ('LIMIT = 3\nSEP = ", "\nDEBUG = False\n'
+             'def twice() -> int:\n    return LIMIT * 2\n')
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print(LIMIT, SEP, DEBUG, twice())', ['3 ,  False 6']),
+    ('print(SEP.join(["a", "b"]), [i for i in range(LIMIT)])',
+     ['a, b [0, 1, 2]']),
+    ('LIMIT = 9\n    print(LIMIT, twice())', ['9 6']),
+], ids=['read', 'method-and-range', 'a-local-hides-it'])
+def test_a_module_constant(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n', CONSTANTS)
+    assert (exit_code, lines) == (0, printed)
+

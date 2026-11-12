@@ -1803,7 +1803,7 @@ The messages are the existing ones: "for needs a list, a dict, or range(), not i
 A second `for` or `if`, two names, a dict comprehension, and a generator expression are "unexpected 'for'" or its like from the parser.
 `build_plan.epy` is 100 lines, with `blocked` built in one; `list_comp.epy` runs the forms through the binary, a perform in the element among them.
 
-### 1.26 Module constants (designed 2026-11-12)
+### 1.26 Module constants (designed and implemented 2026-11-12, open questions settled as recommended)
 
 The Python version of the build program has `RETRIES = 3` at the top and `range(1, RETRIES + 1)` in `run()`; the port writes `range(1, 4)`, and the three is in the code twice more as prose.
 A module in the dialect holds classes and functions and nothing else.
@@ -1840,6 +1840,14 @@ The interpreter evaluates the literals once, into an `Environment` that every fu
 3.  *Whether a function may hide a constant with a local.*
     *The design refuses it, for the reason above.*
 
+All three were settled as recommended on 2026-11-12.
+
+**As implemented (2026-11-12).**
+The messages are "a module constant is an int, str, or bool literal", at the equals sign; "'LIMIT' is a module constant; a function cannot bind it", at the statement, the clause, the comprehension, or the function whose parameter it is; "constant 'LIMIT' is declared twice", also where the name is a class's or a function's; and the existing "'len' is a built-in".
+A field read on a constant is "'int' object has no attribute 'x'", and a field store "'LIMIT' is not a handler instance or a data class instance", where `require_bound` would have said the name is not defined.
+The runtime has no refusal of its own: a `define` writes the function's table and hides the constant for that call, which the checker makes unreachable (`unreachable_constant_bound.epy`), and which `tests/test_interpreter.py` shows on a module it does not check.
+`build_plan.epy` has `RETRIES = 3` and `range(1, RETRIES + 1)`, as the Python version does.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1860,6 +1868,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   keyword arguments `<name> = <expr>` after the positional arguments of a call by name, giving a `KeywordCall` node with every argument in the order written and the keywords' names; a call without them stays a `Call` (1.23; Milestone 23, 2026-11-12)
     *   a format spec in an f-string field, `{<expr>:<spec>}` with the spec `[[fill]align][0][width][d or s]`: the lexer splits the field at its first colon outside a string literal and emits the spec as one `FSTRING_SPEC` token, and the parser reads it into a `Formatted` node around the field's expression (1.24; Milestone 24, 2026-11-12)
     *   list comprehensions `[<expr> for <name> in <expr>]` and `[<expr> for <name> in <expr> if <expr>]`, a `ListComp` node with the condition or nothing (1.25; Milestone 25, 2026-11-12)
+    *   `<NAME> = <literal>` at module level, a `ConstantDef` node, where the literal is an `int`, a `str`, or a `bool` (1.26; Milestone 26, 2026-11-12)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -1948,6 +1957,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `KeywordCall` (1.23; Milestone 23, 2026-11-12): `check_keyword_call` takes the names and types from a function's parameters or a class's fields, finds each argument's slot (`keyword_slots`), types the arguments in the order written against their slots as `check_args` does, asks that every parameter, or every field without a default, is filled, and for a function adds the row and the perform point through `called`, which `check_call` shares.
         *   `Formatted` (1.24; Milestone 24, 2026-11-12): `check_fstring` hands a field with a spec to `check_formatted`, which types the expression and holds it to `int` or `str` and to the spec's type letter; a value of unknown type passes to the runtime.
         *   `ListComp` (1.25; Milestone 25, 2026-11-12): `check_list_comp` types the iterable once, binds the name to its element type (`element_for`, which the `For` statement shares, or `int` for a call to `range`), and checks the condition and the element from the types before and again from those merged with what a pass left, until nothing changes; the condition's facts narrow the element; the name gets back its type, its unbound state, and its clause binding before each merge; and the result is `list[T]` of the element, or unknown.
+        *   Module constants (1.26; Milestone 26, 2026-11-12): Pass 1 records each `ConstantDef` with its literal's type (`collect_constant`); a `Name`, and the name left of a method call's dot, is the constant where there is one; and `require_local` refuses a binding of a constant's name, from `rebind`, which every binding of a local but a parameter's and a comprehension's goes through, at the line `check_stmt` or a clause check last noted in `Checker.line`.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2733,7 +2743,9 @@ EffectPython/
         *   The name keeps the value and the type it had before; an `append` to the list being walked lengthens the walk; a resized dict is a runtime error.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 26. **Milestone 26: module constants (1.26)**
-    *   *Designed 2026-11-12.*
+    *   *Designed and done 2026-11-12.* The three open questions of 1.26 are settled as recommended.
+    *   *Done 2026-11-12.*
+        `ast_nodes.py` has `ConstantDef` and `Module.constants`; `parser.py` has `constantdef`; `checker.py` has `collect_constant`, `require_local`, and `Checker.line`; `interpreter.py` has `Interpreter.globals`, the parent of every call's `Environment`.
     *   *Implementation (planned):* the parser's module item and `ConstantDef`; the checker's table, the `Name` and method-call lookups, and the refusal in `rebind`; the interpreter's parent environment.
         The change is to how a name is resolved, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*

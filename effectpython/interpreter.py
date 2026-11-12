@@ -52,7 +52,10 @@ evaluates its arguments in the order written and then arranges the
 values by parameter or field (arranged); a field no argument filled
 is a None that construct_slots fills from the default. A ListComp
 (plan 1.25) walks its iterable as the for statements do and gives
-its name back in a finally (eval_list_comp).
+its name back in a finally (eval_list_comp). The module constants
+(plan 1.26) are evaluated once into Interpreter.globals, the parent
+of every call's Environment, so a read that finds no local finds
+the constant.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -154,7 +157,10 @@ HandlerClass.construct; unreachable_constructor_too_few.epy and
 unreachable_constructor_arity.epy), a keyword argument that names
 no parameter, names one already filled, or leaves one unfilled
 (check_keyword_call; arranged and call_with_keywords;
-unreachable_keyword.epy), a field assigned on a name that
+unreachable_keyword.epy), a local that hides a module constant, which
+the runtime would let a function make and read back
+(require_local; Environment.define; unreachable_constant_bound.epy),
+a field assigned on a name that
 holds no instance (require_instance; Interpreter.instance;
 unreachable_field_on_non_instance.epy), a field the class does not
 declare (require_field; field_index; unreachable_undeclared_field.epy),
@@ -467,6 +473,10 @@ class Interpreter(object):
             self.handlers[handler.name] = HandlerClass(
                 handler.name, handler.effect, handler.fields,
                 handler.methods)
+        self.globals = Environment()
+        for constant in module.constants:
+            self.globals.define(constant.name,
+                                default_value(constant.value))
         self.records = {}
         for record in module.records:
             self.records[record.name] = HandlerClass(
@@ -496,7 +506,7 @@ class Interpreter(object):
             raise EffectPythonRuntimeError(
                 "%s() takes %d arguments (%d given)" %
                 (fn.name, len(fn.params), len(args_w)))
-        env = Environment()
+        env = Environment(self.globals)
         for i in range(len(fn.params)):
             env.define(fn.params[i], args_w[i])
         try:

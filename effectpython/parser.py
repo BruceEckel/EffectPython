@@ -73,9 +73,11 @@ from effectpython.errors import InvalidSyntax
 from effectpython.lexer import TOKENS, TokenList, tokenize
 
 class _ModuleParts(BaseBox):
-    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions', 'records']
+    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions', 'records',
+               'constants']
 
     def __init__(self):
+        self.constants = []   # list of ConstantDef
         self.records = []     # list of DataDef
         self.functions = []   # list of FunctionDef
         self.effects = []     # list of EffectDef
@@ -206,7 +208,7 @@ def module(p):
     parts = p[0]
     assert isinstance(parts, _ModuleParts)
     return ast.Module(parts.functions, parts.effects, parts.handlers,
-                      parts.exceptions, parts.records, 1)
+                      parts.exceptions, parts.records, parts.constants, 1)
 
 @pg.production('items :')
 def items_empty(p):
@@ -227,6 +229,8 @@ def items_more(p):
         parts.exceptions.append(item)
     elif isinstance(item, ast.DataDef):
         parts.records.append(item)
+    elif isinstance(item, ast.ConstantDef):
+        parts.constants.append(item)
     else:
         assert isinstance(item, _Skipped)
     return parts
@@ -238,6 +242,17 @@ def items_more(p):
 @pg.production('item : datadef')
 def item(p):
     return p[0]
+
+@pg.production('item : NAME EQUALS expr NEWLINE')
+def constantdef(p):
+    """NAME = literal at module level (plan 1.26)."""
+    value = _expr(p[2])
+    if not (isinstance(value, ast.IntLiteral)
+            or isinstance(value, ast.StrLiteral)
+            or isinstance(value, ast.BoolLiteral)):
+        raise _error(p[1], "a module constant is an int, str, or bool "
+                     "literal")
+    return ast.ConstantDef(_text(p[0]), value, _line(p[0]))
 
 @pg.production('item : FROM NAME IMPORT name_list NEWLINE')
 def import_stmt(p):

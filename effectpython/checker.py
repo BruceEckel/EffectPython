@@ -155,7 +155,10 @@ parameter or field it goes to, and a class may leave out any field
 that has a default. A list comprehension is list[T] of its element
 expression, with its name bound as a for binds one and put back
 afterwards; its condition and element are checked to a fixpoint, as
-a loop body is (check_list_comp, plan 1.25).
+a loop body is (check_list_comp, plan 1.25). A module constant,
+NAME = literal, has its literal's type in every function and
+method, and no function may bind its name, by assignment, loop,
+clause, comprehension, or parameter (require_local, plan 1.26).
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -623,6 +626,8 @@ class Checker(object):
         self.fn = None        # the FunctionDef being checked
         self.what = ""        # "function" or "method"
         self.unknowns = []    # line * KINDS + kind, per unknown operand
+        self.constants = {}   # module constant name -> type name
+        self.line = 0         # of the statement or clause being checked
 
     def _note_unknown(self, kind, lineno):
         self.unknowns.append(lineno * KINDS + kind)
@@ -712,6 +717,39 @@ class Checker(object):
             for name in fn.effect_row:
                 self.require_row_name(name, fn.lineno)
             self.require_types(fn.param_types, fn.return_type, fn.lineno)
+        for constant in self.module.constants:
+            self.collect_constant(constant)
+
+    def collect_constant(self, constant):
+        """NAME = literal at module level (plan 1.26): the name is
+        new among the classes, functions, built-ins, and constants,
+        and has the literal's type."""
+        name = constant.name
+        if name in BUILTINS:
+            raise InvalidProgram(
+                constant.lineno, "'%s' is a built-in" % name)
+        if (name in self.constants or name in self.functions
+                or self.info_of(name) is not None
+                or name in self.effects or name in self.exceptions):
+            raise InvalidProgram(
+                constant.lineno, "constant '%s' is declared twice" % name)
+        if isinstance(constant.value, ast.IntLiteral):
+            self.constants[name] = "int"
+        elif isinstance(constant.value, ast.StrLiteral):
+            self.constants[name] = "str"
+        else:
+            self.constants[name] = "bool"
+
+    def require_local(self, name, lineno):
+        """A function cannot bind a module constant's name. Python
+        would make a local of it for the whole function, a read
+        above the binding included, which a walk in source order
+        cannot see; refusing the binding keeps every read the
+        constant's (plan 1.26)."""
+        if name in self.constants:
+            raise InvalidProgram(
+                lineno, "'%s' is a module constant; a function cannot "
+                "bind it" % name)
 
     def require_types(self, param_types, return_type, lineno):
         for type_name in param_types:
@@ -883,6 +921,7 @@ class Checker(object):
     def check_function(self, fn, what):
         scope = Scope()
         for i in range(len(fn.params)):
+            self.require_local(fn.params[i], fn.lineno)
             scope.types[fn.params[i]] = fn.param_types[i]
         effects = EffectSet()
         self.loop_depth = 0
@@ -925,6 +964,7 @@ class Checker(object):
         a clause's resume() may return to the body, after any
         statement."""
         self.spoiled = {}
+        self.line = stmt.lineno
         self.dispatch_stmt(stmt, scope, effects)
         for acc in self.boundaries:
             absorb(acc, scope.types)
@@ -1199,6 +1239,7 @@ class Checker(object):
         condition says about a name and None narrows the element
         (plan 1.18)."""
         name = expr.name
+        self.require_local(name, expr.lineno)
         iterable = expr.iterable
         if isinstance(iterable, ast.Call) and iterable.func == "range":
             self.check_range(iterable.args, expr.lineno, scope, effects)
@@ -1806,8 +1847,9 @@ class Checker(object):
             del scope.bindings[name]
         was_unbound = name in scope.unbound
         old_type = scope.types.get(name, None)
-        scope.set_type(name, clause.name)
+        self.line = clause.lineno
         self.rebind(scope, name)
+        scope.set_type(name, clause.name)
         self.check_block(clause.body, scope, effects)
         returns = ends_in_return(clause.body)
         if returns and old_type is not None:
@@ -1856,6 +1898,7 @@ class Checker(object):
         old_type = scope.types.get(name, None)
         old_binding = scope.bindings.get(name, None)
         was_unbound = name in scope.unbound
+        self.line = clause.lineno
         self.rebind(scope, name)
         scope.bindings[name] = binding
         scope.set_type(name, UNKNOWN)
@@ -2044,6 +2087,8 @@ class Checker(object):
         elif isinstance(expr, ast.BoolLiteral):
             return "bool"
         elif isinstance(expr, ast.Name):
+            if expr.id in self.constants:
+                return self.constants[expr.id]
             self.require_bound(scope, expr.id, expr.lineno)
             return scope.types.get(expr.id, UNKNOWN)
         elif isinstance(expr, ast.ListLiteral):
@@ -2136,7 +2181,7 @@ class Checker(object):
             self.widen_at_perform(scope)
             return op.return_type
         elif isinstance(expr, ast.OpCall):
-            if expr.effect in scope.types:
+            if expr.effect in scope.types or expr.effect in self.constants:
                 return self.check_method(
                     ast.Name(expr.effect, expr.lineno), expr.op, expr.args,
                     expr.lineno, scope, effects)
@@ -2147,6 +2192,10 @@ class Checker(object):
             info = self.info_of(scope.types.get(expr.target, UNKNOWN))
             if info is not None:
                 return self.require_field(info, expr.attr, expr.lineno)
+            if expr.target in self.constants:
+                raise InvalidProgram(
+                    expr.lineno, "'%s' object has no attribute '%s'" %
+                    (self.constants[expr.target], expr.attr))
             self.require_bound(scope, expr.target, expr.lineno)
             held = scope.types[expr.target]
             if expr.target not in scope.bindings:
@@ -2439,7 +2488,11 @@ class Checker(object):
 
     def rebind(self, scope, name):
         """An assignment or a loop binding gives the name a value that
-        is no clause binding, whatever it held before."""
+        is no clause binding, whatever it held before. Every binding
+        of a local but a parameter and a comprehension's name comes
+        through here, so a module constant's name is refused here,
+        at the line check_stmt or a clause check last noted."""
+        self.require_local(name, self.line)
         if name in scope.unbound:
             del scope.unbound[name]
         if name in scope.bindings:
@@ -2473,7 +2526,8 @@ class Checker(object):
         return scope.bindings[name]
 
     def require_instance(self, scope, name, lineno):
-        self.require_bound(scope, name, lineno)
+        if name not in self.constants:
+            self.require_bound(scope, name, lineno)
         info = self.info_of(scope.types.get(name, UNKNOWN))
         if info is None:
             raise InvalidProgram(

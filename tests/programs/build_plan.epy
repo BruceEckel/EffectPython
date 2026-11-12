@@ -16,6 +16,8 @@ class Task:
     seconds: int
     failures: int = 0
 
+RETRIES = 3
+
 class Clock(Effect):
     def sleep(seconds: int) -> int: ...
 
@@ -49,7 +51,7 @@ class Report(Handler[Log]):
         return len(self.lines)
 
 def run(task: Task) -> bool / [Work, Clock, Log]:
-    for n in range(1, 4):
+    for n in range(1, RETRIES + 1):
         try:
             now = perform(Work.attempt(task))
         except Failed:
