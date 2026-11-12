@@ -1745,6 +1745,51 @@ The messages are "f-string: a format spec is [[fill]align][0][width][d or s], no
 `build_plan.epy` is 103 lines: `padded()` is gone and the report line is the Python version's, `f"{name:8} {result}"`.
 `runtime_format_spec.epy` reaches the runtime's refusal of a `bool` through a name of unknown type.
 
+### 1.25 List comprehensions (designed 2026-11-12)
+
+The Python version of the build program finds the dependencies that did not succeed with
+
+```python
+        blocked = [n for n in task.needs if status.get(n) != "ok"]
+```
+
+and the port has a `blocked = []`, a `for`, an `if`, and an `append` for it.
+The same four lines stand in `shop_orders.epy` and in half the samples that build a list.
+
+**Today (probed against the binary, 2026-11-12).**
+`ys = [x * x for x in xs if x > 1]` is "line 3, column 17: unexpected 'for'".
+CPython 3.14: the comprehension's name is its own, so an `x` bound before it keeps its value afterwards and a name the comprehension alone binds is "name 'q' is not defined" after it; the iterable may be a list, a dict (its keys), a `range()`, or a `str`; an `append` to the list being walked lengthens the walk; a store that resizes a dict being walked is "dictionary changed size during iteration"; and `[a for a in 5]` is "'int' object is not iterable".
+
+**Syntax.**
+`[<expr> for <name> in <expr>]` and `[<expr> for <name> in <expr> if <expr>]` are a `ListComp` node holding the element expression, the name, the iterable, and the condition or nothing.
+One `for` and at most one `if` (open question 1); the dialect has no conditional expression, so an `if` after the iterable can only be the filter.
+
+**Meaning.**
+The iterable is what a `for` statement takes: a list, a dict for its keys, or a call to `range()`, which is recognized here as the statement's is, since `range()` has no value of its own.
+For each element the name is bound, the condition is evaluated if there is one, and where it is true the element expression's value joins the result, a new list.
+The name belongs to the comprehension: afterwards it holds what it held before, or is unbound again if it held nothing.
+
+**Checker.**
+The name has the iterable's element type, by the rule of the `for` statement, which moves to a function the two share.
+The condition must be `bool`, and what it says about a name and `None` where it is true narrows that name for the element expression (1.18).
+The element is a scalar or an instance (`require_scalar`), and the comprehension has the type `list[T]` of it, or no known type where the element has none; it is never the element-less `list`, since its element type is known even when no element passes.
+The two expressions run once per element, so they are checked as a loop body is: from the types before, then again from those merged with what a pass left, until nothing changes.
+An expression assigns no name, but three things in one retype a name: a perform point, where a clause's assignment arrives (`widen_at_perform`); a `[]` handed to a typed slot (`hand_over`); and an `append` to a name holding `[]`.
+The name is put back before the merge, with its type, its place among the unbound names, and its clause binding, so that it neither leaks nor counts as a name a clause wrote.
+
+**Runtime.**
+`eval_list_comp` walks a list by index against its live length, a dict by its keys with the size test, and a range by counting, as the three `for` forms do, and restores the name in a `finally`, so an exception that leaves the comprehension does not leave the element behind.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether a comprehension takes a second `for`, a second `if`, or two names over `d.items()`.*
+    *The design takes one `for` over one name and one `if`: the nested forms are the ones a reader has to unfold, and the second `if` is an `and`.*
+2.  *Whether dict and set comprehensions and generator expressions come with it.*
+    The Python version's closing tally is a dict comprehension over `sorted(set(...))`.
+    *The design takes the list form alone; a dict comprehension is the same node with two expressions and can follow when a program wants it.*
+3.  *Whether the name leaks, as a `for` statement's does.*
+    *The design gives it Python 3's scope: a port that reuses a name outside the brackets must mean what the original meant.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2622,4 +2667,14 @@ EffectPython/
         *   Every spec of the probe above gives CPython's text.
         *   Reject a spec on a `bool`, a list, and an optional, `d` on a `str`, and `s` on an `int`.
         *   `{x:}`, `{x:8.2}`, `{x:,}`, `{x:=5}`, and `{x:{w}}` are syntax errors, and `{d["a:b"]}` reads the colon as part of the string.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+25. **Milestone 25: list comprehensions (1.25)**
+    *   *Designed 2026-11-12.*
+    *   *Implementation (planned):* the parser's two productions and `ListComp`; the checker's shared element rule and the comprehension's fixpoint; the interpreter's `eval_list_comp`.
+        The change adds a fixpoint, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   `build_plan.epy` builds `blocked` with a comprehension, with its recorded output unchanged.
+        *   Accept a comprehension over a list, a dict, a `range()`, and a list of instances, with and without a condition, as an argument to a `list[T]` slot; a condition that narrows an optional for the element; and a perform in the element under a clause that assigns a name the comprehension reads.
+        *   Reject an element that is a list or `None`, a condition that is no `bool`, an iterable that is an `int`, the name read after the comprehension where nothing else bound it, and the result handed to a slot of another element type.
+        *   The name keeps the value and the type it had before; an `append` to the list being walked lengthens the walk; a resized dict is a runtime error.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
