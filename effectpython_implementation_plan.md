@@ -1803,6 +1803,42 @@ The messages are the existing ones: "for needs a list, a dict, or range(), not i
 A second `for` or `if`, two names, a dict comprehension, and a generator expression are "unexpected 'for'" or its like from the parser.
 `build_plan.epy` is 100 lines, with `blocked` built in one; `list_comp.epy` runs the forms through the binary, a perform in the element among them.
 
+### 1.26 Module constants (designed 2026-11-12)
+
+The Python version of the build program has `RETRIES = 3` at the top and `range(1, RETRIES + 1)` in `run()`; the port writes `range(1, 4)`, and the three is in the code twice more as prose.
+A module in the dialect holds classes and functions and nothing else.
+
+**Today (probed against the binary, 2026-11-12).**
+`RETRIES = 3` on the first line is "line 1, column 1: unexpected 'RETRIES'".
+In CPython a function reads a module name it does not assign; a function that assigns the name anywhere has a local of that name throughout, so `print(R)` above `R = 4` is "cannot access local variable 'R' where it is not associated with a value"; and a parameter or a local of the same name hides the module's.
+
+**Syntax.**
+`<NAME> = <literal>` at module level is a `ConstantDef`, where the literal is an `int`, negative included, a `str`, or a `bool`.
+Anything else on the right is refused by the parser with a message that says so (open question 1).
+
+**Meaning.**
+The name can be read in every function and method, before or after the line that defines it, as a function can be called above its definition.
+It cannot be bound: an assignment, an augmented assignment, an unpacking, a `for`, an `except ... as`, a comprehension, or a parameter with a constant's name is refused.
+That is stricter than Python, which would make a local, and it is the one rule that keeps Python's meaning without Python's scan of the whole function for assignments: the checker walks in source order, and a read above a later assignment would otherwise find the constant where Python raises.
+A constant's name must differ from every class, function, and built-in name, and from every other constant.
+
+**Checker.**
+Pass 1 collects the constants with the types of their literals.
+A read of a name the function has not bound is a read of the constant, if there is one, with its type; a method call on such a name, `SEP.join(xs)`, finds it the same way.
+Every binding of a local goes through `rebind`, except a parameter and a comprehension's name, so the refusal stands in `rebind` and at those two.
+
+**Runtime.**
+The interpreter evaluates the literals once, into an `Environment` that every function's environment has as its parent; `Environment.find` already walks parents, and `define` writes the function's own table.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether a constant may be a list, a dict, or a computed expression.*
+    *The design takes scalar literals: a module-level list is state every handler and function shares, which is what effects are for, and an expression would need an order of evaluation among constants.*
+2.  *Whether the annotated form `RETRIES: Final[int] = 3` is accepted.*
+    *The design takes the bare form the ported programs have; the type is the literal's.*
+3.  *Whether a function may hide a constant with a local.*
+    *The design refuses it, for the reason above.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2694,4 +2730,14 @@ EffectPython/
         *   Accept a comprehension over a list, a dict, a `range()`, and a list of instances, with and without a condition, as an argument to a `list[T]` slot; a condition that narrows an optional for the element; and a perform in the element under a clause that assigns a name the comprehension reads.
         *   Reject an element that is a list or `None`, a condition that is no `bool`, an iterable that is an `int`, the name read after the comprehension where nothing else bound it, and the result handed to a slot of another element type.
         *   The name keeps the value and the type it had before; an `append` to the list being walked lengthens the walk; a resized dict is a runtime error.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+26. **Milestone 26: module constants (1.26)**
+    *   *Designed 2026-11-12.*
+    *   *Implementation (planned):* the parser's module item and `ConstantDef`; the checker's table, the `Name` and method-call lookups, and the refusal in `rebind`; the interpreter's parent environment.
+        The change is to how a name is resolved, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   `build_plan.epy` has `RETRIES = 3` and `range(1, RETRIES + 1)`, with its recorded output unchanged.
+        *   Accept a constant read in a function, in a method, and in a clause, above and below its definition, passed to a slot of its type, and as the target of `join()`.
+        *   Reject an assignment, an augmented assignment, a `for`, an unpacking, an `except ... as`, a comprehension, and a parameter with a constant's name; a constant handed to a slot of another type; a constant defined twice or named as a function, a class, or a built-in.
+        *   `X = [1]`, `X = f()`, and `X = Y` at module level are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
