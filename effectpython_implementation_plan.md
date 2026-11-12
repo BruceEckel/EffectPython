@@ -1765,7 +1765,8 @@ CPython 3.14: the comprehension's name is its own, so an `x` bound before it kee
 One `for` and at most one `if` (open question 1); the dialect has no conditional expression, so an `if` after the iterable can only be the filter.
 
 **Meaning.**
-The iterable is what a `for` statement takes: a list, a dict for its keys, or a call to `range()`, which is recognized here as the statement's is, since `range()` has no value of its own.
+The iterable is what a `for` statement takes: a list, a dict for its keys, or a call to `range()`.
+The statement's `range()` is folded by the parser into a `ForRange` node; the comprehension has one node, so the checker and the interpreter each test its iterable for a `Call` to `range` before they would type or evaluate it, where the call is refused anywhere else.
 For each element the name is bound, the condition is evaluated if there is one, and where it is true the element expression's value joins the result, a new list.
 The name belongs to the comprehension: afterwards it holds what it held before, or is unbound again if it held nothing.
 
@@ -1779,6 +1780,7 @@ The name is put back before the merge, with its type, its place among the unboun
 
 **Runtime.**
 `eval_list_comp` walks a list by index against its live length, a dict by its keys with the size test, and a range by counting, as the three `for` forms do, and restores the name in a `finally`, so an exception that leaves the comprehension does not leave the element behind.
+`Environment` has no operation that unbinds a name; `answer_with_clause` saves and restores a clause's binding through `env.vars` directly (`had_name`, `w_old`, and a `del`), and a function's environment is flat, one `Environment()` per call, so the comprehension does the same.
 
 **Open questions (recommendations in italics).**
 
