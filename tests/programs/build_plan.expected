@@ -1,0 +1,19 @@
+exit 0
+fetch: attempt 1 failed
+fetch: ok at t=8
+compile: ok at t=18
+lint: attempt 1 failed
+lint: attempt 2 failed
+lint: attempt 3 failed
+test: attempt 1 failed
+test: attempt 2 failed
+test: ok at t=65
+package: skipped, needs lint
+docs: ok at t=66
+fetch    ok
+compile  ok
+lint     failed
+test     ok
+package  skipped
+docs     ok
+{'failed': 1, 'ok': 4, 'skipped': 1} in 66s

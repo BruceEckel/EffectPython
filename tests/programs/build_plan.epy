@@ -1,0 +1,125 @@
+# A third program with a job of its own: a build runs each task
+# after the tasks it needs, retries a flaky one up to three times
+# with a longer wait each time, and skips a task whose dependency did
+# not succeed. Written in Python first and then ported. The Python
+# version has a Task record with a list of the names it needs; here
+# the tasks are parallel lists and the dependencies two more, one
+# entry per edge. joined(), padded(), and power_of_two() stand in for
+# str.join(), the format spec {name:8}, and 2 ** n.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Clock(Effect):
+    def sleep(seconds: int) -> int: ...
+
+class Work(Effect):
+    def attempt(name: str, seconds: int) -> int / [Failed]: ...
+
+class Log(Effect):
+    def note(text: str) -> int: ...
+
+class Failed(Exception): ...
+
+class Timer(Handler[Clock]):
+    now: int = 0
+    def sleep(self, seconds: int) -> int:
+        self.now += seconds
+        return self.now
+
+class Worker(Handler[Work]):
+    failures: dict[str, int]
+    tries: dict[str, int] = {}
+    def attempt(self, name: str, seconds: int) -> int / [Clock, Failed]:
+        if name in self.tries:
+            self.tries[name] += 1
+        else:
+            self.tries[name] = 1
+        now = perform(Clock.sleep(seconds))
+        if name in self.failures:
+            if self.tries[name] <= self.failures[name]:
+                raise Failed(name)
+        return now
+
+class Report(Handler[Log]):
+    lines: list[str] = []
+    def note(self, text: str) -> int:
+        self.lines.append(text)
+        return len(self.lines)
+
+def power_of_two(n: int) -> int:
+    result = 1
+    for i in range(n):
+        result *= 2
+    return result
+
+def run(name: str, seconds: int) -> bool / [Work, Clock, Log]:
+    for n in range(1, 4):
+        try:
+            now = perform(Work.attempt(name, seconds))
+        except Failed:
+            perform(Log.note(f"{name}: attempt {n} failed"))
+            perform(Clock.sleep(power_of_two(n)))
+            continue
+        perform(Log.note(f"{name}: ok at t={now}"))
+        return True
+    return False
+
+def joined(words: list[str]) -> str:
+    text = ""
+    for word in words:
+        if text != "":
+            text += ", "
+        text += word
+    return text
+
+def padded(text: str, width: int) -> str:
+    while len(text) < width:
+        text += " "
+    return text
+
+def build(names: list[str], seconds: list[int], after: list[str],
+          needs: list[str]) -> dict[str, str] / [Work, Clock, Log]:
+    status = {}
+    for i in range(len(names)):
+        name = names[i]
+        blocked = []
+        for j in range(len(after)):
+            if after[j] == name:
+                need = needs[j]
+                if need not in status or status[need] != "ok":
+                    blocked.append(need)
+        if len(blocked) > 0:
+            status[name] = "skipped"
+            perform(Log.note(f"{name}: skipped, needs {joined(blocked)}"))
+        elif run(name, seconds[i]):
+            status[name] = "ok"
+        else:
+            status[name] = "failed"
+    return status
+
+def main() -> int / []:
+    names = ["fetch", "compile", "lint", "test", "package", "docs"]
+    seconds = [3, 10, 2, 7, 4, 1]
+    after = ["compile", "lint", "test", "package", "package"]
+    needs = ["fetch", "fetch", "compile", "test", "lint"]
+    timer = Timer()
+    report = Report()
+    with handle(timer, report):
+        with handle(Worker({"fetch": 1, "lint": 5, "test": 2})):
+            status = build(names, seconds, after, needs)
+    for line in report.lines:
+        print(line)
+    counts = {}
+    for name in status:
+        result = status[name]
+        print(padded(name, 8), result)
+        if result in counts:
+            counts[result] += 1
+        else:
+            counts[result] = 1
+    ordered = {}
+    for result in ["failed", "ok", "skipped"]:
+        if result in counts:
+            ordered[result] = counts[result]
+    print(ordered, f"in {timer.now}s")
+    return 0
