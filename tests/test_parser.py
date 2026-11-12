@@ -1041,10 +1041,9 @@ def test_an_fstring_carries_the_line_of_its_start():
     assert statement.value.right.lineno == 3
 
 @pytest.mark.parametrize('source, msg', [
-    ('f"{n:3}"', "line 2, column 9: unexpected ':'"),
     ('f"{n=}"', "line 2, column 9: unexpected '='"),
     ('f"{n +}"', "line 2, column 11: unexpected '}'"),
-], ids=['format-spec', 'self-documenting', 'incomplete-expr'])
+], ids=['self-documenting', 'incomplete-expr'])
 def test_fstring_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def main() -> int:\n    %s\n' % source)
@@ -1421,4 +1420,58 @@ def test_a_constructor_inside_handle_takes_no_keywords():
         parse('def main() -> int:\n    with handle(Fake(n=1)):\n'
               '        pass\n')
     assert info.value.msg == "line 2, column 23: unexpected '='"
+
+# --- Format specs (Milestone 24) ---------------------------------------------
+
+N = ('Name', 'n')
+
+@pytest.mark.parametrize('spec, parts', [
+    ('8', ('', '', False, 8, '')),
+    ('>8', ('', '>', False, 8, '')),
+    ('*<5', ('*', '<', False, 5, '')),
+    ('05', ('', '', True, 5, '')),
+    ('^6d', ('', '^', False, 6, 'd')),
+    ('0<5', ('0', '<', False, 5, '')),
+    ('<05', ('', '<', True, 5, '')),
+    ('s', ('', '', False, 0, 's')),
+    ('<<3', ('<', '<', False, 3, '')),
+], ids=['width', 'align', 'fill', 'zero', 'kind', 'zero-fill',
+        'align-then-zero', 'kind-alone', 'fill-is-an-alignment'])
+def test_a_format_spec_is_read_into_its_parts(spec, parts):
+    module = parse('def main() -> int:\n    x = f"a{n:%s}b"\n' % spec)
+    assert shape(module.functions[0].body[0]) == (
+        'Assign', 'x',
+        ('FString', ['a', 'b'], [('Formatted', N) + parts]))
+
+def test_a_colon_in_a_string_is_no_spec():
+    module = parse('def main() -> int:\n'
+                   '    x = f"{d[\'a:b\']:3}{d[\'c:d\']}"\n')
+    key = ('Index', ('Name', 'd'), ('StrLiteral', 'a:b'))
+    assert shape(module.functions[0].body[0]) == (
+        'Assign', 'x',
+        ('FString', ['', '', ''],
+         [('Formatted', key, '', '', False, 3, ''),
+          ('Index', ('Name', 'd'), ('StrLiteral', 'c:d'))]))
+
+SPEC_FORM = ('f-string: a format spec is [[fill]align][0][width]'
+             "[d or s], not '%s'")
+
+@pytest.mark.parametrize('field, msg', [
+    ('n:', 'line 2, column 13: ' + SPEC_FORM % ''),
+    ('n:8.2', 'line 2, column 13: ' + SPEC_FORM % '8.2'),
+    ('n:,', 'line 2, column 13: ' + SPEC_FORM % ','),
+    ('n:=5', 'line 2, column 13: ' + SPEC_FORM % '=5'),
+    ('n:5x', 'line 2, column 13: ' + SPEC_FORM % '5x'),
+    ('n:{w}', "line 2, column 14: f-string: nested '{' is not allowed"),
+    (':8', "line 2, column 11: f-string: valid expression required "
+     "before ':'"),
+    ('', "line 2, column 11: f-string: valid expression required "
+     "before '}'"),
+    ('n!r', "line 2, column 13: unexpected character '!'"),
+], ids=['empty', 'precision', 'comma', 'equals', 'other-letter',
+        'nested', 'no-expression', 'empty-field', 'conversion'])
+def test_format_spec_syntax_errors(field, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    x = f"{%s}"\n' % field)
+    assert info.value.msg == msg
 

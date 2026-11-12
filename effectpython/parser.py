@@ -1061,9 +1061,49 @@ def fstring(p):
 def fstring_text(p):
     return _FStringParts([_text(p[0])], [])
 
-@pg.production('fstring_parts : LBRACE expr RBRACE')
+@pg.production('fstring_parts : field')
 def fstring_field(p):
-    return _FStringParts(["", ""], [_expr(p[1])])
+    return _FStringParts(["", ""], [_expr(p[0])])
+
+@pg.production('field : LBRACE expr RBRACE')
+def plain_field(p):
+    return p[1]
+
+@pg.production('field : LBRACE expr FSTRING_SPEC RBRACE')
+def formatted_field(p):
+    """{expr:spec}, where the spec is [[fill]align][0][width][d or
+    s] (plan 1.24)."""
+    value = _expr(p[1])
+    spec = _text(p[2])
+    fill = ''
+    align = ''
+    i = 0
+    if len(spec) >= 2 and spec[1] in ALIGNMENTS:
+        fill = spec[0]
+        align = spec[1]
+        i = 2
+    elif len(spec) >= 1 and spec[0] in ALIGNMENTS:
+        align = spec[0]
+        i = 1
+    zero = i < len(spec) and spec[i] == '0'
+    if zero:
+        i += 1
+    width = 0
+    while i < len(spec) and spec[i].isdigit():
+        width = width * 10 + ord(spec[i]) - ord('0')
+        i += 1
+    kind = ''
+    if i < len(spec) and spec[i] in KINDS:
+        kind = spec[i]
+        i += 1
+    if i < len(spec) or len(spec) == 0:
+        raise _error(p[2], "f-string: a format spec is [[fill]align][0]"
+                     "[width][d or s], not '%s'" % spec)
+    return ast.Formatted(value, fill, align, zero, width, kind,
+                         value.lineno)
+
+ALIGNMENTS = ['<', '>', '^']
+KINDS = ['d', 's']
 
 @pg.production('fstring_parts : fstring_parts FSTRING_MIDDLE')
 def fstring_more_text(p):
@@ -1072,11 +1112,11 @@ def fstring_more_text(p):
     parts.literals[-1] = parts.literals[-1] + _text(p[1])
     return parts
 
-@pg.production('fstring_parts : fstring_parts LBRACE expr RBRACE')
+@pg.production('fstring_parts : fstring_parts field')
 def fstring_more_fields(p):
     parts = p[0]
     assert isinstance(parts, _FStringParts)
-    parts.exprs.append(_expr(p[2]))
+    parts.exprs.append(_expr(p[1]))
     parts.literals.append("")
     return parts
 

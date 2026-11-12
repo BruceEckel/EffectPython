@@ -1176,3 +1176,33 @@ def test_a_keyword_call_runtime_error(statement, msg):
                       POINT + SAY)
     assert info.value.msg == msg
 
+# --- Format specs (Milestone 24) ---------------------------------------------
+
+@pytest.mark.parametrize('field, text', [
+    ('s:8', 'ab      '), ('s:>8', '      ab'), ('s:^7', '  ab   '),
+    ('s:*<5', 'ab***'), ('n:5', '   42'), ('n:<5', '42   '),
+    ('n:05', '00042'), ('m:05', '-0042'), ('n:^6', '  42  '),
+    ('n:3d', ' 42'), ('s:4s', 'ab  '), ('n:1', '42'), ('s:1', 'ab'),
+    ('n:x>6', 'xxxx42'), ('m:06d', '-00042'), ('s:05', 'ab000'),
+    ('n:0<5', '42000'), ('n:<05', '42000'), ('s:^5', ' ab  '),
+    ('m:^6', ' -42  '), ('m:>5', '  -42'), ('n:d', '42'),
+])
+def test_a_format_spec_pads_as_cpython_does(field, text):
+    exit_code, lines = run_main_body(
+        '    s = "ab"\n    n = 42\n    m = 0 - 42\n'
+        '    print(f"[{%s}]")\n    return 0\n' % field)
+    assert (exit_code, lines) == (0, ['[%s]' % text])
+
+@pytest.mark.parametrize('value, spec, msg', [
+    ('True', '5', 'a format spec needs an int or str, not bool'),
+    ('[1]', '5', 'a format spec needs an int or str, not list'),
+    ('"a"', '5d', "Unknown format code 'd' for object of type 'str'"),
+    ('1', '5s', "Unknown format code 's' for object of type 'int'"),
+], ids=['bool', 'list', 'd-on-str', 's-on-int'])
+def test_a_format_spec_runtime_error(value, spec, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    if 1 == 1:\n        v = %s\n    else:\n'
+                      '        v = None\n    print(f"{v:%s}")\n'
+                      '    return 0\n' % (value, spec))
+    assert info.value.msg == msg
+

@@ -3,9 +3,8 @@
 # with a longer wait each time, and skips a task whose dependency did
 # not succeed. Written in Python first and then ported. Until
 # Milestone 19 the tasks were four parallel lists and a dict; Task is
-# now the data class the Python version has, and from Milestone 21
-# str.join(), dict.get(), and 2 ** n are Python's own. padded() still
-# stands in for the format spec {name:8}.
+# now the data class the Python version has, and str.join(),
+# dict.get(), 2 ** n, and the format spec {name:8} are Python's own.
 
 from dataclasses import dataclass
 from effectpython import Effect, Handler, perform, handle
@@ -61,11 +60,6 @@ def run(task: Task) -> bool / [Work, Clock, Log]:
         return True
     return False
 
-def padded(text: str, width: int) -> str:
-    while len(text) < width:
-        text += " "
-    return text
-
 def build(tasks: list[Task]) -> dict[str, str] / [Work, Clock, Log]:
     status = {}
     for task in tasks:
@@ -99,7 +93,7 @@ def main() -> int / []:
         print(line)
     counts = {}
     for name, result in status.items():
-        print(padded(name, 8), result)
+        print(f"{name:8} {result}")
         counts[result] = counts.get(result, 0) + 1
     ordered = {}
     for result in ["failed", "ok", "skipped"]:

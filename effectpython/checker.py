@@ -1434,12 +1434,33 @@ class Checker(object):
         """Each field is int, str, or bool, as str() takes, or unknown,
         and its effects count; the result is str."""
         for field in expr.exprs:
+            if isinstance(field, ast.Formatted):
+                self.check_formatted(field, scope, effects)
+                continue
             actual = self.type_of(field, scope, effects)
             if actual != UNKNOWN and actual not in SCALARS:
                 raise InvalidProgram(
                     expr.lineno, "an f-string field needs an int, str, or "
                     "bool, not %s" % actual)
         return "str"
+
+    def check_formatted(self, field, scope, effects):
+        """{expr:spec} (plan 1.24): an int or a str, since Python
+        formats a bool with a spec as the int it is, and the type
+        letter must be the value's, in CPython's words. A value of
+        unknown type is left to the runtime."""
+        actual = self.type_of(field.value, scope, effects)
+        if actual == UNKNOWN:
+            return
+        if actual != "int" and actual != "str":
+            raise InvalidProgram(
+                field.lineno, "a format spec needs an int or str, not %s"
+                % actual)
+        if ((field.kind == "d" and actual == "str")
+                or (field.kind == "s" and actual == "int")):
+            raise InvalidProgram(
+                field.lineno, "Unknown format code '%s' for object of "
+                "type '%s'" % (field.kind, actual))
 
     def check_dict_literal(self, expr, scope, effects):
         """{k: v, ...}: str keys and values of one scalar type; a value

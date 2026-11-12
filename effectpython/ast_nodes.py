@@ -470,6 +470,21 @@ class FString(Expr):
         self.literals = literals  # list of str
         self.exprs = exprs        # list of Expr
 
+class Formatted(Expr):
+    """expr:spec inside an f-string field (plan 1.24): the field's
+       expression with the parts of its format spec. It stands among
+       an FString's exprs and nowhere else."""
+    _attrs_ = ['value', 'fill', 'align', 'zero', 'width', 'kind']
+
+    def __init__(self, value, fill, align, zero, width, kind, lineno=0):
+        Node.__init__(self, lineno)
+        self.value = value  # Expr
+        self.fill = fill    # str: one character, or "" for none given
+        self.align = align  # str: "<", ">", "^", or "" for none given
+        self.zero = zero    # bool: the 0 before the width
+        self.width = width  # int: 0 for none given
+        self.kind = kind    # str: "d", "s", or "" for none given
+
 class DictLiteral(Expr):
     """{key: value, ...} or {} (plan 1.12); keys and values are
        parallel lists"""

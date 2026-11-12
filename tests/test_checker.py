@@ -2834,6 +2834,79 @@ def test_a_keyword_call_misuse_is_rejected(body, msg):
         check_source(DATA + body)
     assert info.value.msg == msg
 
+# --- Format specs (Milestone 24) ---------------------------------------------
+
+@pytest.mark.parametrize('body', [
+    'def f() -> int:\n'
+    '    s = "ab"\n'
+    '    n = 4\n'
+    '    print(f"{s:8}|{s:>8}|{n:05}|{n:^6d}|{s:*<5s}")\n'
+    '    return 0\n',
+    'def f() -> int:\n'
+    '    s = "ab"\n'
+    '    n = 4\n'
+    '    t = Task("a", [])\n'
+    '    print(f"{t.name:8}{t.seconds:3}")\n'
+    '    return 0\n',
+    'def f() -> int:\n'
+    '    if 1 == 1:\n'
+    '        v = 1\n'
+    '    else:\n'
+    '        v = "s"\n'
+    '    print(f"{v:5}")\n'
+    '    return 0\n',
+    'def f() -> int / [FileIO]:\n'
+    '    print(f"{perform(FileIO.read(\'a\')):8}")\n'
+    '    return 0\n',
+], ids=['specs', 'field', 'unknown', 'performs'])
+def test_a_format_spec_is_accepted(body):
+    check_source(DATA + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n'
+     '    s = "ab"\n'
+     '    n = 4\n'
+     '    b = True\n'
+     '    print(f"{b:5}")\n'
+     '    return 0\n',
+     'line 22: a format spec needs an int or str, not bool'),
+    ('def f() -> int:\n'
+     '    s = "ab"\n'
+     '    n = 4\n'
+     '    print(f"{[1]:5}")\n'
+     '    return 0\n',
+     'line 21: a format spec needs an int or str, not list[int]'),
+    ('def maybe() -> int | None:\n'
+     '    return None\n'
+     'def f() -> int:\n'
+     '    print(f"{maybe():5}")\n'
+     '    return 0\n',
+     'line 21: a format spec needs an int or str, not int | None'),
+    ('def f() -> int:\n'
+     '    s = "ab"\n'
+     '    n = 4\n'
+     '    print(f"{s:5d}")\n'
+     '    return 0\n',
+     "line 21: Unknown format code 'd' for object of type 'str'"),
+    ('def f() -> int:\n'
+     '    s = "ab"\n'
+     '    n = 4\n'
+     '    print(f"{n:5s}")\n'
+     '    return 0\n',
+     "line 21: Unknown format code 's' for object of type 'int'"),
+    ('def f() -> int:\n'
+     '    s = "ab"\n'
+     '    n = 4\n'
+     '    print(f"{nope:5}")\n'
+     '    return 0\n',
+     "line 21: name 'nope' is not defined"),
+], ids=['bool', 'list', 'optional', 'd-on-str', 's-on-int',
+        'undefined'])
+def test_a_format_spec_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(DATA + body)
+    assert info.value.msg == msg
+
 # --- dict[str, T] and in (Milestone 12) --------------------------------------
 
 TOTAL = ('def total(d: dict[str, int]) -> int:\n    n = 0\n'

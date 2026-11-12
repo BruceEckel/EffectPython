@@ -1696,7 +1696,7 @@ The grammar adds `keywords` and two call productions beside the positional one, 
 Every one of the runtime's keyword errors is unreachable through the checker, since the callee is known by name (`unreachable_keyword.epy`).
 `build_plan.epy` writes `failures=1`, and `data_class.epy` writes `pages=474` and skips `tags` with `read=False`.
 
-### 1.24 Format specs in f-strings (designed 2026-11-12)
+### 1.24 Format specs in f-strings (designed and implemented 2026-11-12, open questions settled as recommended)
 
 The build program's report prints `f"{name:8} {result}"` in Python, and the port has a `padded()` helper with a `while` loop in its place, the last helper that stands in for something Python has built in.
 1.13 left format specs out.
@@ -1736,6 +1736,15 @@ A `bool` with a spec is refused: Python would print `1` for `True`, and nobody w
 3.  *Whether a width may be a nested field, `{name:{width}}`.*
     *The design refuses it: a brace inside a field is already an error, and a helper with a loop is still there for a computed width.*
 
+All three were settled as recommended on 2026-11-12.
+
+**As implemented (2026-11-12).**
+Twenty-two specs, the probe's among them, give CPython's text in `tests/test_interpreter.py`, including `{s:05}` as `ab000`, `{n:<05}` as `42000`, and `{m:^6}` as ` -42  `.
+The messages are "f-string: a format spec is [[fill]align][0][width][d or s], not '8.2'", at the colon; "a format spec needs an int or str, not bool", from the checker and the runtime; and CPython's "Unknown format code 'd' for object of type 'str'".
+`{:8}` is "f-string: valid expression required before ':'", and `{n!r}` is "unexpected character '!'".
+`build_plan.epy` is 103 lines: `padded()` is gone and the report line is the Python version's, `f"{name:8} {result}"`.
+`runtime_format_spec.epy` reaches the runtime's refusal of a `bool` through a name of unknown type.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1754,6 +1763,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `**`, in a `power` layer between `term` and `postfix` that groups to the right and sits under a unary minus on its left, with `**=` among the augmented operators; and the method calls `<str>.join(<list>)` and `<dict>.get(<key>[, <default>])`, which need no grammar, since a method call was already an `OpCall` or a `MethodCall` (1.21; Milestone 21, 2026-11-12)
     *   `for <name>, <name> in <expr>.items(): <suite>`, a `ForItems` node holding the two names and the expression left of the dot; any other iterable after two names is refused (1.22; Milestone 22, 2026-11-12)
     *   keyword arguments `<name> = <expr>` after the positional arguments of a call by name, giving a `KeywordCall` node with every argument in the order written and the keywords' names; a call without them stays a `Call` (1.23; Milestone 23, 2026-11-12)
+    *   a format spec in an f-string field, `{<expr>:<spec>}` with the spec `[[fill]align][0][width][d or s]`: the lexer splits the field at its first colon outside a string literal and emits the spec as one `FSTRING_SPEC` token, and the parser reads it into a `Formatted` node around the field's expression (1.24; Milestone 24, 2026-11-12)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -1840,6 +1850,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   Methods and `**` (1.21; Milestone 21, 2026-11-12): `check_method` chooses by the method's name among `check_join` (a `str` target, a `list[str]` argument, a `str` result), `check_get` (a dict target, a `str` key, the value type with a default of that type, or its optional without one), and `check_append`, which also refuses any other method by the target's kind; a target of unknown type is noted for `join()` and `get()` and left to the runtime; and `**` joins the operators of `int`.
         *   `ForItems` (1.22; Milestone 22, 2026-11-12): `check_items_loop` types the target, which is a dict or unknown, binds the first name to `str` and the second to the dict's value type, and hands both to `check_loop_body`, which binds a second name at the start of each pass beside the first; afterwards each name is merged with the type it had before, as `check_loop` does for one.
         *   `KeywordCall` (1.23; Milestone 23, 2026-11-12): `check_keyword_call` takes the names and types from a function's parameters or a class's fields, finds each argument's slot (`keyword_slots`), types the arguments in the order written against their slots as `check_args` does, asks that every parameter, or every field without a default, is filled, and for a function adds the row and the perform point through `called`, which `check_call` shares.
+        *   `Formatted` (1.24; Milestone 24, 2026-11-12): `check_fstring` hands a field with a spec to `check_formatted`, which types the expression and holds it to `int` or `str` and to the spec's type letter; a value of unknown type passes to the runtime.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2601,7 +2612,10 @@ EffectPython/
         *   The arguments are evaluated in the order written.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 24. **Milestone 24: format specs in f-strings (1.24)**
-    *   *Designed 2026-11-12.*
+    *   *Designed and done 2026-11-12.* The three open questions of 1.24 are settled as recommended.
+    *   *Done 2026-11-12.*
+        `lexer.py` has `_spec_start` and the `FSTRING_SPEC` token; `parser.py` has the `field` nonterminal and `formatted_field`; `ast_nodes.py` has `Formatted`; `checker.py` has `check_formatted`; `interpreter.py` has `formatted`.
+        `build_plan.epy` has no helper left that stands in for a Python built-in.
     *   *Implementation (planned):* the lexer's split and `FSTRING_SPEC`; the parser's second field production, the spec reader, and `Formatted`; `check_fstring`; the interpreter's padding.
     *   *Acceptance test:*
         *   `build_plan.epy` loses `padded()` and writes `f"{name:8} {result}"`, with its recorded output unchanged.

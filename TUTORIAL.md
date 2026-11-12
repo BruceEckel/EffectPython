@@ -78,7 +78,8 @@ The `/ []` after `main`'s return type is an *effect row*, the list of effects th
 `main()` must have an empty one, and a function with no row written has an empty row too.
 And the annotations are required, not optional:
 every value has a type the checker knows, so the arithmetic here is `int`, a comparison and `small` are `bool`, and `repeat` builds a `str`.
-An f-string such as `f"{text} {word}"` builds a `str` from its fields, each an `int`, a `str`, or a `bool`, with no format specs;
+An f-string such as `f"{text} {word}"` builds a `str` from its fields, each an `int`, a `str`, or a `bool`;
+a field may carry a width and an alignment as Python's does, `f"{name:8}"`, `f"{count:>5}"`, or `f"{n:03}"`, on an `int` or a `str`;
 `"a" + str(n)` says the same thing the long way, and the two agree on every value.
 `2 ** n` is integer power, with Python's precedence (`-2 ** 2` is `-4`); a negative exponent is a runtime error, since its result would be a `float`.
 `times -= 1` is `times = times - 1`, and `+=`, `*=`, `//=`, `%=`, and `**=` abbreviate the other operators the same way;

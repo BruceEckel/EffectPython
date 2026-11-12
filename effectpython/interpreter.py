@@ -226,7 +226,8 @@ two instances met by the == of two lists
 (scalars_equal; runtime_instance_compare.epy), a field read on a
 value that is no instance (the AttrRead branch of eval_expr;
 runtime_field_unknown.epy; and field_owner for a FieldRead;
-runtime_field_expression.epy), a method on a value of the wrong kind (call_method;
+runtime_field_expression.epy), a format spec on a value that is no int or str (formatted;
+runtime_format_spec.epy), a method on a value of the wrong kind (call_method;
 runtime_method_unknown.epy), a negative exponent (power;
 runtime_negative_exponent.epy), a subscript, append, for, or in target
 (runtime_subscript_unknown.epy, runtime_append_unknown_target.epy,
@@ -1083,7 +1084,13 @@ class Interpreter(object):
         elif isinstance(expr, ast.FString):
             parts = [expr.literals[0]]
             for i in range(len(expr.exprs)):
-                w_field = self.eval_expr(expr.exprs[i], env)
+                field = expr.exprs[i]
+                if isinstance(field, ast.Formatted):
+                    parts.append(formatted(
+                        self.eval_expr(field.value, env), field))
+                    parts.append(expr.literals[i + 1])
+                    continue
+                w_field = self.eval_expr(field, env)
                 if not is_scalar(w_field):
                     raise EffectPythonRuntimeError(
                         "an f-string field needs an int, str, or bool, not "
@@ -1325,6 +1332,47 @@ def unpacked(w_value, count):
             "not enough values to unpack (expected %d, got %d)" %
             (count, given))
     return w_value.items_w
+
+def formatted(w_value, spec):
+    """The text of an f-string field with a format spec (plan
+    1.24): the value's text padded to the width, a str to the left
+    and an int to the right where no alignment is written. A 0
+    without an alignment pads an int between its sign and its
+    digits and a str on the right, as CPython does."""
+    is_int = isinstance(w_value, W_Int)
+    if not is_int and not isinstance(w_value, W_Str):
+        raise EffectPythonRuntimeError(
+            "a format spec needs an int or str, not %s" %
+            type_name(w_value))
+    if (spec.kind == "d") != is_int and spec.kind != "":
+        raise EffectPythonRuntimeError(
+            "Unknown format code '%s' for object of type '%s'" %
+            (spec.kind, type_name(w_value)))
+    text = w_value.str()
+    pad = spec.width - len(text)
+    if pad <= 0:
+        return text
+    fill = spec.fill
+    if fill == "":
+        fill = " "
+        if spec.zero:
+            fill = "0"
+    align = spec.align
+    if align == "":
+        if not is_int:
+            align = "<"
+        elif spec.zero:
+            if text.startswith("-"):
+                return "-" + fill * pad + text[1:]
+            return fill * pad + text
+        else:
+            align = ">"
+    if align == "<":
+        return text + fill * pad
+    if align == ">":
+        return fill * pad + text
+    left = pad // 2
+    return fill * left + text + fill * (pad - left)
 
 def arranged(names, args_w, keywords, what):
     """One value per name, or None where no argument filled it: the

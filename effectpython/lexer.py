@@ -11,7 +11,10 @@ in the same pass, so the keyword list lives in one place. An f-string
 comes out as one FSTRING token, which raw_tokens() expands into the
 sequence CPython 3.12 produces (PEP 701): FSTRING_START, then an
 FSTRING_MIDDLE for each run of literal text and LBRACE, the field's
-own tokens, RBRACE for each {expr} field, then FSTRING_END. The
+own tokens, RBRACE for each {expr} field, then FSTRING_END. A field
+with a format spec, {expr:spec}, has one FSTRING_SPEC token holding
+the spec's text between the expression's tokens and the RBRACE (plan
+1.24). The
 field's tokens come from the generated lexer run over the field's
 text, with each position shifted to the field's place in the source
 (plan 1.13). A field holds no brace and no quote of the enclosing
@@ -86,7 +89,8 @@ RULES = [
 ]
 
 RAW_ONLY = ['FSTRING']  # expanded before the parser sees the list
-FSTRING_TOKENS = ['FSTRING_START', 'FSTRING_MIDDLE', 'FSTRING_END']
+FSTRING_TOKENS = ['FSTRING_START', 'FSTRING_MIDDLE', 'FSTRING_END',
+                  'FSTRING_SPEC']
 
 TOKENS = (['INDENT', 'DEDENT'] + FSTRING_TOKENS
           + [name for name, pattern in RULES if name not in RAW_ONLY]
@@ -198,17 +202,42 @@ def _expand_fstring(tok):
             raise _fstring_error(tok, k, "nested '{' is not allowed")
         start = j + 1
         assert start >= 0
-        field = text[start:k]
+        colon = _spec_start(text, start, k)
+        field = text[start:colon]
         if field.strip() == '':
             raise _fstring_error(
-                tok, j, "valid expression required before '}'")
+                tok, j, "valid expression required before '%s'"
+                % text[colon])
         result.append(Token('LBRACE', '{', _shifted(pos, text, j)))
         result.extend(_lex(field, _shifted(pos, text, start)))
+        if colon < k:
+            after = colon + 1
+            assert after >= 0
+            result.append(Token('FSTRING_SPEC', text[after:k],
+                                _shifted(pos, text, colon)))
         result.append(Token('RBRACE', '}', _shifted(pos, text, k)))
         i = k + 1
     result.append(Token('FSTRING_END', text[end:],
                         _shifted(pos, text, end)))
     return result
+
+def _spec_start(text, start, end):
+    """The index of the colon that begins a field's format spec
+    (plan 1.24): the first one outside a string literal between
+    start and end, or end when the field has none."""
+    quote = ''
+    i = start
+    while i < end:
+        c = text[i]
+        if quote != '':
+            if c == quote:
+                quote = ''
+        elif c == '"' or c == "'":
+            quote = c
+        elif c == ':':
+            return i
+        i += 1
+    return end
 
 def _rename_keyword(tok):
     text = tok.getstr()

@@ -1,0 +1,14 @@
+# Runtime-only: an if leaves v with two types, so the checker lets the
+# format spec through; formatted() finds the bool, which Python would
+# print as 1.
+
+def main() -> int:
+    name = "ab"
+    count = 7
+    print(f"[{name:6}] [{name:>6}] [{count:03}] [{count:^5}]")
+    if 1 == 1:
+        v = True
+    else:
+        v = 1
+    print(f"{v:5}")
+    return 0
