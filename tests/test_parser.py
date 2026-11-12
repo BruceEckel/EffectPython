@@ -399,8 +399,8 @@ def test_line_numbers_of_handler_nodes():
      '        pass\n',
      "line 2, column 14: a handler method's first parameter must be self"),
     ('class Fake(Handler[FileIO]):\n    writes: int = 1 + 2\n',
-     'line 2, column 17: a field default must be an int or str literal, '
-     '[], or {}'),
+     'line 2, column 17: a field default must be an int, str, or bool '
+     'literal, [], or {}'),
     ('def main() -> int:\n    with open(f):\n        pass\n',
      'line 2, column 10: a with statement must use handle(...)'),
     ('class Fake(Handler[FileIO]):\n    def read(self) -> str: ...\n',
@@ -743,13 +743,10 @@ def test_list_handler_field_type():
 @pytest.mark.parametrize('source, msg', [
     ('def f(xs: set[int]) -> int:\n    return 0\n',
      "line 1, column 11: 'set' takes no type parameter; list[...] does"),
-    ('def f(xs: list[Foo]) -> int:\n    return 0\n',
-     'line 1, column 16: list[Foo] is not a type; the element type is '
-     'int, str, or bool'),
     ('def f(xs: list) -> int:\n    return 0\n',
      'line 1, column 11: list needs an element type: list[int], '
      'list[str], or list[bool]'),
-], ids=['other-generic', 'bad-element', 'bare-list'])
+], ids=['other-generic', 'bare-list'])
 def test_type_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
@@ -823,10 +820,7 @@ def test_unary_minus(source, expected):
      'of the dot'),
     ('class Fake(Handler[Log]):\n    entries: list[int] = [1]\n',
      "line 2, column 24: a list field's default must be []"),
-    ('class Fake(Handler[Log]):\n    count: int = True\n',
-     'line 2, column 16: a field default must be an int or str literal, '
-     '[], or {}'),
-], ids=['assign-call', 'attr-on-index', 'list-default', 'bool-default'])
+], ids=['assign-call', 'attr-on-index', 'list-default'])
 def test_list_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
@@ -1171,10 +1165,11 @@ def test_none_syntax_errors(source, msg):
     ('int | str', "line 1, column 16: unexpected 'str'"),
     ('None | int', "line 1, column 15: unexpected '|'"),
     ('list[int] | None', "line 1, column 20: unexpected '|'"),
-    ('E | None',
-     'line 1, column 10: E | None is not a type; the optional types '
-     'are int | None, str | None, bool | None, and tuple[...] | None'),
-], ids=['union', 'none-first', 'list', 'class'])
+    ('list | None',
+     'line 1, column 10: list | None is not a type; the optional types '
+     'are int | None, str | None, bool | None, tuple[...] | None, and '
+     'a data class | None'),
+], ids=['union', 'none-first', 'list', 'bare-list'])
 def test_optional_type_errors(written, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def f(x: %s) -> int:\n    return 0\n' % written)
@@ -1244,10 +1239,57 @@ def test_tuple_syntax_errors(source, msg):
      "tuple[...] does"),
     ('dict[str, int] | None',
      'line 1, column 10: dict[...] | None is not a type; the optional '
-     'types are int | None, str | None, bool | None, and '
-     'tuple[...] | None'),
+     'types are int | None, str | None, bool | None, '
+     'tuple[...] | None, and a data class | None'),
 ], ids=['bare', 'one', 'element', 'dict-three', 'dict-optional'])
 def test_tuple_type_errors(written, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def f(x: %s) -> int:\n    return 0\n' % written)
+    assert info.value.msg == msg
+
+# --- Data classes (Milestone 19) ---------------------------------------------
+
+TASK = ('@dataclass\nclass Task:\n    name: str\n'
+        '    needs: list[str] = []\n    done: bool = False\n')
+
+def test_a_data_class_is_a_datadef_of_fields():
+    module = parse('from dataclasses import dataclass\n' + TASK)
+    assert shape(module.records) == [
+        ('DataDef', 'Task',
+         [('FieldDef', 'name', 'str', None),
+          ('FieldDef', 'needs', 'list[str]', ('ListLiteral', [])),
+          ('FieldDef', 'done', 'bool', ('BoolLiteral', False))])]
+
+@pytest.mark.parametrize('written', [
+    'Task', 'list[Task]', 'dict[str, Task]', 'Task | None',
+])
+def test_a_type_may_name_a_class(written):
+    fn = parse('def f(x: %s) -> %s:\n    return x\n'
+               % (written, written)).functions[0]
+    assert (fn.param_types, fn.return_type) == ([written], written)
+
+@pytest.mark.parametrize('source, msg', [
+    ('class Task:\n    name: str\n',
+     'line 1, column 1: a class with no base needs @dataclass on the '
+     'line above it'),
+    ('@other\nclass Task:\n    name: str\n',
+     'line 1, column 2: the one decorator is @dataclass, above a class'),
+    ('@dataclass(frozen=True)\nclass Task:\n    name: str\n',
+     "line 1, column 11: unexpected '('"),
+    ('@dataclass\nclass Task:\n    name: str\n'
+     '    def run(self) -> int:\n        return 0\n',
+     'line 2, column 1: a data class has fields and no methods'),
+    ('@dataclass\nclass Task(Effect):\n    name: str\n',
+     "line 2, column 11: unexpected '('"),
+    ('@dataclass\ndef f() -> int:\n    return 0\n',
+     "line 2, column 1: unexpected 'def'"),
+    ('@dataclass\nclass Task:\n    pass\n',
+     "line 3, column 5: unexpected 'pass'"),
+    ('def main() -> int:\n    t = Task(name="a")\n',
+     "line 2, column 18: unexpected '='"),
+], ids=['no-decorator', 'other-decorator', 'decorator-arguments',
+        'method', 'base', 'function', 'no-fields', 'keyword-argument'])
+def test_data_class_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse(source)
     assert info.value.msg == msg

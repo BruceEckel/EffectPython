@@ -1,0 +1,38 @@
+# A data class (plan 1.19): fields under @dataclass, a constructor
+# that takes them in order, and the class name as a type, in a list,
+# a dict, and an optional. The tutorial's listing.
+
+from dataclasses import dataclass
+
+@dataclass
+class Book:
+    title: str
+    pages: int
+    tags: list[str] = []
+    read: bool = False
+
+def longest(books: list[Book]) -> Book | None:
+    best = None
+    for book in books:
+        if best is None or book.pages > best.pages:
+            best = book
+    return best
+
+def main() -> int / []:
+    books = [Book("Dune", 612, ["sf"]), Book("Emma", 474)]
+    books.append(Book("Ulysses", 730))
+    for book in books:
+        print(book.title, book.pages)
+    best = longest(books)
+    if best is None:
+        return 1
+    best.read = True
+    best.tags.append("long")
+    print(best)
+    by_title = {}
+    for book in books:
+        by_title[book.title] = book
+    emma = by_title["Emma"]
+    print(emma.title, emma.read)
+    print(longest([]))
+    return 0

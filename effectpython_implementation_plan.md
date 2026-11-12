@@ -1397,7 +1397,7 @@ A perform before the comparison does no harm, since the comparison is evaluated 
 
 All three were settled as recommended on 2026-11-11.
 
-### 1.19 Data classes (designed 2026-11-11)
+### 1.19 Data classes (designed and implemented 2026-11-11, open questions settled as recommended)
 
 Two of the three programs ported from Python lost a record on the way.
 The Python version of the build program has
@@ -1493,6 +1493,22 @@ The interpreter's `HandlerClass` reads its node's effect and methods, which a `D
 7.  *Whether `==` compares two instances field by field, as CPython does.*
     *The design refuses it, as it refuses `==` on a tuple and a dict: a program compares the field it means.*
 
+All seven were settled as recommended on 2026-11-11.
+
+**As implemented (2026-11-11).**
+One rule was added to the design, and it came from the tutorial's listing.
+`if best is None or book.pages > best.pages:` with `best = None` before the loop was refused on the first pass: 1.18 types the right operand of that `or` with `best` unknown, since the path cannot run under those types, and a field read on a name of unknown type was "'best' is not an except binding, a handler instance, or a data class instance".
+A field read on a name of unknown type is now left to the runtime, as a subscript on one is, and noted in `Checker.unknowns`; the pass after it has `Book | None`, narrowed to `Book`, and checks the field.
+The runtime's `AttrRead` reports a value that is neither an instance nor a clause binding in the checker's words (`runtime_field_unknown.epy`).
+A field store stays a typed slot: `p.seconds = 2` on a name of unknown type is refused.
+A field read on an optional has a message of its own, "'t' is Task | None; a field read needs a test against None first".
+The limit of open question 6 showed in the same listing, where `by_title["Emma"].pages` had to become two statements.
+The messages are "a class with no base needs @dataclass on the line above it", "the one decorator is @dataclass, above a class", "a data class has fields and no methods", "data class 'Task' is declared twice" (also where the name is an effect's or an exception class's), "list[Foo] is not a type; the element type is int, str, bool, or a data class", with "the value type" for a dict and the list of optional types for `Foo | None`, and "in compares int, str, or bool elements, not Task"; `xs == ys` on two lists of instances is "unsupported operand types for ==: list[Task] and list[Task]".
+`@dataclass(frozen=True)` is "unexpected '('", and a data class with no field is "unexpected 'pass'".
+The parser's two messages for a non-scalar element, "list[Foo] is not a type; the element type is int, str, or bool" and its dict form, are gone, since the checker now decides.
+`build_plan.epy` went from 125 lines to 130: the four parallel lists and the dict are gone, and the class declaration, its import, and a six-line list of constructor calls came in.
+`shop_orders.epy` has a `Line` data class in place of its three parallel lists.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1501,11 +1517,12 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
 
 ### 2.1 Minimal Grammar Subset (`rply`)
 `rply` provides a lexer generator and an LALR parser generator, and no Python grammar; the EffectPython grammar is written from scratch. Because implementing the full Python 3 grammar in `rply` is out of scope for a PoC, the lexer and parser will target a strict, well-defined subset of Python 3:
-*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`, and from 2026-11-11 `None` and `is`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`, and from 2026-11-08 `{` and `}`, and from 2026-11-11 `|`, in a type alone). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
+*   **Lexer tokens:** Indentation tracking (`INDENT`, `DEDENT`, `NEWLINE`, produced by a post-processor over `rply`'s token stream, since `rply` has no indentation support), identifiers (`NAME`), keywords (`class`, `def`, `return`, `pass`, `if`, `else`, `while`, `try`, `except`, `as`, `with`, `from`, `import`, and from 2026-11-06 `True`, `False`, and `finally`, and from 2026-11-07 `for`, `in`, `break`, and `continue`, and from 2026-11-08 `and`, `or`, `not`, and `elif`, and from 2026-11-11 `None` and `is`), literals (`INT`, `STRING`), the stub body `...` (`ELLIPSIS`), operators (`+`, `-`, `*`, `//`, `%`, `/`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `=`, `->`, `:`, `.`, `,`), and delimiters (`(`, `)`, `[`, `]`, and from 2026-11-08 `{` and `}`, and from 2026-11-11 `|`, in a type alone). Milestone 19 adds `@` (2026-11-11). Milestone 5 adds no tokens: `Handler`, `self`, and a field declaration use `NAME`, `:`, `=`, and the brackets. Milestone 6 adds the keyword `raise` (2026-11-06).
 *   **Statements:**
     *   `from <module> import <names>`, accepted and ignored whatever the module
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
     *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <int or str literal, or [] for a list field>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; Milestone 5, 2026-10-31)
+    *   `@dataclass` on the line above `class <Name>:` with field declarations as a handler class has them, a default being an `int`, `str`, or `bool` literal, `[]`, or `{}`, giving a `DataDef` node; a method in the body, another decorator name, and a class with no base and no decorator are refused by name (1.19; Milestone 19, 2026-11-11)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -1527,7 +1544,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `finally: <suite>` after the clauses of either `try` form, or after a `try` suite with no clauses, filling `Try.finalbody`; on effect clauses the `Handle` is wrapped in a clause-less `Try` (1.8; Milestone 8, 2026-11-06)
     *   `with handle(<args>): <suite>` outside `try`, a `Handle` node with no clauses, where every argument is a handler class constructor call `<Name>(<args>)` or a name bound to a handler instance; inside `try`, those arguments may mix with bare effect names (Milestone 5, 2026-10-31)
 *   **Expressions:** Integer/string literals, `True` and `False` (a `BoolLiteral`, added 2026-11-06, which `==` and `!=` compare), variable references, binary arithmetic (`+ - * // %`), comparisons (`== != < <= > >=`), parenthesized expressions, function calls (including `print(...)`), attribute calls (`Effect.op(...)`), attribute reads (`<name>.<param>` on an `eff` binding), `perform(<expr>)`, `<name>.resume(<expr>)`, and `<name>.throw(<expr>)` (1.7; Milestone 7, 2026-11-06). Milestone 5 extends attribute reads to `self.<field>` inside a handler method and `<name>.<field>` on a name bound to a handler instance, and adds the constructor call `<Name>(<args>)` of a handler class (Milestone 5, 2026-10-31). Milestone 9 adds list literals `[<exprs>]`, indexing `<expr>[<expr>]` (an `Index`), a method call on an expression `<expr>.<name>(<args>)` (a `MethodCall`; on a name it is the `OpCall` above, or a `Resume` or `Throw`), the built-in calls `len(...)`, `str(...)`, and `range(...)`, and a unary minus folded into the literal it negates or into `0 - x`; attribute reads, attribute calls, and indexing are postfix forms on an expression, with a name required on the left of an attribute read (1.9; Milestone 9, 2026-11-07).
-*   **Types:** a parameter, return, or field type is a name or `list[int]`, `list[str]`, or `list[bool]`, which the parser reads into one string (1.9; Milestone 9, 2026-11-07). `None` is a type, and `int | None`, `str | None`, and `bool | None` are the optional types, read into the strings `int | None` and so on (1.16; Milestone 16, 2026-11-11). `tuple[T1, T2, ...]` with two or more of the three scalars is a type, read into the string `tuple[int, str]`, and `tuple[...] | None` is its optional (1.17; Milestone 17, 2026-11-11).
+*   **Types:** a parameter, return, or field type is a name or `list[int]`, `list[str]`, or `list[bool]`, which the parser reads into one string (1.9; Milestone 9, 2026-11-07). `None` is a type, and `int | None`, `str | None`, and `bool | None` are the optional types, read into the strings `int | None` and so on (1.16; Milestone 16, 2026-11-11). `tuple[T1, T2, ...]` with two or more of the three scalars is a type, read into the string `tuple[int, str]`, and `tuple[...] | None` is its optional (1.17; Milestone 17, 2026-11-11). From Milestone 19 the name inside `list[...]`, `dict[str, ...]`, and `... | None` is any name, and the checker holds it to a scalar or a data class (1.19; 2026-11-11).
 
 Two constraints on the lexer, found when translating `experiments/rply_addition.py` (2026-10-28), which confirmed that `rply` 0.7.8 translates with this toolchain:
 
@@ -1587,6 +1604,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `NoneLiteral` and `IsNone` (1.16; Milestone 16, 2026-11-11): `None` has the type `None` and `x is None` the type `bool`, whatever its operand's type; `matches` lets `T`, `None`, and `T | None` stand where `T | None` is wanted, `merged` gives `T | None` for a scalar `T` and `None`, an optional is refused wherever a `T` is wanted, `require_scalar` keeps `None` and an optional out of a list or a dict, and `narrow` retypes the name of an `if` test `name is None` for each branch (`check_if`).
         *   `TupleLiteral` and `Unpack` (1.17; Milestone 17, 2026-11-11): a literal has the type `tuple[T1, T2, ...]` of its elements, which `require_scalar` keeps to the three scalars; `check_unpack` needs a tuple with as many elements as names and gives each name its element's type, or the unknown type for a value of unknown type; `check_index` gives `t[0]` its element's type for an `int` literal index (`tuple_element`); `require_mutable` refuses a store; and `merged` gives `tuple[...] | None` for a tuple type and `None` (`can_be_absent`).
         *   Narrowing through a test (1.18; Milestone 18, 2026-11-11): `facts(test, when)` lists what a test says about its names and `None` where it is true and where it is false, through `IsNone`, `Not`, and a `BoolOp` on the side where both operands are known; `narrow` applies a list, for the branches of an `if` (`check_if`), the body of a `while` (`check_loop_body`), and the right operand of a `BoolOp` (`type_of`), after which `widen_back` restores the names and marks one a perform point widened as `spoiled` for the statement.
+        *   Data classes (1.19; Milestone 19, 2026-11-11): Pass 1 records each `DataDef` as a `HandlerInfo` with no effect and the kind "data class", in `Checker.records`, and `collect_field` serves both kinds of class, with `bool` a field type; `info_of` answers for a handler class or a data class where a constructor call, a field read, or a field store asks, and `check_handle` reads the handler classes alone; `require_type` holds each `list[T]`, `dict[str, T]`, and `T | None` written in a signature or a field to a scalar or a data class; `can_be_absent` accepts a class name, so `merged` gives `Task | None`; `comparable` refuses `==` on two lists of instances and `in` on one; and a field read on a name of unknown type is left to the runtime and noted.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -1648,7 +1666,7 @@ class W_EffectPayload(W_Root):
         self.args_w = args_w  # list[W_Root]
 
 class W_HandlerInstance(W_Root):
-    """An instance of a handler class (1.5), held by the frame for the body's duration"""
+    """An instance of a handler class (1.5), held by the frame for the body's duration, or of a data class (1.19; Milestone 19)"""
     def __init__(self, class_name, field_names, fields_w):
         self.class_name = class_name
         self.field_names = field_names  # list[str], in declaration order
@@ -2284,7 +2302,12 @@ EffectPython/
         *   Reject `take(x)` in the body of `if x is None or y is None:`, after `if x is not None and x > 0:` over a `return`, after `while x is not None:`, and in the body of `if x is not None and perform(A.get()) > 0:` where a clause assigns `x = None`.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 19. **Milestone 19: data classes (1.19)**
-    *   *Designed 2026-11-11.*
+    *   *Designed and done 2026-11-11.* The seven open questions of 1.19 are settled as recommended.
+    *   *Done 2026-11-11.*
+        `lexer.py` has the `@` token; `parser.py` reads the declaration into a `DataDef` (`ast_nodes.py`) through the field productions of a handler class, takes a `bool` default, and accepts any name inside `list[...]`, `dict[str, ...]`, and `... | None`.
+        `checker.py` has `Checker.records`, `info_of`, `require_type`, `comparable`, the class case of `can_be_absent`, a `kind` on `HandlerInfo` for the messages, and the field read on an unknown type.
+        `interpreter.py` builds a `HandlerClass` from a name, an effect, fields, and methods, keeps the data classes in `Interpreter.records`, raises from `scalars_equal` for two instances, and names the class in `type_name`.
+        `build_plan.epy` has its `Task` data class and `shop_orders.epy` a `Line`, with their recorded outputs unchanged; `data_class.epy` is the tutorial's listing, in a subsection at the end of section 9; `runtime_instance_compare.epy` and `runtime_field_unknown.epy` reach the two runtime errors.
     *   *Implementation (planned), in the order of Milestone 5:* the lexer's `@` and the parser with tests (the declaration, the three type forms with any name); the checker with tests (the declaration and its fields, the written types held to the rule, `can_be_absent`, the two refused comparisons, `bool` fields); then the runtime (the data classes beside the handler classes, `scalars_equal`, `type_name`).
         The change is to `merged`, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*

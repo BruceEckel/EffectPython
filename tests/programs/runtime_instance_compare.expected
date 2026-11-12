@@ -1,0 +1,2 @@
+exit 1
+error: unsupported operand types for ==: Point and Point

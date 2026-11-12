@@ -1,2 +1,2 @@
 exit 1
-error: line 15: 'eff' is not an except binding or a handler instance
+error: line 15: 'eff' is not an except binding, a handler instance, or a data class instance

@@ -34,8 +34,8 @@ class name is the type of the name an except clause binds;
 1.9) and "dict[str, int]", "dict[str, str]", and "dict[str, bool]"
 the dict types (plan 1.12), the element or value being one of the
 three scalars, so a list literal, an append, a dict literal, or a
-store refuses a list or dict value. A field is int, str, a list type,
-or a dict type (plan 1.5, 1.9, 1.12). The empty string stands for a
+store refuses a list or dict value. A field is int, str, bool, a list
+type, or a dict type (plan 1.5, 1.9, 1.12, 1.19). The empty string stands for a
 type the checker cannot determine, and an unknown type matches
 anything (matches). "list" is the type of [] alone and "dict" of {}
 alone: each matches any type of its kind, and a literal with an
@@ -122,6 +122,23 @@ operator, len(), for, in, str(), or f-string field, is no element of
 a list, a dict, or a tuple (require_scalar) and no field, and takes
 no store (require_mutable); print() takes it. A value of unknown
 type may be unpacked, and the runtime counts its elements.
+
+A data class is a class of fields under @dataclass, recorded as a
+handler class is, with no effect (plan 1.19). Its name is the type
+of its instances, so a constructor call, a field read, and a field
+store go through the rules a handler class has (info_of), and
+handle() refuses an instance, since check_handle reads the handler
+classes alone. An instance may be a list element or a dict value, and
+C | None is the optional of a class C (can_be_absent), which narrowing
+serves with no rule of its own. The parser takes any name in list[T],
+dict[str, T], and T | None, and Pass 1 holds each such type written
+in a signature or a field to a scalar or a data class
+(require_type). An instance has no operator, so == on two lists of
+them and in on one are refused where the element type is known
+(comparable). A field read on a name of unknown type is left to the
+runtime, as a subscript is, so the first pass over a loop may read
+best.pages where `best = None` stands before it; a field store is a
+typed slot and needs the class.
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -238,7 +255,6 @@ UNKNOWN = ""
 LIST = "list"
 DICT = "dict"
 SCALARS = ["int", "str", "bool"]
-FIELD_TYPES = ["int", "str"]
 OPERATORS = {
     "int": ["+", "-", "*", "//", "%", "<", "<=", ">", ">=", "==", "!="],
     "str": ["+", "==", "!="],
@@ -271,9 +287,15 @@ def elements_of(type_name):
     return type_name[6:end].split(", ")
 
 def can_be_absent(type_name):
-    """Whether T | None is a type: a scalar or a tuple (plan 1.16,
-    1.17)."""
-    return type_name in SCALARS or is_tuple(type_name)
+    """Whether T | None is a type: a scalar (plan 1.16), a tuple
+    (plan 1.17), or a class name (plan 1.19), which is any type that
+    is no list, dict, optional, None, or unknown. A handler class
+    and an exception class qualify beside a data class: no table is
+    at hand here to tell them apart, and the type is true of the
+    value."""
+    return not (type_name == UNKNOWN or type_name == NONE
+                or is_optional(type_name) or is_list(type_name)
+                or is_dict(type_name))
 
 def is_empty(type_name):
     """Whether the type is that of a [] or a {}, which the first store
@@ -553,12 +575,14 @@ class HandlerInfo(object):
     """A handler class as Pass 1 records it: its fields in declaration
     order, with the count that a constructor call must supply, and the
     union of its methods' effect rows, each less the exception classes
-    its operation's row lets the handler throw."""
+    its operation's row lets the handler throw. A data class (plan
+    1.19) is recorded the same way, with no effect and no rows, and
+    kind is the word a message calls the class by."""
 
-    def __init__(self, node):
-        self.node = node
-        self.name = node.name
-        self.effect = node.effect
+    def __init__(self, name, effect, kind):
+        self.name = name
+        self.effect = effect
+        self.kind = kind       # "handler class" or "data class"
         self.field_names = []  # in declaration order
         self.field_types = {}  # field name -> type name
         self.required = 0      # leading fields without a default
@@ -571,6 +595,7 @@ class Checker(object):
         self.effects = {}     # effect name -> {op name -> OperationDef}
         self.exceptions = {}  # exception class name -> ExceptionDef
         self.handlers = {}    # handler class name -> HandlerInfo
+        self.records = {}     # data class name -> HandlerInfo
         self.functions = {}   # function name -> FunctionDef
         self.loop_depth = 0   # loops around the statement being checked
         self.boundaries = []  # types at each statement boundary, per suite
@@ -637,14 +662,28 @@ class Checker(object):
                     exc.lineno,
                     "exception class '%s' is declared twice" % exc.name)
             self.exceptions[exc.name] = exc
+        for record in self.module.records:
+            if (record.name in self.records or record.name in self.effects
+                    or record.name in self.exceptions):
+                raise InvalidProgram(
+                    record.lineno,
+                    "data class '%s' is declared twice" % record.name)
+            self.records[record.name] = HandlerInfo(record.name, "",
+                                                    "data class")
+        for record in self.module.records:
+            for field in record.fields:
+                self.collect_field(self.records[record.name], field)
         for effect in self.module.effects:
             for op in effect.operations:
                 self.check_operation_row(effect, op)
+                self.require_types(op.param_types, op.return_type,
+                                   op.lineno)
         for handler in self.module.handlers:
             self.collect_handler(handler)
         for fn in self.module.functions:
             if (fn.name in self.functions or fn.name in self.handlers
-                    or fn.name in self.exceptions):
+                    or fn.name in self.exceptions
+                    or fn.name in self.records):
                 raise InvalidProgram(
                     fn.lineno,
                     "function '%s' is defined twice" % fn.name)
@@ -654,14 +693,51 @@ class Checker(object):
             self.functions[fn.name] = fn
             for name in fn.effect_row:
                 self.require_row_name(name, fn.lineno)
+            self.require_types(fn.param_types, fn.return_type, fn.lineno)
+
+    def require_types(self, param_types, return_type, lineno):
+        for type_name in param_types:
+            self.require_type(type_name, lineno)
+        self.require_type(return_type, lineno)
+
+    def require_type(self, type_name, lineno):
+        """A written list[T], dict[str, T], or T | None names int,
+        str, bool, or a data class for T: the parser takes any name
+        there, since it cannot tell a data class from a misspelling
+        (plan 1.19). A tuple's optional was held to scalars by the
+        parser, and a plain name is left as written."""
+        if is_optional(type_name):
+            inner = base_of(type_name)
+            if is_tuple(inner):
+                return
+            what = "the optional types are int | None, str | None, " \
+                   "bool | None, tuple[...] | None, and a data class | None"
+        elif type_name.startswith("list["):
+            inner = element_of(type_name)
+            what = "the element type is int, str, bool, or a data class"
+        elif type_name.startswith("dict["):
+            inner = value_of(type_name)
+            what = "the value type is int, str, bool, or a data class"
+        else:
+            return
+        if inner not in SCALARS and inner not in self.records:
+            raise InvalidProgram(
+                lineno, "%s is not a type; %s" % (type_name, what))
+
+    def info_of(self, type_name):
+        """The handler class or data class a type names, or None."""
+        if type_name in self.handlers:
+            return self.handlers[type_name]
+        return self.records.get(type_name, None)
 
     def collect_handler(self, handler):
         if (handler.name in self.handlers or handler.name in self.effects
-                or handler.name in self.exceptions):
+                or handler.name in self.exceptions
+                or handler.name in self.records):
             raise InvalidProgram(
                 handler.lineno,
                 "handler class '%s' is declared twice" % handler.name)
-        info = HandlerInfo(handler)
+        info = HandlerInfo(handler.name, handler.effect, "handler class")
         ops = self.require_effect(handler.effect, handler.lineno)
         for field in handler.fields:
             self.collect_field(info, field)
@@ -693,14 +769,15 @@ class Checker(object):
     def collect_field(self, info, field):
         if field.name in info.field_types:
             raise InvalidProgram(
-                field.lineno, "field '%s' is declared twice in handler "
-                "class '%s'" % (field.name, info.name))
-        if (field.type not in FIELD_TYPES and not is_list(field.type)
+                field.lineno, "field '%s' is declared twice in %s '%s'"
+                % (field.name, info.kind, info.name))
+        if (field.type not in SCALARS and not is_list(field.type)
                 and not is_dict(field.type)):
             raise InvalidProgram(
-                field.lineno, "field '%s' of handler class '%s' must be "
-                "int, str, list[...], or dict[str, ...], not %s" %
-                (field.name, info.name, field.type))
+                field.lineno, "field '%s' of %s '%s' must be int, str, "
+                "bool, list[...], or dict[str, ...], not %s" %
+                (field.name, info.kind, info.name, field.type))
+        self.require_type(field.type, field.lineno)
         if field.default is None:
             if info.required < len(info.field_names):
                 raise InvalidProgram(
@@ -711,6 +788,8 @@ class Checker(object):
             self.check_default(field, "int")
         elif isinstance(field.default, ast.StrLiteral):
             self.check_default(field, "str")
+        elif isinstance(field.default, ast.BoolLiteral):
+            self.check_default(field, "bool")
         elif isinstance(field.default, ast.DictLiteral):
             self.check_default(field, DICT)
         else:
@@ -878,13 +957,13 @@ class Checker(object):
             actual = self.type_of(stmt.value, scope, effects)
             self.require_known(
                 stmt.value, actual, expected,
-                "field '%s' of handler class '%s' must be %s" %
-                (stmt.attr, info.name, expected), stmt.lineno)
+                "field '%s' of %s '%s' must be %s" %
+                (stmt.attr, info.kind, info.name, expected), stmt.lineno)
             if not matches(actual, expected):
                 raise InvalidProgram(
-                    stmt.lineno, "field '%s' of handler class '%s' is %s; "
-                    "cannot assign %s" % (stmt.attr, info.name, expected,
-                                          actual))
+                    stmt.lineno, "field '%s' of %s '%s' is %s; "
+                    "cannot assign %s" % (stmt.attr, info.kind, info.name,
+                                          expected, actual))
             self.hand_over(stmt.value, expected, scope)
         elif isinstance(stmt, ast.IndexAssign):
             self.check_index_assign(stmt, scope, effects)
@@ -1303,6 +1382,10 @@ class Checker(object):
             raise InvalidProgram(
                 expr.lineno, "%s holds %s; cannot test %s" %
                 (describe(expr.right, right), expected, left))
+        if is_list(right) and not comparable(expected):
+            raise InvalidProgram(
+                expr.lineno, "in compares int, str, or bool elements, "
+                "not %s" % expected)
         return "bool"
 
     def check_append(self, target, method, args, lineno, scope, effects):
@@ -1780,9 +1863,19 @@ class Checker(object):
                 expr.lineno, "%s.%s(...) must be the argument of perform()"
                 % (expr.effect, expr.op))
         elif isinstance(expr, ast.AttrRead):
-            if scope.types.get(expr.target, UNKNOWN) in self.handlers:
-                info = self.handlers[scope.types[expr.target]]
+            info = self.info_of(scope.types.get(expr.target, UNKNOWN))
+            if info is not None:
                 return self.require_field(info, expr.attr, expr.lineno)
+            self.require_bound(scope, expr.target, expr.lineno)
+            held = scope.types[expr.target]
+            if expr.target not in scope.bindings:
+                if held == UNKNOWN:
+                    self._note_unknown(INDEX, expr.lineno)
+                    return UNKNOWN
+                if is_optional(held):
+                    raise InvalidProgram(
+                        expr.lineno, "'%s' is %s; a field read needs a "
+                        "test against None first" % (expr.target, held))
             binding = self.require_binding(scope, expr.target,
                                            expr.lineno)
             op = binding.op
@@ -1844,7 +1937,10 @@ class Checker(object):
             self._note_unknown(OPERANDS, lineno)
             return
         if is_list(left) and is_list(right):
-            if (matches(left, right) or matches(right, left)) and op in OPERATORS[LIST]:
+            if ((matches(left, right) or matches(right, left))
+                    and op in OPERATORS[LIST]
+                    and comparable(element_of(left))
+                    and comparable(element_of(right))):
                 return
         elif left == right and op in OPERATORS.get(left, []):
             return
@@ -1863,7 +1959,7 @@ class Checker(object):
             raise InvalidProgram(
                 expr.lineno, "range() is allowed only as the iterable of "
                 "a for statement")
-        if expr.func in self.handlers:
+        if self.info_of(expr.func) is not None:
             return self.check_construction(expr, scope, effects)
         if expr.func in self.exceptions:
             return self.check_exception_call(expr, scope, effects)
@@ -1905,7 +2001,8 @@ class Checker(object):
     def check_construction(self, expr, scope, effects):
         """A handler class's constructor takes its fields in order; the
         trailing ones with defaults may be left out."""
-        info = self.handlers[expr.func]
+        info = self.info_of(expr.func)
+        assert info is not None
         given = len(expr.args)
         total = len(info.field_names)
         if given < info.required or given > total:
@@ -1994,23 +2091,24 @@ class Checker(object):
         self.require_bound(scope, name, lineno)
         if name not in scope.bindings:
             raise InvalidProgram(
-                lineno, "'%s' is not an except binding or a handler "
-                "instance" % name)
+                lineno, "'%s' is not an except binding, a handler "
+                "instance, or a data class instance" % name)
         return scope.bindings[name]
 
     def require_instance(self, scope, name, lineno):
         self.require_bound(scope, name, lineno)
-        type_name = scope.types.get(name, UNKNOWN)
-        if type_name not in self.handlers:
+        info = self.info_of(scope.types.get(name, UNKNOWN))
+        if info is None:
             raise InvalidProgram(
-                lineno, "'%s' is not a handler instance" % name)
-        return self.handlers[type_name]
+                lineno, "'%s' is not a handler instance or a data class "
+                "instance" % name)
+        return info
 
     def require_field(self, info, attr, lineno):
         if attr not in info.field_types:
             raise InvalidProgram(
-                lineno, "handler class '%s' has no field '%s'" %
-                (info.name, attr))
+                lineno, "%s '%s' has no field '%s'" %
+                (info.kind, info.name, attr))
         return info.field_types[attr]
 
     # --- pass 3 ------------------------------------------------------------
@@ -2034,6 +2132,12 @@ def describe(target, type_name):
     if isinstance(target, ast.AttrRead):
         return "'%s.%s'" % (target.target, target.attr)
     return "a value of type %s" % type_name
+
+def comparable(element):
+    """Whether == and in may compare a list's elements: scalars, or
+    a type the checker does not know, which the runtime judges. An
+    instance has no ==, so a list of them has none (plan 1.19)."""
+    return element == UNKNOWN or element in SCALARS
 
 def kind_of(type_name):
     """'list', 'tuple', or 'dict' for a container type, in a message

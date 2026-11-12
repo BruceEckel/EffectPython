@@ -157,7 +157,7 @@ def test_field_assignment_and_read():
     ('    f = Fake("t")\n    return f.nope\n',
      "handler class 'Fake' has no field 'nope'"),
     ('    x = 1\n    x.count = 2\n    return 0\n',
-     "'x' is not a handler instance"),
+     "'x' is not a handler instance or a data class instance"),
 ])
 def test_instance_runtime_errors(body, msg):
     with pytest.raises(EffectPythonRuntimeError) as info:
@@ -971,4 +971,57 @@ def test_a_tuple_misuse_is_a_runtime_error(statement, msg):
     with pytest.raises(EffectPythonRuntimeError) as info:
         run_main_body(EITHER_TUPLE + '    ' + statement
                       + '\n    return 0\n')
+    assert info.value.msg == msg
+
+# --- Data classes (Milestone 19) ---------------------------------------------
+
+POINT = ('@dataclass\nclass Point:\n    x: int\n    tag: str = "p"\n'
+         '    seen: list[int] = []\n    on: bool = False\n')
+EITHER_POINT = ('    if 1 == 1:\n        p = Point(1)\n'
+                '    else:\n        p = 1\n')
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print(Point(1), Point(2, "q", [3], True))',
+     ["Point(x=1, tag='p', seen=[], on=False) "
+      "Point(x=2, tag='q', seen=[3], on=True)"]),
+    ('p = Point(1)\n    p.x += 2\n    p.on = True\n    print(p.x, p.on)',
+     ['3 True']),
+    ('p = Point(1)\n    q = p\n    q.x = 5\n    print(p.x)', ['5']),
+    ('p = Point(1)\n    q = Point(2)\n    p.seen.append(7)\n'
+     '    print(p.seen, q.seen)', ['[7] []']),
+    ('ps = [Point(1), Point(2)]\n    for p in ps:\n        p.x *= 10\n'
+     '    print(ps)',
+     ["[Point(x=10, tag='p', seen=[], on=False), "
+      "Point(x=20, tag='p', seen=[], on=False)]"]),
+    ('d = {"a": Point(1)}\n    p = d["a"]\n    print(p.tag, d)',
+     ["p {'a': Point(x=1, tag='p', seen=[], on=False)}"]),
+    ('p = Point(1)\n    print(p is None, [p] == [1])',
+     ['False False']),
+], ids=['repr', 'store', 'shared', 'default-per-instance', 'list',
+        'dict', 'against-a-scalar'])
+def test_a_data_class_instance(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n', POINT)
+    assert (exit_code, lines) == (0, printed)
+
+@pytest.mark.parametrize('statement, msg', [
+    ('print(p == p)',
+     'unsupported operand types for ==: Point and Point'),
+    ('print([p] == [p])',
+     'unsupported operand types for ==: Point and Point'),
+    ('print(p in [p])',
+     'unsupported operand types for ==: Point and Point'),
+    ('print(p.nope)', "data class 'Point' has no field 'nope'"),
+    ('p = Point()', "Point() needs a value for field 'x'"),
+    ('p = Point(1, "a", [], True, 2)',
+     'Point() takes 4 arguments (5 given)'),
+    ('p = 1\n    print(p.x)',
+     "'p' is not an except binding, a handler instance, or a data "
+     'class instance'),
+], ids=['equality', 'list-equality', 'in', 'no-field', 'too-few',
+        'too-many', 'field-of-int'])
+def test_a_data_class_misuse_is_a_runtime_error(statement, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body(EITHER_POINT + '    ' + statement
+                      + '\n    return 0\n', POINT)
     assert info.value.msg == msg

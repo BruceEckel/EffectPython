@@ -15,7 +15,8 @@ perform and handle are names in Python, not keywords, so the grammar
 reads them as calls and the productions check them: perform(X) must
 wrap an Effect.op(...) call and becomes a Perform node, with handle(...)
 must name handle, and a class must derive from Effect, Handler[...],
-or Exception.
+or Exception, or have no base and @dataclass on the line above it,
+which gives a DataDef of field declarations (plan 1.19).
 An attribute call name.resume(x) becomes a Resume node and
 name.throw(x) a Throw node; any other name.op(...) call is an
 OpCall, whether the name is an effect or a list (plan 1.9). A
@@ -33,10 +34,11 @@ assignment, and the target's shape picks Assign, AttrAssign, or
 IndexAssign. An augmented assignment x += v builds the Assign or
 AttrAssign it means, over a BinOp, for a name or a field target;
 a subscript target gives an IndexAugAssign, since its target and
-index are evaluated once (plan 1.14). A type is a name or list[name] whose element is int,
-str, or bool; a bare list is rejected, since it needs an element
-type, and int | None, str | None, or bool | None is an optional
-type, with None on the right alone; None is a type and an
+index are evaluated once (plan 1.14). A type is a name, list[name],
+dict[str, name], or name | None with None on the right alone; a bare
+list is rejected, since it needs an element type, and the checker
+holds the name inside to int, str, bool, or a data class, which the
+grammar cannot tell from a misspelling (plan 1.19). None is a type and an
 expression, and is takes None alone on its right, giving an IsNone
 (plan 1.16). tuple[T1, T2, ...] with two or more of the three scalars
 is a type, and so is its optional; (a, b) with two or more elements
@@ -70,9 +72,10 @@ from effectpython.errors import InvalidSyntax
 from effectpython.lexer import TOKENS, TokenList, tokenize
 
 class _ModuleParts(BaseBox):
-    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions']
+    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions', 'records']
 
     def __init__(self):
+        self.records = []     # list of DataDef
         self.functions = []   # list of FunctionDef
         self.effects = []     # list of EffectDef
         self.handlers = []    # list of HandlerDef
@@ -195,7 +198,7 @@ def module(p):
     parts = p[0]
     assert isinstance(parts, _ModuleParts)
     return ast.Module(parts.functions, parts.effects, parts.handlers,
-                      parts.exceptions, 1)
+                      parts.exceptions, parts.records, 1)
 
 @pg.production('items :')
 def items_empty(p):
@@ -214,6 +217,8 @@ def items_more(p):
         parts.handlers.append(item)
     elif isinstance(item, ast.ExceptionDef):
         parts.exceptions.append(item)
+    elif isinstance(item, ast.DataDef):
+        parts.records.append(item)
     else:
         assert isinstance(item, _Skipped)
     return parts
@@ -222,6 +227,7 @@ def items_more(p):
 @pg.production('item : effectdef')
 @pg.production('item : handlerdef')
 @pg.production('item : exceptiondef')
+@pg.production('item : datadef')
 def item(p):
     return p[0]
 
@@ -279,6 +285,28 @@ def handlerdef(p):
     return ast.HandlerDef(name, _text(p[5]), items.fields, items.methods,
                           _line(p[0]))
 
+@pg.production('datadef : AT NAME NEWLINE CLASS NAME COLON NEWLINE INDENT'
+               ' handler_items DEDENT')
+def datadef(p):
+    """@dataclass over a class with no base (plan 1.19). The body
+    shares the field productions of a handler class, so a method
+    parses and is refused here."""
+    items = p[8]
+    assert isinstance(items, _HandlerItems)
+    if _text(p[1]) != 'dataclass':
+        raise _error(p[1], DECORATOR_ERROR)
+    if len(items.methods) > 0:
+        raise _error(p[3], "a data class has fields and no methods")
+    return ast.DataDef(_text(p[4]), items.fields, _line(p[3]))
+
+@pg.production('datadef : CLASS NAME COLON NEWLINE INDENT handler_items'
+               ' DEDENT')
+def undecorated_class(p):
+    raise _error(p[0], "a class with no base needs @dataclass on the "
+                 "line above it")
+
+DECORATOR_ERROR = "the one decorator is @dataclass, above a class"
+
 @pg.production('handler_items : handler_item')
 def handler_items_one(p):
     return _add_handler_item(_HandlerItems(), p[0])
@@ -311,9 +339,10 @@ def field_with_default(p):
         if len(default.keys) > 0:
             raise _error(p[3], "a dict field's default must be {}")
     elif not (isinstance(default, ast.IntLiteral)
-              or isinstance(default, ast.StrLiteral)):
-        raise _error(p[3], "a field default must be an int or str "
-                     "literal, [], or {}")
+              or isinstance(default, ast.StrLiteral)
+              or isinstance(default, ast.BoolLiteral)):
+        raise _error(p[3], "a field default must be an int, str, or "
+                     "bool literal, [], or {}")
     return ast.FieldDef(_text(p[0]), _type(p[2]), default, _line(p[0]))
 
 @pg.production('handler_item : DEF NAME LPAREN method_params RPAREN ARROW'
@@ -409,11 +438,7 @@ def list_type(p):
     if _text(p[0]) != 'list':
         raise _error(p[0], "'%s' takes no type parameter; list[...] does"
                      % _text(p[0]))
-    element = _text(p[2])
-    if element not in LIST_ELEMENTS:
-        raise _error(p[2], "list[%s] is not a type; the element type is "
-                     "int, str, or bool" % element)
-    return _Type('list[%s]' % element)
+    return _Type('list[%s]' % _text(p[2]))
 
 @pg.production('type : NAME LBRACKET NAME COMMA NAME RBRACKET')
 def dict_type(p):
@@ -424,11 +449,7 @@ def dict_type(p):
                      "dict[str, ...] does" % _text(p[0]))
     if _text(p[2]) != 'str':
         raise _error(p[2], "dict keys are str, not %s" % _text(p[2]))
-    value = _text(p[4])
-    if value not in LIST_ELEMENTS:
-        raise _error(p[4], "dict[str, %s] is not a type; the value type "
-                     "is int, str, or bool" % value)
-    return _Type('dict[str, %s]' % value)
+    return _Type('dict[str, %s]' % _text(p[4]))
 
 @pg.production('type : NAME LBRACKET NAME COMMA NAME COMMA name_list '
                'RBRACKET')
@@ -468,7 +489,8 @@ def _optional_tuple(token, elements):
     return '%s | None' % _tuple_type(token, elements)
 
 OPTIONALS = ("%s | None is not a type; the optional types are "
-             "int | None, str | None, bool | None, and tuple[...] | None")
+             "int | None, str | None, bool | None, tuple[...] | None, and "
+             "a data class | None")
 
 @pg.production('type : NONE')
 def none_type(p):
@@ -477,7 +499,7 @@ def none_type(p):
 @pg.production('type : NAME PIPE NONE')
 def optional_type(p):
     base = _text(p[0])
-    if base not in LIST_ELEMENTS:
+    if base in ['list', 'dict', 'tuple']:
         raise _error(p[0], OPTIONALS % base)
     return _Type('%s | None' % base)
 

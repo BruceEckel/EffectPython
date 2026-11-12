@@ -155,10 +155,12 @@ class W_EffBinding(W_Root):
         return "<binding for %s>" % self.payload.repr()
 
 class W_HandlerInstance(W_Root):
-    """An instance of a handler class (plan 1.5): the class's name, its
-    field names in declaration order, and one value per field. A
-    handle(...) statement holds it in the frame for the whole body, so
-    a field keeps its value from one perform to the next."""
+    """An instance of a handler class (plan 1.5) or of a data class
+    (plan 1.19): the class's name, its field names in declaration
+    order, and one value per field. A handle(...) statement holds a
+    handler's in the frame for the whole body, so a field keeps its
+    value from one perform to the next. str() gives the form
+    Python's dataclass repr has."""
     _attrs_ = ['class_name', 'field_names', 'fields_w']
 
     def __init__(self, class_name, field_names, fields_w):

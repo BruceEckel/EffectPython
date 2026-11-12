@@ -80,6 +80,7 @@ RULES = [
     ('LBRACE', r'\{'),
     ('RBRACE', r'\}'),
     ('PIPE', r'\|'),
+    ('AT', r'@'),
 ]
 
 RAW_ONLY = ['FSTRING']  # expanded before the parser sees the list

@@ -1,0 +1,7 @@
+exit 0
+Dune 612
+Emma 474
+Ulysses 730
+Book(title='Ulysses', pages=730, tags=['long'], read=True)
+Emma False
+None

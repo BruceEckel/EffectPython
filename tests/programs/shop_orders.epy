@@ -3,9 +3,17 @@
 # OutOfStock into the body), an unknown item rejects the whole order
 # (the handler raises UnknownItem, which abandons it), and ten units
 # earn a discount. Written in Python first and then ported, to see
-# which constructs the dialect made it give up.
+# which constructs the dialect made it give up. Until Milestone 19
+# the order lines were three parallel lists; Line is now a data class.
 
+from dataclasses import dataclass
 from effectpython import Effect, Handler, perform, handle
+
+@dataclass
+class Line:
+    customer: str
+    item: str
+    qty: int
 
 class Stock(Effect):
     def reserve(item: str, qty: int) -> int / [OutOfStock]: ...
@@ -53,15 +61,15 @@ def discount(subtotal: int, units: int) -> int:
         return subtotal // 10
     return 0
 
-def fill(customer: str, owners: list[str], items: list[str],
-         qtys: list[int]) -> int / [Stock, Pricing, Log]:
+def fill(customer: str,
+         lines: list[Line]) -> int / [Stock, Pricing, Log]:
     subtotal = 0
     units = 0
-    for i in range(len(owners)):
-        if owners[i] != customer:
+    for line in lines:
+        if line.customer != customer:
             continue
-        item = items[i]
-        qty = qtys[i]
+        item = line.item
+        qty = line.qty
         try:
             left = perform(Stock.reserve(item, qty))
         except OutOfStock as e:
@@ -79,11 +87,11 @@ def fill(customer: str, owners: list[str], items: list[str],
     return subtotal - off
 
 def main() -> int / []:
-    owners = ["alice", "alice", "bob", "bob", "bob", "carol", "carol",
-              "dave", "dave"]
-    items = ["widget", "gizmo", "gadget", "widget", "gizmo", "gizmo",
-             "sprocket", "gadget", "widget"]
-    qtys = [2, 10, 3, 3, 1, 4, 1, 1, 2]
+    lines = [Line("alice", "widget", 2), Line("alice", "gizmo", 10),
+             Line("bob", "gadget", 3), Line("bob", "widget", 3),
+             Line("bob", "gizmo", 1), Line("carol", "gizmo", 4),
+             Line("carol", "sprocket", 1), Line("dave", "gadget", 1),
+             Line("dave", "widget", 2)]
     prices = {"widget": 250, "gadget": 1200, "gizmo": 75}
     warehouse = Warehouse({"widget": 6, "gadget": 2, "gizmo": 40})
     journal = Journal()
@@ -92,7 +100,7 @@ def main() -> int / []:
         try:
             try:
                 with handle(warehouse, journal, Pricing):
-                    total = fill(customer, owners, items, qtys)
+                    total = fill(customer, lines)
                     print(customer, "owes", money(total))
                     revenue += total
             except Pricing.price as eff:

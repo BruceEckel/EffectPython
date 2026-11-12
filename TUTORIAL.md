@@ -490,7 +490,7 @@ def main() -> int / []:
 2
 ```
 
-A field is declared like a dataclass field, `int` or `str` with an optional default, or a list or dict as section 9 shows,
+A field is declared like a dataclass field, `int`, `str`, or `bool` with an optional default, or a list or dict as section 9 shows,
 and the constructor takes the fields positionally.
 The instance outlives the block, so `main()` reads `fake.writes` after it.
 A `handle()` may mix handler instances with bare effect names, which still need their clauses:
@@ -761,7 +761,7 @@ If the body does not catch the thrown exception, it ends the body and surfaces a
 
 ## 9. Lists and the `for` loop
 
-A list holds values of one type, written `list[int]`, `list[str]`, or `list[bool]` wherever a type is written,
+A list holds values of one type, written `list[int]`, `list[str]`, or `list[bool]` wherever a type is written (or `list[Book]` for a data class, at the end of this section),
 and a `for` walks a list or a `range()`.
 The handler below collects what it is told into a list field,
 and the function it serves builds a list to return:
@@ -1009,6 +1009,67 @@ The elements are `int`, `str`, or `bool`.
 A tuple cannot be changed, compared, measured with `len()`, or walked with `for`, and it cannot be a list element, a dict value, or a handler class field.
 `tests/programs/settings_none.epy` returns a setting's value with the name of the layer it came from as one pair from one operation.
 
+### A class of fields
+
+A data class is a class of typed fields under `@dataclass`, and its name is the type of its instances:
+
+```python tests/programs/data_class.epy
+from dataclasses import dataclass
+
+@dataclass
+class Book:
+    title: str
+    pages: int
+    tags: list[str] = []
+    read: bool = False
+
+def longest(books: list[Book]) -> Book | None:
+    best = None
+    for book in books:
+        if best is None or book.pages > best.pages:
+            best = book
+    return best
+
+def main() -> int / []:
+    books = [Book("Dune", 612, ["sf"]), Book("Emma", 474)]
+    books.append(Book("Ulysses", 730))
+    for book in books:
+        print(book.title, book.pages)
+    best = longest(books)
+    if best is None:
+        return 1
+    best.read = True
+    best.tags.append("long")
+    print(best)
+    by_title = {}
+    for book in books:
+        by_title[book.title] = book
+    emma = by_title["Emma"]
+    print(emma.title, emma.read)
+    print(longest([]))
+    return 0
+```
+
+```text tests/programs/data_class.expected
+Dune 612
+Emma 474
+Ulysses 730
+Book(title='Ulysses', pages=730, tags=['long'], read=True)
+Emma False
+None
+```
+
+The constructor takes the fields in the order they are declared, and a field with a default may be left out, so `Book("Emma", 474)` has no tags and is unread.
+A field is `int`, `str`, `bool`, a list, or a dict; `[]` and `{}` as defaults give each instance a container of its own.
+`book.title` reads a field and `best.read = True` stores one, each on a name: `books[0].title` is a syntax error, so the element goes into a name first, as `emma` does.
+`print` shows an instance as Python's dataclass does.
+
+The class name works where a type is written, on its own and inside `list[Book]`, `dict[str, Book]`, and `Book | None`.
+`longest` returns `Book | None`, and `best` starts as `None` and becomes a `Book` in the loop; the test `best is None or book.pages > best.pages` reads `best.pages` only where `best` is a `Book`, and `main` rules `None` out before it stores a field.
+
+A data class has no methods, its constructor takes no keyword arguments, and an instance has no `==`, so a program compares the fields it means.
+`tests/programs/build_plan.epy` keeps its tasks in a `list[Task]`, each with the list of names it needs, and `tests/programs/shop_orders.epy` its order lines in a `list[Line]`.
+
 ## 10. What the checker catches
 
 Everything in this list is rejected before the program runs, with a line number:
@@ -1024,6 +1085,7 @@ Everything in this list is rejected before the program runs, with a line number:
 - a list literal whose elements differ in type, an index or `append` on a value that is not a list, an `append` or an indexed assignment of the wrong element type, a `for` over a value that is neither a list nor `range()`, and `range()` anywhere else;
 - a `return` whose value is not the declared return type, and a function that can reach its end without returning one;
 - an optional (`str | None`) used as its type before an `is None` test has narrowed it, and `None` or an optional as a list element or a dict value;
+- a `list[T]`, `dict[str, T]`, or `T | None` whose `T` is not `int`, `str`, `bool`, or a data class, a field the class does not declare, a field store of the wrong type, and `==` or `in` on instances;
 - an unpacking whose names differ in number from the tuple's elements or whose value is no tuple, a tuple index that is not an `int` literal or is out of range, and a store into a tuple;
 - `Exception` in a row, since a row names the classes that can reach a caller.
 

@@ -39,7 +39,12 @@ keeps insertion order; exec_for_dict walks its keys and stops with
 Python's error when a store changes the size, and k in d and x in xs
 are one In node (contains). A field default is evaluated per
 construction, so the [] or {} a field declares gives each instance a
-container of its own.
+container of its own. A data class (plan 1.19) is a HandlerClass with
+no methods and an empty effect, kept in a table of its own
+(Interpreter.records), and its instances are W_HandlerInstance
+values: a constructor call, a field read, and a field store take the
+paths a handler instance takes, and install() asks for the class
+among the handlers before it reads an effect from it.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -208,7 +213,10 @@ runtime_break_carried.epy, runtime_try_midsuite.epy,
 runtime_clause_before_resume.epy, runtime_finally_after_return.epy,
 runtime_finally_midsuite.epy, runtime_finally_break.epy,
 runtime_finally_unwind.epy, and runtime_clause_after_assign.epy),
-a subscript, append, for, or in target
+two instances met by the == of two lists
+(scalars_equal; runtime_instance_compare.epy), a field read on a
+value that is no instance (the AttrRead branch of eval_expr;
+runtime_field_unknown.epy), a subscript, append, for, or in target
 (runtime_subscript_unknown.epy, runtime_append_unknown_target.epy,
 and runtime_for_unknown.epy), a len() or str() argument or an
 f-string field (runtime_len_unknown.epy, runtime_str_unknown.epy,
@@ -303,18 +311,19 @@ STATUS_COMPLETED = 2
 class HandlerClass(object):
     """A handler class as the interpreter records it: the fields with
     their defaults, the method for each operation, and the effect its
-    instances fulfill (plan 1.5)."""
+    instances fulfill (plan 1.5). A data class is recorded the same
+    way, with no methods and an empty effect (plan 1.19)."""
 
-    def __init__(self, node):
-        self.name = node.name
-        self.effect = node.effect
+    def __init__(self, name, effect, fields, methods):
+        self.name = name
+        self.effect = effect
         self.field_names = []
         self.defaults = []  # the default Expr or None, parallel to it
-        for field in node.fields:
+        for field in fields:
             self.field_names.append(field.name)
             self.defaults.append(field.default)
         self.methods = {}
-        for method in node.methods:
+        for method in methods:
             self.methods[method.name] = method
 
     def construct(self, args_w):
@@ -337,10 +346,12 @@ class HandlerClass(object):
         return W_HandlerInstance(self.name, self.field_names, fields_w)
 
 def default_value(expr):
-    """The value of a field default: an int or str literal, or the []
-    the parser allows for a list field."""
+    """The value of a field default: an int, str, or bool literal,
+    or the [] or {} the parser allows for a list or dict field."""
     if isinstance(expr, ast.IntLiteral):
         return W_Int(expr.value)
+    elif isinstance(expr, ast.BoolLiteral):
+        return wrap_bool(expr.value)
     elif isinstance(expr, ast.StrLiteral):
         return W_Str(expr.value)
     if isinstance(expr, ast.DictLiteral):
@@ -424,7 +435,13 @@ class Interpreter(object):
                 self.operations[effect.name + "." + op.name] = op
         self.handlers = {}
         for handler in module.handlers:
-            self.handlers[handler.name] = HandlerClass(handler)
+            self.handlers[handler.name] = HandlerClass(
+                handler.name, handler.effect, handler.fields,
+                handler.methods)
+        self.records = {}
+        for record in module.records:
+            self.records[record.name] = HandlerClass(
+                record.name, "", record.fields, [])
         self.exceptions = {}
         for exc in module.exceptions:
             self.exceptions[exc.name] = exc
@@ -674,7 +691,8 @@ class Interpreter(object):
                 self.handler_stack.pop()
 
     def install(self, instances_w, w_instance):
-        if not isinstance(w_instance, W_HandlerInstance):
+        if (not isinstance(w_instance, W_HandlerInstance)
+                or w_instance.class_name not in self.handlers):
             raise EffectPythonRuntimeError(
                 "handle() argument is not a handler instance")
         handler = self.handlers[w_instance.class_name]
@@ -880,14 +898,18 @@ class Interpreter(object):
         if isinstance(w_target, W_HandlerInstance):
             return w_target
         raise EffectPythonRuntimeError(
-            "'%s' is not a handler instance" % target)
+            "'%s' is not a handler instance or a data class instance"
+            % target)
 
     def field_index(self, w_instance, attr):
         i = w_instance.index_of(attr)
         if i < 0:
+            kind = "handler class"
+            if w_instance.class_name in self.records:
+                kind = "data class"
             raise EffectPythonRuntimeError(
-                "handler class '%s' has no field '%s'" %
-                (w_instance.class_name, attr))
+                "%s '%s' has no field '%s'" %
+                (kind, w_instance.class_name, attr))
         return i
 
     # --- expressions -------------------------------------------------------
@@ -999,7 +1021,11 @@ class Interpreter(object):
             if isinstance(w_target, W_HandlerInstance):
                 i = self.field_index(w_target, expr.attr)
                 return w_target.fields_w[i]
-            return self.read_attr(self.binding(env, expr.target), expr.attr)
+            if not isinstance(w_target, W_EffBinding):
+                raise EffectPythonRuntimeError(
+                    "'%s' is not an except binding, a handler instance, "
+                    "or a data class instance" % expr.target)
+            return self.read_attr(w_target, expr.attr)
         elif isinstance(expr, ast.Resume):
             w_value = self.eval_expr(expr.value, env)
             return self.resume(self.binding(env, expr.target), w_value)
@@ -1026,6 +1052,8 @@ class Interpreter(object):
             return self.call_function(self.functions[name], args_w)
         if name in self.handlers:
             return self.handlers[name].construct(args_w)
+        if name in self.records:
+            return self.records[name].construct(args_w)
         if name in self.exceptions:
             return self.construct_exception(name, args_w)
         raise EffectPythonRuntimeError("name '%s' is not defined" % name)
@@ -1233,6 +1261,11 @@ def scalars_equal(w_a, w_b):
         return w_a.val == w_b.val
     if isinstance(w_a, W_Bool) and isinstance(w_b, W_Bool):
         return w_a.val == w_b.val
+    if (isinstance(w_a, W_HandlerInstance)
+            and isinstance(w_b, W_HandlerInstance)):
+        raise EffectPythonRuntimeError(
+            "unsupported operand types for ==: %s and %s" %
+            (w_a.class_name, w_b.class_name))
     return False
 
 def tail_switch(clause):
@@ -1291,6 +1324,8 @@ def type_name(w):
     elif isinstance(w, W_Bool):
         return "bool"
     elif isinstance(w, W_Exception):
+        return w.class_name
+    elif isinstance(w, W_HandlerInstance):
         return w.class_name
     elif isinstance(w, W_List):
         return "list"

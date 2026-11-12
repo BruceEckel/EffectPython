@@ -1,19 +1,27 @@
 # A third program with a job of its own: a build runs each task
 # after the tasks it needs, retries a flaky one up to three times
 # with a longer wait each time, and skips a task whose dependency did
-# not succeed. Written in Python first and then ported. The Python
-# version has a Task record with a list of the names it needs; here
-# the tasks are parallel lists and the dependencies two more, one
-# entry per edge. joined(), padded(), and power_of_two() stand in for
-# str.join(), the format spec {name:8}, and 2 ** n.
+# not succeed. Written in Python first and then ported. Until
+# Milestone 19 the tasks were four parallel lists and a dict; Task is
+# now the data class the Python version has. joined(), padded(), and
+# power_of_two() stand in for str.join(), the format spec {name:8},
+# and 2 ** n.
 
+from dataclasses import dataclass
 from effectpython import Effect, Handler, perform, handle
+
+@dataclass
+class Task:
+    name: str
+    needs: list[str]
+    seconds: int
+    failures: int = 0
 
 class Clock(Effect):
     def sleep(seconds: int) -> int: ...
 
 class Work(Effect):
-    def attempt(name: str, seconds: int) -> int / [Failed]: ...
+    def attempt(task: Task) -> int / [Failed]: ...
 
 class Log(Effect):
     def note(text: str) -> int: ...
@@ -27,17 +35,15 @@ class Timer(Handler[Clock]):
         return self.now
 
 class Worker(Handler[Work]):
-    failures: dict[str, int]
     tries: dict[str, int] = {}
-    def attempt(self, name: str, seconds: int) -> int / [Clock, Failed]:
-        if name in self.tries:
-            self.tries[name] += 1
+    def attempt(self, task: Task) -> int / [Clock, Failed]:
+        if task.name in self.tries:
+            self.tries[task.name] += 1
         else:
-            self.tries[name] = 1
-        now = perform(Clock.sleep(seconds))
-        if name in self.failures:
-            if self.tries[name] <= self.failures[name]:
-                raise Failed(name)
+            self.tries[task.name] = 1
+        now = perform(Clock.sleep(task.seconds))
+        if self.tries[task.name] <= task.failures:
+            raise Failed(task.name)
         return now
 
 class Report(Handler[Log]):
@@ -52,15 +58,15 @@ def power_of_two(n: int) -> int:
         result *= 2
     return result
 
-def run(name: str, seconds: int) -> bool / [Work, Clock, Log]:
+def run(task: Task) -> bool / [Work, Clock, Log]:
     for n in range(1, 4):
         try:
-            now = perform(Work.attempt(name, seconds))
+            now = perform(Work.attempt(task))
         except Failed:
-            perform(Log.note(f"{name}: attempt {n} failed"))
+            perform(Log.note(f"{task.name}: attempt {n} failed"))
             perform(Clock.sleep(power_of_two(n)))
             continue
-        perform(Log.note(f"{name}: ok at t={now}"))
+        perform(Log.note(f"{task.name}: ok at t={now}"))
         return True
     return False
 
@@ -77,36 +83,35 @@ def padded(text: str, width: int) -> str:
         text += " "
     return text
 
-def build(names: list[str], seconds: list[int], after: list[str],
-          needs: list[str]) -> dict[str, str] / [Work, Clock, Log]:
+def build(tasks: list[Task]) -> dict[str, str] / [Work, Clock, Log]:
     status = {}
-    for i in range(len(names)):
-        name = names[i]
+    for task in tasks:
         blocked = []
-        for j in range(len(after)):
-            if after[j] == name:
-                need = needs[j]
-                if need not in status or status[need] != "ok":
-                    blocked.append(need)
+        for need in task.needs:
+            if need not in status or status[need] != "ok":
+                blocked.append(need)
         if len(blocked) > 0:
-            status[name] = "skipped"
-            perform(Log.note(f"{name}: skipped, needs {joined(blocked)}"))
-        elif run(name, seconds[i]):
-            status[name] = "ok"
+            status[task.name] = "skipped"
+            perform(Log.note(
+                f"{task.name}: skipped, needs {joined(blocked)}"))
+        elif run(task):
+            status[task.name] = "ok"
         else:
-            status[name] = "failed"
+            status[task.name] = "failed"
     return status
 
 def main() -> int / []:
-    names = ["fetch", "compile", "lint", "test", "package", "docs"]
-    seconds = [3, 10, 2, 7, 4, 1]
-    after = ["compile", "lint", "test", "package", "package"]
-    needs = ["fetch", "fetch", "compile", "test", "lint"]
+    tasks = [Task("fetch", [], 3, 1),
+             Task("compile", ["fetch"], 10),
+             Task("lint", ["fetch"], 2, 5),
+             Task("test", ["compile"], 7, 2),
+             Task("package", ["test", "lint"], 4),
+             Task("docs", [], 1)]
     timer = Timer()
     report = Report()
     with handle(timer, report):
-        with handle(Worker({"fetch": 1, "lint": 5, "test": 2})):
-            status = build(names, seconds, after, needs)
+        with handle(Worker()):
+            status = build(tasks)
     for line in report.lines:
         print(line)
     counts = {}

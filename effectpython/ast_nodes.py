@@ -23,14 +23,17 @@ class Node(BaseBox):
 
 class Module(Node):
     """A whole .epy file: its effect declarations, its handler classes,
-       its exception classes, and its function definitions, each in
-       source order. The import line (from effectpython import ...)
-       leaves no node."""
-    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions']
+       its exception classes, its data classes, and its function
+       definitions, each in source order. The import line (from
+       effectpython import ...) leaves no node."""
+    _attrs_ = ['functions', 'effects', 'handlers', 'exceptions', 'records']
 
     def __init__(self, functions, effects=None, handlers=None,
-                 exceptions=None, lineno=0):
+                 exceptions=None, records=None, lineno=0):
         Node.__init__(self, lineno)
+        if records is None:
+            records = []
+        self.records = records        # list of DataDef
         if effects is None:
             effects = []
         if handlers is None:
@@ -80,15 +83,26 @@ class HandlerDef(Node):
         self.fields = fields    # list of FieldDef
         self.methods = methods  # list of FunctionDef
 
+class DataDef(Node):
+    """@dataclass over class Name: followed by field declarations
+       (plan 1.19). The class name is the type of its instances."""
+    _attrs_ = ['name', 'fields']
+
+    def __init__(self, name, fields, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name      # str
+        self.fields = fields  # list of FieldDef
+
 class FieldDef(Node):
-    """name: Type [= literal]   inside a handler class"""
+    """name: Type [= literal]   inside a handler class or a data
+       class"""
     _attrs_ = ['name', 'type', 'default']
 
     def __init__(self, name, type, default, lineno=0):
         Node.__init__(self, lineno)
         self.name = name        # str
         self.type = type        # str
-        self.default = default  # IntLiteral, StrLiteral, [], or None
+        self.default = default  # a literal, [], {}, or None
 
 class ExceptionDef(Node):
     """class Name(Exception): ...   (plan 1.6). The body is ... or pass;

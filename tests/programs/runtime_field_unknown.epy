@@ -1,0 +1,16 @@
+# Runtime-only: an if leaves p with two types, so the checker lets the
+# field read through; the AttrRead branch of eval_expr finds the int.
+
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+
+def main() -> int:
+    if 1 == 1:
+        p = 1
+    else:
+        p = Point(1)
+    print(p.x)
+    return 0

@@ -201,7 +201,8 @@ MAIN = 'def main() -> int / []:\n    return 0\n'
      'line 13: e.resume() for FileIO.read must pass str, not int'),
     ('def f() -> int:\n    x = 1\n    return x.resume(1)\n' + MAIN,
      InvalidProgram,
-     "line 10: 'x' is not an except binding or a handler instance"),
+     "line 10: 'x' is not an except binding, a handler "
+     "instance, or a data class instance"),
     ('def f() -> int:\n    return x.path\n' + MAIN,
      InvalidProgram, "line 9: name 'x' is not defined"),
     ('def f() -> int:\n    return x + 1\n' + MAIN,
@@ -392,7 +393,7 @@ FAKE = ('class Fake(Handler[FileIO]):\n'
     ('class Fake(Handler[FileIO]):\n    items: Nope\n' + FAKE[29:] + MAIN,
      InvalidProgram,
      "line 9: field 'items' of handler class 'Fake' must be int, str, "
-     "list[...], or dict[str, ...], not Nope"),
+     "bool, list[...], or dict[str, ...], not Nope"),
     ('class Fake(Handler[FileIO]):\n    writes: int = "x"\n' + FAKE[29:]
      + MAIN, InvalidProgram,
      "line 9: default of field 'writes' must be int, not str"),
@@ -438,7 +439,8 @@ FAKE = ('class Fake(Handler[FileIO]):\n'
      "line 11: field 'a' of handler class 'Fake' is int; cannot assign "
      "str"),
     ('def f() -> int:\n    x = 1\n    x.a = 1\n    return 0\n' + MAIN,
-     InvalidProgram, "line 10: 'x' is not a handler instance"),
+     InvalidProgram, "line 10: 'x' is not a handler instance or a data class "
+     "instance"),
     ('def f() -> int:\n    x.a = 1\n    return 0\n' + MAIN,
      InvalidProgram, "line 9: name 'x' is not defined"),
     ('def main() -> int / []:\n    with handle(FileIO):\n'
@@ -863,7 +865,8 @@ def test_rejected_operation_rows(row, msg):
      'cannot deliver it'),
     (CATCHING + '        x = 1\n        x.throw(NotFound())\n'
      '    return 0\n',
-     "line 24: 'x' is not an except binding or a handler instance"),
+     "line 24: 'x' is not an except binding, a handler "
+     "instance, or a data class instance"),
     (CATCHING + '        try:\n            raise NotFound("a")\n'
      '        except Exception as e:\n            eff.throw(e)\n'
      '    return 0\n',
@@ -1686,7 +1689,7 @@ def test_an_optional_slot_takes_the_value_none_or_an_optional(body):
      'line 22: dict values must be int, str, or bool, not None'),
     ('class H(Handler[FileIO]):\n    v: int | None\n',
      "line 21: field 'v' of handler class 'H' must be int, str, "
-     'list[...], or dict[str, ...], not int | None'),
+     'bool, list[...], or dict[str, ...], not int | None'),
     (BEST % 'best = take(best)' + '    return 0\n',
      "line 26: argument 1 of take() must be int, but 'best' has "
      'no known type'),
@@ -1882,7 +1885,7 @@ def test_a_tuple_is_unpacked_indexed_and_passed(body):
      'not tuple[int, str]'),
     ('class H(Handler[FileIO]):\n    v: tuple[int, str]\n',
      "line 21: field 'v' of handler class 'H' must be int, str, "
-     'list[...], or dict[str, ...], not tuple[int, str]'),
+     'bool, list[...], or dict[str, ...], not tuple[int, str]'),
     (PAIR + '    return take(t)\n',
      'line 22: argument 1 of take() must be int, not tuple[int, '
      'str]'),
@@ -2035,6 +2038,283 @@ def test_a_pass_that_unbinds_a_name_is_followed_by_another():
         check_source(body)
     assert info.value.msg == ("line 15: name 'e' is unbound after the "
                               "except clause that bound it")
+
+# --- Data classes (Milestone 19) ---------------------------------------------
+
+DATA = ('@dataclass\nclass Task:\n    name: str\n'
+        '    needs: list[str]\n    seconds: int = 0\n'
+        '    done: bool = False\n'
+        'def take(n: int) -> int:\n    return n - 1\n'
+        'def main() -> int / []:\n    return 0\n')
+
+@pytest.mark.parametrize('body', [
+    'def g(t: Task) -> Task:\n'
+    '    return t\n'
+    'def f() -> int:\n'
+    '    t = g(Task("a", [], 3))\n'
+    '    return take(t.seconds)\n',
+    'def total(ts: list[Task]) -> int:\n'
+    '    n = 0\n'
+    '    for t in ts:\n'
+    '        n += t.seconds\n'
+    '    return n\n'
+    'def f() -> int:\n'
+    '    ts = [Task("a", [])]\n'
+    '    ts.append(Task("b", ["a"], 2))\n'
+    '    u = ts[0]\n'
+    '    return total(ts) + total([]) + take(u.seconds)\n',
+    'def g(d: dict[str, Task]) -> int:\n'
+    '    return len(d)\n'
+    'def f() -> int:\n'
+    '    d = {"a": Task("a", [])}\n'
+    '    d["b"] = Task("b", [])\n'
+    '    t = d["a"]\n'
+    '    return g(d) + take(t.seconds)\n',
+    'def find(ts: list[Task]) -> Task | None:\n'
+    '    for t in ts:\n'
+    '        return t\n'
+    '    return None\n'
+    'def f() -> int:\n'
+    '    t = find([])\n'
+    '    if t is None:\n'
+    '        return 0\n'
+    '    return take(t.seconds)\n',
+    'def f() -> int:\n'
+    '    t = Task("a", [])\n'
+    '    t.seconds = 4\n'
+    '    t.seconds += 1\n'
+    '    t.done = True\n'
+    '    t.needs.append("x")\n'
+    '    if t.done:\n'
+    '        return take(t.seconds)\n'
+    '    return len(t.needs)\n',
+    'def f() -> int:\n'
+    '    best = None\n'
+    '    for t in [Task("a", []), Task("b", [], 2)]:\n'
+    '        if best is None or t.seconds > best.seconds:\n'
+    '            best = t\n'
+    '    if best is None:\n'
+    '        return 0\n'
+    '    return take(best.seconds)\n',
+    'class Jobs(Effect):\n'
+    '    def next(after: Task | None) -> list[Task]: ...\n'
+    'def g() -> int / [Jobs]:\n'
+    '    ts = perform(Jobs.next(None))\n'
+    '    for t in ts:\n'
+    '        return take(t.seconds)\n'
+    '    return 0\n',
+    'class Flag(Handler[DBQuery]):\n'
+    '    on: bool = True\n'
+    '    def execute(self, sql: str) -> str:\n'
+    '        if self.on:\n'
+    '            self.on = False\n'
+    '        return sql\n',
+    '@dataclass\n'
+    'class Plan:\n'
+    '    tasks: list[Task] = []\n'
+    'def f() -> int:\n'
+    '    p = Plan()\n'
+    '    p.tasks.append(Task("a", []))\n'
+    '    return len(p.tasks)\n',
+], ids=['parameter-and-return', 'list-element', 'dict-value',
+        'optional-narrowed', 'field-store', 'merged-with-none',
+        'operation', 'handler-bool-field', 'list-field'])
+def test_a_data_class_is_accepted(body):
+    check_source(DATA + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def g(xs: list[Foo]) -> int:\n'
+     '    return 0\n',
+     'line 18: list[Foo] is not a type; the element type is int, '
+     'str, bool, or a data class'),
+    ('def g() -> dict[str, Foo]:\n'
+     '    return {}\n',
+     'line 18: dict[str, Foo] is not a type; the value type is '
+     'int, str, bool, or a data class'),
+    ('def g(x: Foo | None) -> int:\n'
+     '    return 0\n',
+     'line 18: Foo | None is not a type; the optional types are '
+     'int | None, str | None, bool | None, tuple[...] | None, and '
+     'a data class | None'),
+    ('class H(Handler[DBQuery]):\n'
+     '    def execute(self, sql: str) -> str:\n'
+     '        return sql\n'
+     'def g(xs: list[H]) -> int:\n'
+     '    return 0\n',
+     'line 21: list[H] is not a type; the element type is int, '
+     'str, bool, or a data class'),
+    ('class E(Effect):\n'
+     '    def get(xs: list[Foo]) -> int: ...\n',
+     'line 19: list[Foo] is not a type; the element type is int, '
+     'str, bool, or a data class'),
+    ('@dataclass\n'
+     'class P:\n'
+     '    xs: list[Foo]\n',
+     'line 20: list[Foo] is not a type; the element type is int, '
+     'str, bool, or a data class'),
+    ('@dataclass\n'
+     'class Task:\n'
+     '    x: int\n',
+     "line 19: data class 'Task' is declared twice"),
+    ('@dataclass\n'
+     'class FileIO:\n'
+     '    x: int\n',
+     "line 19: data class 'FileIO' is declared twice"),
+    ('def Task() -> int:\n'
+     '    return 0\n',
+     "line 18: function 'Task' is defined twice"),
+    ('@dataclass\n'
+     'class P:\n'
+     '    x: int\n'
+     '    x: str\n',
+     "line 21: field 'x' is declared twice in data class 'P'"),
+    ('@dataclass\n'
+     'class P:\n'
+     '    x: int = 1\n'
+     '    y: str\n',
+     "line 21: field 'y' without a default follows a field with "
+     'one'),
+    ('@dataclass\n'
+     'class P:\n'
+     '    x: tuple[int, str]\n',
+     "line 20: field 'x' of data class 'P' must be int, str, "
+     'bool, list[...], or dict[str, ...], not tuple[int, str]'),
+    ('@dataclass\n'
+     'class P:\n'
+     '    x: int | None\n',
+     "line 20: field 'x' of data class 'P' must be int, str, "
+     'bool, list[...], or dict[str, ...], not int | None'),
+    ('@dataclass\n'
+     'class P:\n'
+     '    x: Task\n',
+     "line 20: field 'x' of data class 'P' must be int, str, "
+     'bool, list[...], or dict[str, ...], not Task'),
+    ('@dataclass\n'
+     'class P:\n'
+     '    on: bool = 1\n',
+     "line 20: default of field 'on' must be bool, not int"),
+    ('def f() -> int:\n'
+     '    t = Task("a")\n'
+     '    return 0\n',
+     'line 19: Task() takes 2 to 4 arguments (1 given)'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [], 1, True, 2)\n'
+     '    return 0\n',
+     'line 19: Task() takes 2 to 4 arguments (5 given)'),
+    ('def f() -> int:\n'
+     '    t = Task(1, [])\n'
+     '    return 0\n',
+     'line 19: argument 1 of Task() must be str, not int'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    t.seconds = "x"\n'
+     '    return 0\n',
+     "line 20: field 'seconds' of data class 'Task' is int; "
+     'cannot assign str'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    return take(t.nope)\n',
+     "line 20: data class 'Task' has no field 'nope'"),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    t.nope = 1\n'
+     '    return 0\n',
+     "line 20: data class 'Task' has no field 'nope'"),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    print(t == t)\n'
+     '    return 0\n',
+     'line 20: unsupported operand types for ==: Task and Task'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    xs = [t]\n'
+     '    print(xs == xs)\n'
+     '    return 0\n',
+     'line 21: unsupported operand types for ==: list[Task] and '
+     'list[Task]'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    print(t in [t])\n'
+     '    return 0\n',
+     'line 20: in compares int, str, or bool elements, not Task'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    with handle(t):\n'
+     '        print(1)\n'
+     '    return 0\n',
+     "line 20: 't' is not an effect or a handler instance"),
+    ('def f() -> int:\n'
+     '    with handle(Task("a", [])):\n'
+     '        print(1)\n'
+     '    return 0\n',
+     "line 19: 'Task' is not a handler class"),
+    ('def find() -> Task | None:\n'
+     '    return None\n'
+     'def f() -> int:\n'
+     '    t = find()\n'
+     '    return take(t.seconds)\n',
+     "line 22: 't' is Task | None; a field read needs a test "
+     'against None first'),
+    ('def find() -> Task | None:\n'
+     '    return None\n'
+     'def g(t: Task) -> int:\n'
+     '    return 0\n'
+     'def f() -> int:\n'
+     '    return g(find())\n',
+     'line 23: argument 1 of g() must be Task, not Task | None'),
+    ('@dataclass\n'
+     'class P:\n'
+     '    x: int\n'
+     'def g(t: Task) -> int:\n'
+     '    return 0\n'
+     'def f() -> int:\n'
+     '    return g(P(1))\n',
+     'line 24: argument 1 of g() must be Task, not P'),
+    ('@dataclass\n'
+     'class P:\n'
+     '    x: int\n'
+     'def g(ts: list[Task]) -> int:\n'
+     '    return 0\n'
+     'def f() -> int:\n'
+     '    return g([P(1)])\n',
+     'line 24: argument 1 of g() must be list[Task], not list[P]'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    print(f"{t}")\n'
+     '    return 0\n',
+     'line 20: an f-string field needs an int, str, or bool, not '
+     'Task'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [])\n'
+     '    return len(t)\n',
+     'line 20: len() needs a list, dict, or str, not Task'),
+    ('def f() -> int:\n'
+     '    if 1 == 1:\n'
+     '        p = 1\n'
+     '    else:\n'
+     '        p = Task("a", [])\n'
+     '    p.seconds = 2\n'
+     '    return 0\n',
+     "line 23: 'p' is not a handler instance or a data class "
+     'instance'),
+], ids=['list-of-unknown', 'dict-of-unknown', 'optional-unknown',
+        'list-of-handler', 'operation-type', 'field-type',
+        'duplicate-class', 'effect-name', 'function-name',
+        'duplicate-field', 'default-order', 'tuple-field',
+        'optional-field', 'class-field', 'default-type', 'too-few',
+        'too-many', 'argument-type', 'store-type', 'no-field',
+        'store-no-field', 'equality', 'list-equality', 'in',
+        'handle-name', 'handle-call', 'optional-read',
+        'optional-slot', 'wrong-class', 'list-of-other', 'fstring',
+        'len', 'store-unknown'])
+def test_a_data_class_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(DATA + body)
+    assert info.value.msg == msg
+
+def test_a_field_read_on_an_unknown_type_is_noted():
+    source = read_program('runtime_field_unknown.epy')
+    assert unknowns_in(source) == [(15, checker.INDEX)]
 
 # --- dict[str, T] and in (Milestone 12) --------------------------------------
 

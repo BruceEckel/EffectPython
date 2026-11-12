@@ -1,0 +1,17 @@
+# Runtime-only: an if leaves xs with two types, so the checker lets
+# the comparison through; scalars_equal finds two instances, which
+# have no ==.
+
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+
+def main() -> int:
+    if 1 == 1:
+        xs = [Point(1)]
+    else:
+        xs = [1]
+    print(xs == xs)
+    return 0

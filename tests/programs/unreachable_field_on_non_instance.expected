@@ -1,2 +1,2 @@
 exit 1
-error: line 6: 'c' is not a handler instance
+error: line 6: 'c' is not a handler instance or a data class instance
