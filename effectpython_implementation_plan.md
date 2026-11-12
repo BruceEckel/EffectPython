@@ -1509,6 +1509,82 @@ The parser's two messages for a non-scalar element, "list[Foo] is not a type; th
 `build_plan.epy` went from 125 lines to 130: the four parallel lists and the dict are gone, and the class declaration, its import, and a six-line list of constructor calls came in.
 `shop_orders.epy` has a `Line` data class in place of its three parallel lists.
 
+### 1.20 A field through any expression (designed 2026-11-12)
+
+1.19 kept the name on the left of the dot (its open question 6), and the tutorial's own listing met the limit: `by_title["Emma"].pages` had to become `emma = by_title["Emma"]` and a read of `emma`.
+A list of instances is read through a subscript as often as through a `for`, so the limit falls on the form Milestone 19 was for.
+
+**Today (probed against the binary, 2026-11-12).**
+With `ts` a `list[Task]` and `make()` returning a `Task`: `ts[0].name`, `make().name`, `ts[0].seconds = 4`, `ts[0].seconds += 4`, and `ts[0].needs.append("q")` are each "an attribute read needs a name on the left of the dot", from the one production `postfix : postfix DOT NAME`, whose action refuses a target that is no `Name`.
+An assignment reads its target through the same production, so the store is refused where the read is.
+CPython's error for a field read on a value without one is "'int' object has no attribute 'name'".
+
+**Nodes.**
+`AttrRead` and `AttrAssign` hold a name, and a name on the left of a dot is also a clause binding (`eff.path`) and `self`; they stay as they are.
+A target that is no name gives two new nodes: `FieldRead(target, attr)`, an expression, and `FieldAssign(op, target, attr, value)`, a statement, whose `op` is empty for `=` and the operator for an augmented assignment.
+The augmented form needs a node of its own for the reason `IndexAugAssign` does (1.14): built as a store over a `BinOp`, `ts[next()].seconds += 1` would evaluate its target twice.
+`ts[0].needs.append("q")` needs no node, since a method call on an expression is already a `MethodCall` over whatever its target is.
+
+**Checker.**
+`FieldRead` types its target and reads the field from the class (`info_of`, `require_field`).
+A target of unknown type is left to the runtime and noted, as 1.19 has it for a name; an optional is refused with 1.19's message, worded for a value; and any other type is refused in CPython's words, "'int' object has no attribute 'name'".
+`FieldAssign` types the value first for `=`, since the runtime evaluates it first, then the target, which must be an instance of a known class: a store is a typed slot.
+The value goes through `require_known`, `matches`, and `hand_over`, as `AttrAssign`'s does.
+For an augmented store the target is typed first, and the field's type and the value's go to `check_operands`.
+The target's effects count, so `perform(...)` inside it reaches the row.
+
+**Runtime.**
+`FieldRead` evaluates its target and reads the field of a `W_HandlerInstance`; anything else is CPython's "'int' object has no attribute 'name'" with `type_name()` for the class.
+`FieldAssign` with `=` evaluates the value, then the target, and stores; the augmented form evaluates the target once, reads the field, evaluates the value, and stores the result of `binop`, which is Python's order.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether `AttrRead` and `AttrAssign` become the general nodes.*
+    One node with an expression target would serve a name and anything else.
+    *The design adds two nodes: a name on the left is a binding, `self`, or an instance, told apart by the scope, and every place that reads `AttrRead.target` as a name (`describe`, `value_name`, the binding lookup, the interpreter's two branches) would have to change for no gain in what a program can say.*
+2.  *Whether a field store through an expression of unknown type is allowed.*
+    *The design refuses it, as 1.19 refuses it for a name.*
+
+### 1.21 `str.join()`, `dict.get()`, and `**` (designed 2026-11-12)
+
+The third port wrote a helper for each of three things Python has built in: `joined()` for `", ".join(blocked)`, `power_of_two()` for `2 ** n`, and an `if name in d: ... else: ...` for each `d.get(name, 0)`.
+
+**Today (probed against the binary, 2026-11-12).**
+`", ".join(ws)` is "a value of type str is not a list", and with the separator in a name, "'sep' is not a list"; `d.get("a", 0)` and `d.get("a")` are "'d' is not a list"; `ws.pop()` is "a list has no method 'pop'".
+All four come from `check_append`, which every method call reaches: a name on the left gives an `OpCall` and anything else a `MethodCall`, and both branches of `type_of` call it.
+`2 ** 3` is "unexpected '*'" and `x **= 3` is "unexpected '*='".
+CPython gives `-2 ** 2` as `-4`, `2 ** 3 ** 2` as `512`, `2 ** -1` as `0.5`, and `0 ** -1` as "zero to a negative power"; `", ".join([1, 2])` is "sequence item 0: expected str instance, int found"; `{"a": 1}.get("b")` is `None` and `.get("b", 0)` is `0`; and `"".join([])` is the empty string.
+
+**Methods.**
+`check_append` becomes one of three, chosen by the method's name:
+
+*   `s.join(xs)` needs a `str` on the left and one argument of type `list[str]`, and is a `str`.
+*   `d.get(k, default)` needs a dict on the left, a `str` key, and a default of the dict's value type, and has that type; `d.get(k)` has the optional of the value type, `int | None` for a `dict[str, int]`, which an `is None` test narrows (1.16).
+    On a `{}` no store has refined, the result has no known type.
+*   `xs.append(v)` is as it was.
+
+A target of unknown type is left to the runtime, which looks at the value, and the call is noted in `Checker.unknowns`; `join()` is then still `str`, and `get()` has no known type.
+Any other method name is refused by the target's kind, "a str has no method 'upper'" beside the existing "a list has no method 'pop'", and a method on the wrong kind is "join() needs a str on the left of the dot, not list[str]".
+The interpreter's `list_method` grows the same way.
+At runtime a `join()` of a list that holds anything but `str` is CPython's "sequence item 0: expected str instance, int found".
+
+**`**`.**
+`**` is a new token, with `**=` beside the other augmented operators.
+It binds tighter than a unary minus on its left and groups to the right, so the grammar gets a layer between `term` and `postfix`: `power : postfix | postfix ** power | postfix ** - power`, and `term` reads `power` where it read `postfix`.
+`-2 ** 2` is then the existing fold of a minus over a non-literal, `0 - (2 ** 2)`.
+Both operands are `int` and so is the result (`OPERATORS`).
+A negative exponent would give a `float`, which the dialect lacks, so the runtime refuses it: "a negative exponent needs a float, which the dialect lacks".
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether `d.get(k)` without a default is accepted.*
+    *The design accepts it: the optional is what Python returns, and narrowing already serves it.*
+2.  *Which other methods come with these.*
+    The ports also wanted `dict.items()`, `sorted()`, and `list.count()`.
+    *The design stops at the three a helper stood in for; `items()` needs a tuple as a loop target, which 1.17 left out.*
+3.  *Whether a negative literal exponent is refused by the checker.*
+    *The design leaves it to the runtime, which must refuse a computed one anyway.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2315,4 +2391,22 @@ EffectPython/
         *   Accept a data class as a parameter, a return, a list element, a dict value, and an optional that an `is None` test narrows; a field store from outside the class; a `bool` field with a default in a data class and in a handler class.
         *   Reject `list[Foo]`, `dict[str, Foo]`, and `Foo | None` for a name that is no data class, a handler class included; a data class with a method; a duplicate class or field name; a field without a default after one with a default; a field that is a tuple, an optional, or a data class; a constructor with too few or too many arguments or one of the wrong type; `==` on two instances, on two lists of them, and `in` on a list of them; and `handle()` on an instance.
         *   `class Task:` with no decorator, `@other`, and `@dataclass(frozen=True)` are syntax errors.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+20. **Milestone 20: a field through any expression (1.20)**
+    *   *Designed 2026-11-12.*
+    *   *Implementation (planned):* the parser's `attr_read`, `assign`, and `aug_assign` build the two nodes for a target that is no name; the checker and the interpreter get a branch for each.
+    *   *Acceptance test:*
+        *   `data_class.epy` reads `by_title["Emma"].title` in one expression, and its recorded output does not change.
+        *   Accept `ts[0].name`, `make().name`, `ts[0].seconds = 4`, `ts[0].seconds += 4`, and `ts[0].needs.append("q")`.
+        *   Reject a field the class lacks, a store of the wrong type, a read on an `int` and on an optional, and a store through a target of unknown type.
+        *   An augmented store evaluates its target once.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+21. **Milestone 21: `str.join()`, `dict.get()`, and `**` (1.21)**
+    *   *Designed 2026-11-12.*
+    *   *Implementation (planned):* the lexer's two tokens and the `power` layer; the checker's method dispatch and `**` in `OPERATORS`; the interpreter's method dispatch and `binop`.
+    *   *Acceptance test:*
+        *   `build_plan.epy` loses `joined()` and `power_of_two()` and uses `get()` for its tallies, with its recorded output unchanged.
+        *   Accept `", ".join(ws)`, `sep.join([])`, `d.get("a", 0)` as an `int`, `d.get("a")` narrowed by `is None`, `2 ** n`, and `x **= 2`.
+        *   Reject `join()` on a list and of a `list[int]`, `get()` on a list, with an `int` key, and with a default of the wrong type, `d.get("a")` passed to an `int` slot, `"a" ** 2`, and a method no kind has.
+        *   `-2 ** 2` is `-4`, `2 ** 3 ** 2` is `512`, and `2 ** -1` is a runtime error.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
