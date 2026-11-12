@@ -2718,6 +2718,122 @@ def test_a_for_over_items_misuse_is_rejected(body, msg):
         check_source(DATA + body)
     assert info.value.msg == msg
 
+# --- Keyword arguments (Milestone 23) ----------------------------------------
+
+@pytest.mark.parametrize('body', [
+    'def area(width: int, height: int) -> int:\n'
+    '    return width * height\n'
+    'def f() -> int:\n'
+    '    return take(area(height=3, width=2))\n',
+    'def area(width: int, height: int) -> int:\n'
+    '    return width * height\n'
+    'def f() -> int:\n'
+    '    return take(area(2, height=3))\n',
+    'def f() -> int:\n'
+    '    t = Task("a", [], done=True)\n'
+    '    u = Task(needs=[], name="b")\n'
+    '    return take(t.seconds + u.seconds)\n',
+    'def area(width: int, height: int) -> int:\n'
+    '    return width * height\n'
+    'def f() -> int / [FileIO]:\n'
+    '    return area(width=1, height=perform(FileIO.write("a", '
+    '"b")))\n',
+    'def f() -> int:\n'
+    '    xs = []\n'
+    '    t = Task("a", needs=xs)\n'
+    '    xs.append("s")\n'
+    '    return 0\n',
+    'class Fake(Handler[DBQuery]):\n'
+    '    tag: str\n'
+    '    n: int = 0\n'
+    '    def execute(self, sql: str) -> str:\n'
+    '        return self.tag\n'
+    'def f() -> int:\n'
+    '    fake = Fake(tag="t")\n'
+    '    with handle(fake):\n'
+    '        return take(fake.n)\n',
+], ids=['all-keywords', 'after-positional', 'skips-a-default',
+        'performs', 'empty-list', 'handler-class'])
+def test_a_keyword_call_is_accepted(body):
+    check_source(DATA + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def area(width: int, height: int) -> int:\n'
+     '    return width * height\n'
+     'def f() -> int:\n'
+     '    return area(2, depth=3)\n',
+     "line 21: area() got an unexpected keyword argument 'depth'"),
+    ('def area(width: int, height: int) -> int:\n'
+     '    return width * height\n'
+     'def f() -> int:\n'
+     '    return area(2, width=3)\n',
+     "line 21: area() got multiple values for argument 'width'"),
+    ('def area(width: int, height: int) -> int:\n'
+     '    return width * height\n'
+     'def f() -> int:\n'
+     '    return area(height=3)\n',
+     "line 21: area() needs a value for parameter 'width'"),
+    ('def f() -> int:\n'
+     '    t = Task(seconds=1, needs=[])\n'
+     '    return 0\n',
+     "line 19: Task() needs a value for field 'name'"),
+    ('def area(width: int, height: int) -> int:\n'
+     '    return width * height\n'
+     'def f() -> int:\n'
+     '    return area(2, height="x")\n',
+     "line 21: argument 'height' of area() must be int, not str"),
+    ('def area(width: int, height: int) -> int:\n'
+     '    return width * height\n'
+     'def f() -> int:\n'
+     '    return area("x", height=2)\n',
+     'line 21: argument 1 of area() must be int, not str'),
+    ('def area(width: int, height: int) -> int:\n'
+     '    return width * height\n'
+     'def f() -> int:\n'
+     '    if 1 == 1:\n'
+     '        v = 1\n'
+     '    else:\n'
+     '        v = "s"\n'
+     '    return area(2, height=v)\n',
+     "line 25: argument 'height' of area() must be int, but 'v' "
+     'has no known type'),
+    ('def area(width: int, height: int) -> int:\n'
+     '    return width * height\n'
+     'def f() -> int:\n'
+     '    return area(1, 2, 3, height=4)\n',
+     'line 21: area() takes 2 arguments (4 given)'),
+    ('def f() -> int:\n'
+     '    t = Task("a", [], seconds="x")\n'
+     '    return 0\n',
+     "line 19: argument 'seconds' of Task() must be int, not str"),
+    ('def f() -> int:\n'
+     '    print(1, sep="")\n'
+     '    return 0\n',
+     'line 19: print() takes no keyword arguments'),
+    ('def f() -> int:\n'
+     '    return len(obj="a")\n',
+     'line 19: len() takes no keyword arguments'),
+    ('def f() -> int:\n'
+     '    for i in range(stop=3):\n'
+     '        pass\n'
+     '    return 0\n',
+     'line 19: range() takes no keyword arguments'),
+    ('class Bad(Exception): ...\n'
+     'def f() -> int / [Bad]:\n'
+     '    raise Bad(message="x")\n',
+     'line 20: Bad() takes no keyword arguments'),
+    ('def f() -> int:\n'
+     '    return nope(x=1)\n',
+     "line 19: name 'nope' is not defined"),
+], ids=['unknown-keyword', 'filled-twice', 'missing-parameter',
+        'missing-field', 'keyword-type', 'positional-type',
+        'unknown-value', 'too-many', 'field-type', 'print', 'len',
+        'range', 'exception-class', 'undefined'])
+def test_a_keyword_call_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(DATA + body)
+    assert info.value.msg == msg
+
 # --- dict[str, T] and in (Milestone 12) --------------------------------------
 
 TOTAL = ('def total(d: dict[str, int]) -> int:\n    n = 0\n'

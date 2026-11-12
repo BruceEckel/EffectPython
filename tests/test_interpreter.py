@@ -1138,3 +1138,41 @@ def test_a_for_over_items_runtime_error(body, msg):
                       + '\n    return 0\n')
     assert info.value.msg == msg
 
+# --- Keyword arguments (Milestone 23) ----------------------------------------
+
+SAY = ('def say(n: int) -> int:\n    print("say", n)\n    return n\n'
+       'def sub(a: int, b: int) -> int:\n    return a - b\n')
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print(sub(b=1, a=5), sub(5, b=1))', ['4 4']),
+    ('print(sub(b=say(1), a=say(5)))', ['say 1', 'say 5', '4']),
+    ('print(Point(1, on=True), Point(tag="q", x=2))',
+     ["Point(x=1, tag='p', seen=[], on=True) "
+      "Point(x=2, tag='q', seen=[], on=False)"]),
+    ('p = Point(x=1)\n    q = Point(x=2)\n    p.seen.append(3)\n'
+     '    print(q.seen)', ['[]']),
+], ids=['function', 'written-order', 'constructor',
+        'default-per-instance'])
+def test_a_keyword_call(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ' + statement + '\n    return 0\n', POINT + SAY)
+    assert (exit_code, lines) == (0, printed)
+
+@pytest.mark.parametrize('statement, msg', [
+    ('sub(1, c=2)', "sub() got an unexpected keyword argument 'c'"),
+    ('sub(1, a=2)', "sub() got multiple values for argument 'a'"),
+    ('sub(b=2)', "sub() needs a value for parameter 'a'"),
+    ('sub(1, 2, 3, b=2)', 'sub() takes 2 arguments (4 given)'),
+    ('Point(tag="q")', "Point() needs a value for field 'x'"),
+    ('Point(1, y=2)', "Point() got an unexpected keyword argument 'y'"),
+    ('print(1, sep="")', 'print() takes no keyword arguments'),
+    ('nope(a=1)', "name 'nope' is not defined"),
+], ids=['unknown-keyword', 'filled-twice', 'missing-parameter',
+        'too-many', 'missing-field', 'unknown-field', 'builtin',
+        'undefined'])
+def test_a_keyword_call_runtime_error(statement, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    ' + statement + '\n    return 0\n',
+                      POINT + SAY)
+    assert info.value.msg == msg
+

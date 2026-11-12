@@ -19,8 +19,8 @@ def longest(books: list[Book]) -> Book | None:
     return best
 
 def main() -> int / []:
-    books = [Book("Dune", 612, ["sf"]), Book("Emma", 474)]
-    books.append(Book("Ulysses", 730))
+    books = [Book("Dune", 612, ["sf"]), Book("Emma", pages=474)]
+    books.append(Book("Ulysses", 730, read=False))
     for book in books:
         print(book.title, book.pages)
     best = longest(books)

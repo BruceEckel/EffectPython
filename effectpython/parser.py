@@ -135,6 +135,13 @@ class _ExprList(BaseBox):
     def __init__(self, items):
         self.items = items  # list of Expr
 
+class _Keywords(BaseBox):
+    _attrs_ = ['names', 'values']
+
+    def __init__(self, names, values):
+        self.names = names    # list of str
+        self.values = values  # list of Expr
+
 class _DictItems(BaseBox):
     _attrs_ = ['keys', 'values']
 
@@ -956,6 +963,45 @@ def call(p):
     if _text(p[0]) == 'perform':
         return _perform(p[0], args.items)
     return ast.Call(_text(p[0]), args.items, _line(p[0]))
+
+@pg.production('atom : NAME LPAREN keywords RPAREN')
+def keyword_call(p):
+    return _keyword_call(p[0], [], p[2])
+
+@pg.production('atom : NAME LPAREN arg_list COMMA keywords RPAREN')
+def keyword_call_after_positional(p):
+    args = p[2]
+    assert isinstance(args, _ExprList)
+    return _keyword_call(p[0], args.items, p[4])
+
+def _keyword_call(tok, positional, keywords):
+    """A call by name that ends in keyword arguments (plan 1.23).
+    perform is read by the same production as any call and takes
+    none."""
+    assert isinstance(keywords, _Keywords)
+    if _text(tok) == 'perform':
+        raise _error(tok, "perform() takes one Effect.op(...) argument")
+    return ast.KeywordCall(_text(tok), positional + keywords.values,
+                           keywords.names, _line(tok))
+
+@pg.production('keywords : NAME EQUALS expr')
+def keywords_one(p):
+    return _Keywords([_text(p[0])], [_expr(p[2])])
+
+@pg.production('keywords : keywords COMMA NAME EQUALS expr')
+def keywords_more(p):
+    keywords = p[0]
+    assert isinstance(keywords, _Keywords)
+    name = _text(p[2])
+    if name in keywords.names:
+        raise _error(p[2], "keyword argument repeated: %s" % name)
+    keywords.names.append(name)
+    keywords.values.append(_expr(p[4]))
+    return keywords
+
+@pg.production('keywords : keywords COMMA expr')
+def positional_after_keyword(p):
+    raise _error(p[1], "positional argument follows keyword argument")
 
 def _perform(tok, args):
     if len(args) == 1:

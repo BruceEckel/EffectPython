@@ -84,10 +84,10 @@ def build(tasks: list[Task]) -> dict[str, str] / [Work, Clock, Log]:
     return status
 
 def main() -> int / []:
-    tasks = [Task("fetch", [], 3, 1),
+    tasks = [Task("fetch", [], 3, failures=1),
              Task("compile", ["fetch"], 10),
-             Task("lint", ["fetch"], 2, 5),
-             Task("test", ["compile"], 7, 2),
+             Task("lint", ["fetch"], 2, failures=5),
+             Task("test", ["compile"], 7, failures=2),
              Task("package", ["test", "lint"], 4),
              Task("docs", [], 1)]
     timer = Timer()

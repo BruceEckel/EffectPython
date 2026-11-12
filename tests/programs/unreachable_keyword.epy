@@ -1,0 +1,10 @@
+# The runtime's "got an unexpected keyword argument" (arranged) cannot
+# be reached: check_keyword_call finds each keyword's parameter before
+# anything runs.
+
+def area(width: int, height: int) -> int:
+    return width * height
+
+def main() -> int / []:
+    print(area(2, depth=3))
+    return 0

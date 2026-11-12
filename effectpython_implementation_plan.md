@@ -1646,7 +1646,7 @@ The messages are "a for with two names walks a dict: for k, v in d.items()", "th
 A name the loop alone binds has its element type after the loop, as the name of a one-name `for` has, so `take(v)` after the loop checks.
 `runtime_items_resized.epy` stores to a key the dict has and then adds one.
 
-### 1.23 Keyword arguments (designed 2026-11-12)
+### 1.23 Keyword arguments (designed and implemented 2026-11-12, open questions settled as recommended)
 
 The Python version of the build program writes `Task("fetch", [], 3, failures=1)`; the port writes `Task("fetch", [], 3, 1)`, and a reader has to count fields to know what the `1` is.
 1.5 and 1.19 both left keyword arguments to a milestone that gives them to every call.
@@ -1687,6 +1687,15 @@ The interpreter evaluates the arguments in order and arranges the values by the 
 2.  *Whether a function parameter may have a default.*
     *The design leaves defaults to fields, where they are today.*
 
+Both were settled as recommended on 2026-11-12.
+
+**As implemented (2026-11-12).**
+A positional argument's messages keep their number, "argument 1 of area() must be int, not str", and a keyword's name the parameter, "argument 'height' of area() must be int, not str".
+The others are CPython's "area() got an unexpected keyword argument 'depth'" and "area() got multiple values for argument 'width'"; "area() needs a value for parameter 'width'" and "Task() needs a value for field 'name'", the second being the runtime's existing words; "print() takes no keyword arguments", for the four built-in names and an exception class; and the parser's "keyword argument repeated: a" and "positional argument follows keyword argument".
+The grammar adds `keywords` and two call productions beside the positional one, and rply reports no conflict: after a name in an argument list, the `=` decides.
+Every one of the runtime's keyword errors is unreachable through the checker, since the callee is known by name (`unreachable_keyword.epy`).
+`build_plan.epy` writes `failures=1`, and `data_class.epy` writes `pages=474` and skips `tags` with `read=False`.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1704,6 +1713,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `<expr>.<attr>` where the expression is no name, a `FieldRead` node, and `<expr>.<attr> = <expr>` and `<expr>.<attr> op= <expr>`, a `FieldAssign` node with an empty or a given operator; a name on the left still gives `AttrRead` and `AttrAssign` (1.20; Milestone 20, 2026-11-12)
     *   `**`, in a `power` layer between `term` and `postfix` that groups to the right and sits under a unary minus on its left, with `**=` among the augmented operators; and the method calls `<str>.join(<list>)` and `<dict>.get(<key>[, <default>])`, which need no grammar, since a method call was already an `OpCall` or a `MethodCall` (1.21; Milestone 21, 2026-11-12)
     *   `for <name>, <name> in <expr>.items(): <suite>`, a `ForItems` node holding the two names and the expression left of the dot; any other iterable after two names is refused (1.22; Milestone 22, 2026-11-12)
+    *   keyword arguments `<name> = <expr>` after the positional arguments of a call by name, giving a `KeywordCall` node with every argument in the order written and the keywords' names; a call without them stays a `Call` (1.23; Milestone 23, 2026-11-12)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -1789,6 +1799,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `FieldRead` and `FieldAssign` (1.20; Milestone 20, 2026-11-12): `check_field_read` types the target and reads the field from its class, leaves a target of unknown type to the runtime, and refuses any other type; `check_field_assign` types the value and then the target for `=`, needs an instance of a known class, and holds the value to the field as `AttrAssign` does, or the field and the value to the operator for an augmented store.
         *   Methods and `**` (1.21; Milestone 21, 2026-11-12): `check_method` chooses by the method's name among `check_join` (a `str` target, a `list[str]` argument, a `str` result), `check_get` (a dict target, a `str` key, the value type with a default of that type, or its optional without one), and `check_append`, which also refuses any other method by the target's kind; a target of unknown type is noted for `join()` and `get()` and left to the runtime; and `**` joins the operators of `int`.
         *   `ForItems` (1.22; Milestone 22, 2026-11-12): `check_items_loop` types the target, which is a dict or unknown, binds the first name to `str` and the second to the dict's value type, and hands both to `check_loop_body`, which binds a second name at the start of each pass beside the first; afterwards each name is merged with the type it had before, as `check_loop` does for one.
+        *   `KeywordCall` (1.23; Milestone 23, 2026-11-12): `check_keyword_call` takes the names and types from a function's parameters or a class's fields, finds each argument's slot (`keyword_slots`), types the arguments in the order written against their slots as `check_args` does, asks that every parameter, or every field without a default, is filled, and for a function adds the row and the perform point through `called`, which `check_call` shares.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2538,7 +2549,9 @@ EffectPython/
         *   A store that adds a key during the walk is a runtime error; a store to an existing key is not.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 23. **Milestone 23: keyword arguments (1.23)**
-    *   *Designed 2026-11-12.*
+    *   *Designed and done 2026-11-12.* The two open questions of 1.23 are settled as recommended.
+    *   *Done 2026-11-12.*
+        `ast_nodes.py` has `KeywordCall`; `parser.py` has the `keywords` productions and `_keyword_call`; `checker.py` has `check_keyword_call`, `keyword_slots`, and `called`; `interpreter.py` has `call_with_keywords`, `arranged`, and `HandlerClass.construct_slots`.
     *   *Implementation (planned):* the parser's keyword list and `KeywordCall`; `check_keyword_call`; the interpreter's arrangement and `HandlerClass`'s holes.
     *   *Acceptance test:*
         *   `build_plan.epy` writes `failures=1` in its three constructor calls that set it, with its recorded output unchanged.

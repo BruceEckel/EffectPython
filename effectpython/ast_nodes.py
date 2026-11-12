@@ -542,6 +542,19 @@ class Call(Expr):
         self.func = func  # str
         self.args = args  # list of Expr
 
+class KeywordCall(Expr):
+    """func(arg1, name=arg2): a call by name whose last arguments
+       are keywords (plan 1.23). args holds every argument expression
+       in the order written, and keywords names the last
+       len(keywords) of them. A call without keywords is a Call."""
+    _attrs_ = ['func', 'args', 'keywords']
+
+    def __init__(self, func, args, keywords, lineno=0):
+        Node.__init__(self, lineno)
+        self.func = func          # str
+        self.args = args          # list of Expr
+        self.keywords = keywords  # list of str
+
 class OpCall(Expr):
     """Effect.op(arg1, arg2): builds the effect payload (plan 1.3). The
        parser folds perform(Effect.op(...)) into a Perform, so an OpCall

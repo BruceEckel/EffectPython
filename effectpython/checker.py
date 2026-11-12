@@ -147,7 +147,12 @@ A method call is chosen by the method's name (check_method, plan
 1.21): s.join(xs) needs a str and a list[str] and is a str;
 d.get(k, default) has the dict's value type and d.get(k) its
 optional; xs.append(v) is the list's. ** takes two ints and gives
-one; the runtime refuses a negative exponent.
+one; the runtime refuses a negative exponent. A for over d.items()
+binds a str and the dict's value type (check_items_loop, plan 1.22).
+A call by name may end in keyword arguments (check_keyword_call,
+plan 1.23): each argument is typed in the order written against the
+parameter or field it goes to, and a class may leave out any field
+that has a default.
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -2022,6 +2027,8 @@ class Checker(object):
             return "bool"
         elif isinstance(expr, ast.Call):
             return self.check_call(expr, scope, effects)
+        elif isinstance(expr, ast.KeywordCall):
+            return self.check_keyword_call(expr, scope, effects)
         elif isinstance(expr, ast.Perform):
             op = self.require_op(expr.effect, expr.op, expr.lineno)
             self.check_args(op.params, op.param_types, expr.args,
@@ -2149,13 +2156,107 @@ class Checker(object):
         fn = self.functions[expr.func]
         self.check_args(fn.params, fn.param_types, expr.args,
                         fn.name + "()", expr.lineno, scope, effects)
+        return self.called(fn, expr.lineno, scope, effects)
+
+    def called(self, fn, lineno, scope, effects):
+        """What a call to a function adds once its arguments are
+        checked: its row, a perform point where the row names an
+        effect, and its return type."""
         for name in fn.effect_row:
-            effects.add(name, expr.lineno)
+            effects.add(name, lineno)
         for name in fn.effect_row:
             if name in self.effects:
                 self.widen_at_perform(scope)
                 break
         return fn.return_type
+
+    def check_keyword_call(self, expr, scope, effects):
+        """A call by name that ends in keyword arguments (plan 1.23),
+        to a function or to the constructor of a handler class or a
+        data class. Each argument is typed in the order written, as
+        the runtime evaluates it, against the parameter it goes to:
+        a positional one by position, a keyword by name. A function
+        needs every parameter, and a class every field without a
+        default."""
+        what = expr.func + "()"
+        info = self.info_of(expr.func)
+        fn = None
+        if info is not None:
+            names = info.field_names
+            types = []
+            for name in names:
+                types.append(info.field_types[name])
+            required = info.required
+            slot = "field"
+        elif expr.func in BUILTINS or expr.func in self.exceptions:
+            raise InvalidProgram(
+                expr.lineno, "%s takes no keyword arguments" % what)
+        elif expr.func in self.functions:
+            fn = self.functions[expr.func]
+            names = fn.params
+            types = fn.param_types
+            required = len(names)
+            slot = "parameter"
+        else:
+            raise InvalidProgram(
+                expr.lineno, "name '%s' is not defined" % expr.func)
+        slots = self.keyword_slots(names, expr, what)
+        filled = {}
+        positional = len(expr.args) - len(expr.keywords)
+        for i in range(len(expr.args)):
+            j = slots[i]
+            filled[j] = True
+            if i < positional:
+                which = "argument %d" % (i + 1)
+            else:
+                which = "argument '%s'" % names[j]
+            actual = self.type_of(expr.args[i], scope, effects)
+            self.require_known(expr.args[i], actual, types[j],
+                               "%s of %s must be %s" %
+                               (which, what, types[j]), expr.lineno)
+            if not matches(actual, types[j]):
+                raise InvalidProgram(
+                    expr.lineno, "%s of %s must be %s, not %s" %
+                    (which, what, types[j], actual))
+            self.hand_over(expr.args[i], types[j], scope)
+        for j in range(required):
+            if j not in filled:
+                raise InvalidProgram(
+                    expr.lineno, "%s needs a value for %s '%s'" %
+                    (what, slot, names[j]))
+        if fn is None:
+            return expr.func
+        return self.called(fn, expr.lineno, scope, effects)
+
+    def keyword_slots(self, names, expr, what):
+        """The parameter each argument goes to, by its index in
+        names: the positional arguments to the first parameters and
+        each keyword to the one it names, in CPython's words where a
+        keyword names none or one already filled. The parser has
+        refused a repeated keyword."""
+        positional = len(expr.args) - len(expr.keywords)
+        if positional > len(names):
+            raise InvalidProgram(
+                expr.lineno, "%s takes %d arguments (%d given)" %
+                (what, len(names), len(expr.args)))
+        slots = []
+        for i in range(positional):
+            slots.append(i)
+        for keyword in expr.keywords:
+            j = -1
+            for k in range(len(names)):
+                if names[k] == keyword:
+                    j = k
+            if j < 0:
+                raise InvalidProgram(
+                    expr.lineno, "%s got an unexpected keyword argument "
+                    "'%s'" % (what, keyword))
+            if j < positional:
+                raise InvalidProgram(
+                    expr.lineno, "%s got multiple values for argument "
+                    "'%s'" % (what, keyword))
+            slots.append(j)
+        return slots
 
     def check_builtin(self, expr, scope, effects):
         """len() of a list or str is int; str() of a scalar is str."""

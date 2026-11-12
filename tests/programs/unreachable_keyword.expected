@@ -1,0 +1,2 @@
+exit 1
+error: line 9: area() got an unexpected keyword argument 'depth'

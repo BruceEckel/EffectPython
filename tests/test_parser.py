@@ -1282,10 +1282,8 @@ def test_a_type_may_name_a_class(written):
      "line 2, column 1: unexpected 'def'"),
     ('@dataclass\nclass Task:\n    pass\n',
      "line 3, column 5: unexpected 'pass'"),
-    ('def main() -> int:\n    t = Task(name="a")\n',
-     "line 2, column 18: unexpected '='"),
 ], ids=['no-decorator', 'other-decorator', 'decorator-arguments',
-        'method', 'base', 'function', 'no-fields', 'keyword-argument'])
+        'method', 'base', 'function', 'no-fields'])
 def test_data_class_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
@@ -1385,4 +1383,42 @@ def test_for_items_syntax_errors(header, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def main() -> int:\n    %s\n        pass\n' % header)
     assert info.value.msg == msg
+
+# --- Keyword arguments (Milestone 23) ----------------------------------------
+
+ONE = ('IntLiteral', 1)
+
+@pytest.mark.parametrize('source, expected', [
+    ('f(a=1)', ('KeywordCall', 'f', [ONE], ['a'])),
+    ('f(2, a=1, b=x)',
+     ('KeywordCall', 'f', [TWO, ONE, ('Name', 'x')], ['a', 'b'])),
+    ('f(a == 1)',
+     ('Call', 'f', [('Compare', '==', ('Name', 'a'), ONE)])),
+    ('f(2)', ('Call', 'f', [TWO])),
+], ids=['keyword', 'after-positional', 'comparison', 'positional'])
+def test_keyword_call_shapes(source, expected):
+    module = parse('def main() -> int:\n    return %s\n' % source)
+    assert shape(module.functions[0].body[0]) == ('Return', expected)
+
+@pytest.mark.parametrize('source, msg', [
+    ('f(a=1, a=2)', 'line 2, column 19: keyword argument repeated: a'),
+    ('f(a=1, 2)',
+     'line 2, column 17: positional argument follows keyword argument'),
+    ('perform(E.op(a=1))', "line 2, column 26: unexpected '='"),
+    ('perform(x=E.op())',
+     'line 2, column 12: perform() takes one Effect.op(...) argument'),
+    ('xs.append(value=1)', "line 2, column 27: unexpected '='"),
+    ('f(1=2)', "line 2, column 15: unexpected '='"),
+], ids=['repeated', 'positional-after', 'operation', 'perform',
+        'method', 'literal-name'])
+def test_keyword_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    return %s\n' % source)
+    assert info.value.msg == msg
+
+def test_a_constructor_inside_handle_takes_no_keywords():
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    with handle(Fake(n=1)):\n'
+              '        pass\n')
+    assert info.value.msg == "line 2, column 23: unexpected '='"
 

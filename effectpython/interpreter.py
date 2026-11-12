@@ -47,7 +47,10 @@ paths a handler instance takes, and install() asks for the class
 among the handlers before it reads an effect from it. A field
 through an expression that is no name is a FieldRead or a
 FieldAssign (plan 1.20), which evaluate the target as any expression
-and find the instance with field_owner.
+and find the instance with field_owner. A KeywordCall (plan 1.23)
+evaluates its arguments in the order written and then arranges the
+values by parameter or field (arranged); a field no argument filled
+is a None that construct_slots fills from the default.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -146,7 +149,10 @@ read of a name nothing bound (require_bound; Environment.lookup;
 unreachable_finally_reads_returned_name.epy), a constructor call with
 too few or too many arguments (check_construction;
 HandlerClass.construct; unreachable_constructor_too_few.epy and
-unreachable_constructor_arity.epy), a field assigned on a name that
+unreachable_constructor_arity.epy), a keyword argument that names
+no parameter, names one already filled, or leaves one unfilled
+(check_keyword_call; arranged and call_with_keywords;
+unreachable_keyword.epy), a field assigned on a name that
 holds no instance (require_instance; Interpreter.instance;
 unreachable_field_on_non_instance.epy), a field the class does not
 declare (require_field; field_index; unreachable_undeclared_field.epy),
@@ -334,22 +340,34 @@ class HandlerClass(object):
             self.methods[method.name] = method
 
     def construct(self, args_w):
-        """Each default is evaluated afresh per construction, so two
-        instances with a list field hold two lists (plan 1.9)."""
+        """The fields in order from positional arguments, the rest
+        from their defaults."""
+        slots_w = [None] * len(self.field_names)
+        for i in range(min(len(args_w), len(slots_w))):
+            slots_w[i] = args_w[i]
+        w_instance = self.construct_slots(slots_w)
+        if len(args_w) > len(self.field_names):
+            raise EffectPythonRuntimeError(
+                "%s() takes %d arguments (%d given)" %
+                (self.name, len(self.field_names), len(args_w)))
+        return w_instance
+
+    def construct_slots(self, slots_w):
+        """One value or None per field, a None filled from the
+        default (plan 1.23). Each default is evaluated afresh per
+        construction, so two instances with a list field hold two
+        lists (plan 1.9)."""
         fields_w = []
         for i in range(len(self.field_names)):
-            if i < len(args_w):
-                fields_w.append(args_w[i])
+            w_given = slots_w[i]
+            if w_given is not None:
+                fields_w.append(w_given)
             elif self.defaults[i] is not None:
                 fields_w.append(default_value(self.defaults[i]))
             else:
                 raise EffectPythonRuntimeError(
                     "%s() needs a value for field '%s'" %
                     (self.name, self.field_names[i]))
-        if len(args_w) > len(self.field_names):
-            raise EffectPythonRuntimeError(
-                "%s() takes %d arguments (%d given)" %
-                (self.name, len(self.field_names), len(args_w)))
         return W_HandlerInstance(self.name, self.field_names, fields_w)
 
 def default_value(expr):
@@ -1005,6 +1023,12 @@ class Interpreter(object):
             for arg in expr.args:
                 args_w.append(self.eval_expr(arg, env))
             return self.call(expr.func, args_w)
+        elif isinstance(expr, ast.KeywordCall):
+            args_w = []
+            for arg in expr.args:
+                args_w.append(self.eval_expr(arg, env))
+            return self.call_with_keywords(expr.func, args_w,
+                                           expr.keywords)
         elif isinstance(expr, ast.Perform):
             args_w = []
             for arg in expr.args:
@@ -1100,6 +1124,35 @@ class Interpreter(object):
                               exception_value(w_value, "throw"))
         else:
             raise EffectPythonRuntimeError("unknown expression node")
+
+    def call_with_keywords(self, name, args_w, keywords):
+        """A call whose last arguments are keywords (plan 1.23):
+        the values, already evaluated in the order written, go to
+        the parameters of a function or the fields of a class."""
+        what = name + "()"
+        if name in self.functions:
+            fn = self.functions[name]
+            slots_w = arranged(fn.params, args_w, keywords, what)
+            values_w = []
+            for i in range(len(slots_w)):
+                w_value = slots_w[i]
+                if w_value is None:
+                    raise EffectPythonRuntimeError(
+                        "%s needs a value for parameter '%s'" %
+                        (what, fn.params[i]))
+                values_w.append(w_value)
+            return self.call_function(fn, values_w)
+        cls = self.handlers.get(name, None)
+        if cls is None:
+            cls = self.records.get(name, None)
+        if cls is not None:
+            return cls.construct_slots(
+                arranged(cls.field_names, args_w, keywords, what))
+        if (name in self.exceptions or name == "print" or name == "len"
+                or name == "str" or name == "range"):
+            raise EffectPythonRuntimeError(
+                "%s takes no keyword arguments" % what)
+        raise EffectPythonRuntimeError("name '%s' is not defined" % name)
 
     def call(self, name, args_w):
         if name == "print":
@@ -1272,6 +1325,34 @@ def unpacked(w_value, count):
             "not enough values to unpack (expected %d, got %d)" %
             (count, given))
     return w_value.items_w
+
+def arranged(names, args_w, keywords, what):
+    """One value per name, or None where no argument filled it: the
+    positional values first, then each keyword's at the name it
+    gives, with CPython's errors (plan 1.23)."""
+    positional = len(args_w) - len(keywords)
+    if positional > len(names):
+        raise EffectPythonRuntimeError(
+            "%s takes %d arguments (%d given)" %
+            (what, len(names), len(args_w)))
+    slots_w = [None] * len(names)
+    for i in range(positional):
+        slots_w[i] = args_w[i]
+    for i in range(len(keywords)):
+        j = -1
+        for k in range(len(names)):
+            if names[k] == keywords[i]:
+                j = k
+        if j < 0:
+            raise EffectPythonRuntimeError(
+                "%s got an unexpected keyword argument '%s'" %
+                (what, keywords[i]))
+        if slots_w[j] is not None:
+            raise EffectPythonRuntimeError(
+                "%s got multiple values for argument '%s'" %
+                (what, keywords[i]))
+        slots_w[j] = args_w[positional + i]
+    return slots_w
 
 def power(base, exponent):
     """base ** exponent by squaring. A negative exponent would give

@@ -1034,8 +1034,8 @@ def longest(books: list[Book]) -> Book | None:
     return best
 
 def main() -> int / []:
-    books = [Book("Dune", 612, ["sf"]), Book("Emma", 474)]
-    books.append(Book("Ulysses", 730))
+    books = [Book("Dune", 612, ["sf"]), Book("Emma", pages=474)]
+    books.append(Book("Ulysses", 730, read=False))
     for book in books:
         print(book.title, book.pages)
     best = longest(books)
@@ -1061,7 +1061,8 @@ Emma False
 None
 ```
 
-The constructor takes the fields in the order they are declared, and a field with a default may be left out, so `Book("Emma", 474)` has no tags and is unread.
+The constructor takes the fields in the order they are declared or by name, and a field with a default may be left out, so `Book("Emma", pages=474)` has no tags and is unread, and `Book("Ulysses", 730, read=False)` skips `tags` to name `read`.
+A function call takes keyword arguments the same way, `area(height=3, width=2)`, and its arguments are evaluated in the order written.
 A field is `int`, `str`, `bool`, a list, or a dict; `[]` and `{}` as defaults give each instance a container of its own.
 `book.title` reads a field and `best.read = True` stores one, and the instance may come from any expression: `by_title["Emma"].title` reads through a dict, and `books[0].pages += 1` would store through a list.
 `print` shows an instance as Python's dataclass does.
@@ -1069,7 +1070,7 @@ A field is `int`, `str`, `bool`, a list, or a dict; `[]` and `{}` as defaults gi
 The class name works where a type is written, on its own and inside `list[Book]`, `dict[str, Book]`, and `Book | None`.
 `longest` returns `Book | None`, and `best` starts as `None` and becomes a `Book` in the loop; the test `best is None or book.pages > best.pages` reads `best.pages` only where `best` is a `Book`, and `main` rules `None` out before it stores a field.
 
-A data class has no methods, its constructor takes no keyword arguments, and an instance has no `==`, so a program compares the fields it means.
+A data class has no methods, and an instance has no `==`, so a program compares the fields it means.
 `tests/programs/build_plan.epy` keeps its tasks in a `list[Task]`, each with the list of names it needs, and `tests/programs/shop_orders.epy` its order lines in a `list[Line]`.
 
 ## 10. What the checker catches
