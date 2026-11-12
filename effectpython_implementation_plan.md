@@ -1696,6 +1696,43 @@ The grammar adds `keywords` and two call productions beside the positional one, 
 Every one of the runtime's keyword errors is unreachable through the checker, since the callee is known by name (`unreachable_keyword.epy`).
 `build_plan.epy` writes `failures=1`, and `data_class.epy` writes `pages=474` and skips `tags` with `read=False`.
 
+### 1.24 Format specs in f-strings (designed 2026-11-12)
+
+The build program's report prints `f"{name:8} {result}"` in Python, and the port has a `padded()` helper with a `while` loop in its place, the last helper that stands in for something Python has built in.
+1.13 left format specs out.
+
+**Today (probed against the binary, 2026-11-12).**
+`f"{name:8}|"` is "line 3, column 18: unexpected ':'": `_expand_fstring` lexes the text between the braces as an expression, and the colon is a token no expression takes.
+CPython 3.14, with `name = "ab"`, `n = 42`, and `m = -42`: `{name:8}` is `ab      `, `{name:>8}` is `      ab`, `{name:^7}` is `  ab   `, `{name:*<5}` is `ab***`, `{n:5}` is `   42`, `{n:<5}` is `42   `, `{n:05}` is `00042`, `{m:05}` is `-0042`, `{n:^6}` is `  42  `, `{n:3d}` is ` 42`, and `{name:4s}` is `ab  `; a width smaller than the text changes nothing.
+`format("ab", "05")` is `ab000`, `format("ab", "d")` is "Unknown format code 'd' for object of type 'str'", `format(42, "5s")` is "Unknown format code 's' for object of type 'int'", and `format(True, "5")` is `    1`, since a `bool` with a spec is formatted as the `int` it is.
+
+**Syntax.**
+A field is `{<expr>}` or `{<expr>:<spec>}`.
+The lexer splits the field's text at its first colon outside a string literal, lexes what stands before it as the expression, and emits what follows as one `FSTRING_SPEC` token, so the spec's characters never meet the expression lexer, which has no token for `^` and would read `08` as an `INT`.
+No expression of the dialect holds a colon outside a string: a dict literal would, and a brace inside a field is already refused.
+The spec is `[[fill]align][0][width][d or s]`: an alignment `<`, `>`, or `^`, with any one character before it as the fill; a `0` for zero padding; a width in digits; and `d` or `s` to name the type.
+The parser reads it into a `Formatted` node around the field's expression, holding the fill, the alignment, the zero flag, the width, and the type letter, and refuses any other spec, the empty one included, with a message that gives the form.
+`FString` is unchanged: a field with a spec is a `Formatted` among its `exprs`.
+
+**Meaning.**
+The value's text is what the field would show without a spec, padded to the width on the side the alignment gives: a `str` to the left and an `int` to the right where none is written, as in Python.
+`0` without an alignment pads an `int` with zeros between its sign and its digits, and a `str` with zeros on the right, which is CPython's reading too.
+`d` needs an `int` and `s` a `str`.
+A `bool` with a spec is refused: Python would print `1` for `True`, and nobody who writes `{done:5}` means that.
+
+**Checker and runtime.**
+`check_fstring` types the expression inside a `Formatted` and holds it to `int` or `str` and to the type letter, in CPython's words for the letter; a value of unknown type passes, as an unformatted field's does, and the runtime makes the same two tests before it pads.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether `!r` comes with it.*
+    The settings program's journal writes `{value!r}`.
+    *The design leaves conversions out: `!r` is a second mechanism, and the port writes the quotes into the literal.*
+2.  *Whether the sign, `,`, and precision parts of the mini-language are accepted.*
+    *The design takes fill, alignment, zero, width, and the two type letters: precision belongs to `float`, which the dialect lacks.*
+3.  *Whether a width may be a nested field, `{name:{width}}`.*
+    *The design refuses it: a brace inside a field is already an error, and a helper with a loop is still there for a computed width.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2559,4 +2596,13 @@ EffectPython/
         *   Reject an unknown keyword, a keyword for a parameter a positional argument filled, a missing parameter, a missing field without a default, a keyword value of the wrong type, and a keyword on `print()` and on an exception class.
         *   A repeated keyword, a positional argument after a keyword, and a keyword in `perform(...)` and in a method call are syntax errors.
         *   The arguments are evaluated in the order written.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+24. **Milestone 24: format specs in f-strings (1.24)**
+    *   *Designed 2026-11-12.*
+    *   *Implementation (planned):* the lexer's split and `FSTRING_SPEC`; the parser's second field production, the spec reader, and `Formatted`; `check_fstring`; the interpreter's padding.
+    *   *Acceptance test:*
+        *   `build_plan.epy` loses `padded()` and writes `f"{name:8} {result}"`, with its recorded output unchanged.
+        *   Every spec of the probe above gives CPython's text.
+        *   Reject a spec on a `bool`, a list, and an optional, `d` on a `str`, and `s` on an `int`.
+        *   `{x:}`, `{x:8.2}`, `{x:,}`, `{x:=5}`, and `{x:{w}}` are syntax errors, and `{d["a:b"]}` reads the colon as part of the string.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
