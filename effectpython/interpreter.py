@@ -44,7 +44,10 @@ no methods and an empty effect, kept in a table of its own
 (Interpreter.records), and its instances are W_HandlerInstance
 values: a constructor call, a field read, and a field store take the
 paths a handler instance takes, and install() asks for the class
-among the handlers before it reads an effect from it.
+among the handlers before it reads an effect from it. A field
+through an expression that is no name is a FieldRead or a
+FieldAssign (plan 1.20), which evaluate the target as any expression
+and find the instance with field_owner.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -216,7 +219,8 @@ runtime_finally_unwind.epy, and runtime_clause_after_assign.epy),
 two instances met by the == of two lists
 (scalars_equal; runtime_instance_compare.epy), a field read on a
 value that is no instance (the AttrRead branch of eval_expr;
-runtime_field_unknown.epy), a subscript, append, for, or in target
+runtime_field_unknown.epy; and field_owner for a FieldRead;
+runtime_field_expression.epy), a subscript, append, for, or in target
 (runtime_subscript_unknown.epy, runtime_append_unknown_target.epy,
 and runtime_for_unknown.epy), a len() or str() argument or an
 f-string field (runtime_len_unknown.epy, runtime_str_unknown.epy,
@@ -513,6 +517,8 @@ class Interpreter(object):
             w_target = self.instance(env, stmt.target)
             i = self.field_index(w_target, stmt.attr)
             w_target.fields_w[i] = self.eval_expr(stmt.value, env)
+        elif isinstance(stmt, ast.FieldAssign):
+            self.exec_field_assign(stmt, env)
         elif isinstance(stmt, ast.IndexAssign):
             w_value = self.eval_expr(stmt.value, env)
             w_target = self.eval_expr(stmt.target, env)
@@ -901,6 +907,34 @@ class Interpreter(object):
             "'%s' is not a handler instance or a data class instance"
             % target)
 
+    def field_owner(self, w_target, attr):
+        """The instance a field is read or stored through (plan
+        1.20), or CPython's error for a value that has no fields."""
+        if isinstance(w_target, W_HandlerInstance):
+            return w_target
+        raise EffectPythonRuntimeError(
+            "'%s' object has no attribute '%s'" %
+            (type_name(w_target), attr))
+
+    def exec_field_assign(self, stmt, env):
+        """A plain store evaluates the value and then the target; an
+        augmented one evaluates the target once, reads the field,
+        evaluates the value, and stores the result, as Python does
+        (plan 1.20)."""
+        if stmt.op == "":
+            w_value = self.eval_expr(stmt.value, env)
+            w_target = self.field_owner(
+                self.eval_expr(stmt.target, env), stmt.attr)
+            i = self.field_index(w_target, stmt.attr)
+            w_target.fields_w[i] = w_value
+            return
+        w_target = self.field_owner(
+            self.eval_expr(stmt.target, env), stmt.attr)
+        i = self.field_index(w_target, stmt.attr)
+        w_old = w_target.fields_w[i]
+        w_value = self.eval_expr(stmt.value, env)
+        w_target.fields_w[i] = self.binop(stmt.op, w_old, w_value)
+
     def field_index(self, w_instance, attr):
         i = w_instance.index_of(attr)
         if i < 0:
@@ -1026,6 +1060,11 @@ class Interpreter(object):
                     "'%s' is not an except binding, a handler instance, "
                     "or a data class instance" % expr.target)
             return self.read_attr(w_target, expr.attr)
+        elif isinstance(expr, ast.FieldRead):
+            w_target = self.field_owner(
+                self.eval_expr(expr.target, env), expr.attr)
+            return w_target.fields_w[
+                self.field_index(w_target, expr.attr)]
         elif isinstance(expr, ast.Resume):
             w_value = self.eval_expr(expr.value, env)
             return self.resume(self.binding(env, expr.target), w_value)

@@ -1044,8 +1044,7 @@ def main() -> int / []:
     by_title = {}
     for book in books:
         by_title[book.title] = book
-    emma = by_title["Emma"]
-    print(emma.title, emma.read)
+    print(by_title["Emma"].title, books[0].read)
     print(longest([]))
     return 0
 ```
@@ -1061,7 +1060,7 @@ None
 
 The constructor takes the fields in the order they are declared, and a field with a default may be left out, so `Book("Emma", 474)` has no tags and is unread.
 A field is `int`, `str`, `bool`, a list, or a dict; `[]` and `{}` as defaults give each instance a container of its own.
-`book.title` reads a field and `best.read = True` stores one, each on a name: `books[0].title` is a syntax error, so the element goes into a name first, as `emma` does.
+`book.title` reads a field and `best.read = True` stores one, and the instance may come from any expression: `by_title["Emma"].title` reads through a dict, and `books[0].pages += 1` would store through a list.
 `print` shows an instance as Python's dataclass does.
 
 The class name works where a type is written, on its own and inside `list[Book]`, `dict[str, Book]`, and `Book | None`.

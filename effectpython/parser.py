@@ -26,9 +26,10 @@ bare name is an effect or a handler instance (plan 1.5).
 
 Attribute reads, attribute calls, and indexing are postfix forms on
 an expression, as in Python's grammar, so self.entries.append(x)
-and collector.entries[0] parse. attr_read requires a name on the
-left of an attribute read, and so of an attribute assignment, where
-the dialect allows nothing else. An index target may be any postfix
+and collector.entries[0] parse. A name on the left of an attribute
+read gives an AttrRead, and of an attribute assignment an AttrAssign;
+any other expression gives a FieldRead or a FieldAssign, whose
+augmented form keeps its operator (plan 1.20). An index target may be any postfix
 expression, so f()[0] = 2 parses. One production reads every
 assignment, and the target's shape picks Assign, AttrAssign, or
 IndexAssign. An augmented assignment x += v builds the Assign or
@@ -610,6 +611,9 @@ def assign(p):
     if isinstance(target, ast.AttrRead):
         return ast.AttrAssign(target.target, target.attr, value,
                               target.lineno)
+    if isinstance(target, ast.FieldRead):
+        return ast.FieldAssign("", target.target, target.attr, value,
+                               target.lineno)
     if isinstance(target, ast.Index):
         return ast.IndexAssign(target.target, target.index, value,
                                target.lineno)
@@ -640,6 +644,9 @@ def aug_assign(p):
         return ast.AttrAssign(
             target.target, target.attr,
             ast.BinOp(op, target, value, target.lineno), target.lineno)
+    if isinstance(target, ast.FieldRead):
+        return ast.FieldAssign(op, target.target, target.attr, value,
+                               target.lineno)
     if isinstance(target, ast.Index):
         return ast.IndexAugAssign(op, target.target, target.index, value,
                                   target.lineno)
@@ -927,8 +934,7 @@ def _perform(tok, args):
 def attr_read(p):
     target = _expr(p[0])
     if not isinstance(target, ast.Name):
-        raise _error(p[1], "an attribute read needs a name on the left "
-                     "of the dot")
+        return ast.FieldRead(target, _text(p[2]), target.lineno)
     return ast.AttrRead(target.id, _text(p[2]), target.lineno)
 
 @pg.production('postfix : postfix DOT NAME LPAREN args RPAREN')

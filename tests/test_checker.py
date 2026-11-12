@@ -2316,6 +2316,112 @@ def test_a_field_read_on_an_unknown_type_is_noted():
     source = read_program('runtime_field_unknown.epy')
     assert unknowns_in(source) == [(15, checker.INDEX)]
 
+# --- A field through any expression (Milestone 20) ---------------------------
+
+@pytest.mark.parametrize('body', [
+    'def f() -> int:\n'
+    '    ts = [Task("a", [])]\n'
+    '    return take(ts[0].seconds)\n',
+    'def make() -> Task:\n'
+    '    return Task("a", [])\n'
+    'def f() -> int:\n'
+    '    return take(make().seconds)\n',
+    'def f() -> int:\n'
+    '    d = {"a": Task("a", [])}\n'
+    '    return take(d["a"].seconds)\n',
+    'def f() -> int:\n'
+    '    ts = [Task("a", [])]\n'
+    '    ts[0].seconds = 4\n'
+    '    ts[0].done = True\n'
+    '    return 0\n',
+    'def f() -> int:\n'
+    '    ts = [Task("a", [])]\n'
+    '    ts[0].seconds += 4\n'
+    '    ts[0].name += "b"\n'
+    '    return 0\n',
+    'def f() -> int:\n'
+    '    ts = [Task("a", [])]\n'
+    '    ts[0].needs.append("q")\n'
+    '    return len(ts[0].needs)\n',
+    'def make() -> Task:\n'
+    '    return Task("a", [])\n'
+    'def f() -> int:\n'
+    '    xs = []\n'
+    '    make().needs = xs\n'
+    '    xs.append("s")\n'
+    '    return 0\n',
+], ids=['index', 'call', 'dict', 'store', 'augmented', 'method',
+        'empty-list-store'])
+def test_a_field_through_an_expression_is_accepted(body):
+    check_source(DATA + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n'
+     '    ts = [Task("a", [])]\n'
+     '    return take(ts[0].nope)\n',
+     "line 20: data class 'Task' has no field 'nope'"),
+    ('def f() -> int:\n'
+     '    ts = [Task("a", [])]\n'
+     '    ts[0].nope = 1\n'
+     '    return 0\n',
+     "line 20: data class 'Task' has no field 'nope'"),
+    ('def f() -> int:\n'
+     '    ts = [Task("a", [])]\n'
+     '    ts[0].seconds = "x"\n'
+     '    return 0\n',
+     "line 20: field 'seconds' of data class 'Task' is int; "
+     'cannot assign str'),
+    ('def f() -> int:\n'
+     '    ts = [Task("a", [])]\n'
+     '    ts[0].seconds += "x"\n'
+     '    return 0\n',
+     'line 20: unsupported operand types for +: int and str'),
+    ('def f() -> int:\n'
+     '    xs = [1]\n'
+     '    return xs[0].seconds\n',
+     "line 20: 'int' object has no attribute 'seconds'"),
+    ('def f() -> int:\n'
+     '    xs = [1]\n'
+     '    xs[0].seconds = 2\n'
+     '    return 0\n',
+     'line 20: a field store needs an instance, not int'),
+    ('def find() -> Task | None:\n'
+     '    return None\n'
+     'def f() -> int:\n'
+     '    return take(find().seconds)\n',
+     'line 21: the value is Task | None; a field read needs a '
+     'test against None first'),
+    ('def f() -> int:\n'
+     '    if 1 == 1:\n'
+     '        xs = [1]\n'
+     '    else:\n'
+     '        xs = [Task("a", [])]\n'
+     '    xs[0].seconds = 2\n'
+     '    return 0\n',
+     'line 23: a field store needs an instance, not a value of '
+     'unknown type'),
+    ('def f() -> int:\n'
+     '    ts = [Task("a", [])]\n'
+     '    return take(ts[0].name)\n',
+     'line 20: argument 1 of take() must be int, not str'),
+    ('def f() -> int:\n'
+     '    ts = [Task("a", [])]\n'
+     '    if 1 == 1:\n'
+     '        v = 1\n'
+     '    else:\n'
+     '        v = "s"\n'
+     '    ts[0].seconds = v\n'
+     '    return 0\n',
+     "line 24: field 'seconds' of data class 'Task' must be int, "
+     "but 'v' has no known type"),
+], ids=['no-field', 'store-no-field', 'store-type', 'augmented-type',
+        'read-on-int', 'store-on-int', 'read-on-optional',
+        'store-on-unknown', 'slot', 'store-unknown-value'])
+def test_a_field_through_an_expression_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(DATA + body)
+    assert info.value.msg == msg
+
 # --- dict[str, T] and in (Milestone 12) --------------------------------------
 
 TOTAL = ('def total(d: dict[str, int]) -> int:\n    n = 0\n'

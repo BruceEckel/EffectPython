@@ -1509,7 +1509,7 @@ The parser's two messages for a non-scalar element, "list[Foo] is not a type; th
 `build_plan.epy` went from 125 lines to 130: the four parallel lists and the dict are gone, and the class declaration, its import, and a six-line list of constructor calls came in.
 `shop_orders.epy` has a `Line` data class in place of its three parallel lists.
 
-### 1.20 A field through any expression (designed 2026-11-12)
+### 1.20 A field through any expression (designed and implemented 2026-11-12, open questions settled as recommended)
 
 1.19 kept the name on the left of the dot (its open question 6), and the tutorial's own listing met the limit: `by_title["Emma"].pages` had to become `emma = by_title["Emma"]` and a read of `emma`.
 A list of instances is read through a subscript as often as through a `for`, so the limit falls on the form Milestone 19 was for.
@@ -1545,6 +1545,13 @@ The target's effects count, so `perform(...)` inside it reaches the row.
     *The design adds two nodes: a name on the left is a binding, `self`, or an instance, told apart by the scope, and every place that reads `AttrRead.target` as a name (`describe`, `value_name`, the binding lookup, the interpreter's two branches) would have to change for no gain in what a program can say.*
 2.  *Whether a field store through an expression of unknown type is allowed.*
     *The design refuses it, as 1.19 refuses it for a name.*
+
+Both were settled as recommended on 2026-11-12.
+
+**As implemented (2026-11-12).**
+The messages are "'int' object has no attribute 'seconds'" for a read, from the checker and the runtime; "a field store needs an instance, not int", and "not a value of unknown type", for a store; and "the value is Task | None; a field read needs a test against None first".
+The parser's "an attribute read needs a name on the left of the dot" is gone.
+`runtime_field_expression.epy` reaches the runtime's error through a list of unknown type.
 
 ### 1.21 `str.join()`, `dict.get()`, and `**` (designed 2026-11-12)
 
@@ -1604,6 +1611,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   `class <Name>(Effect):` with method signature stubs (`def <op>(...) -> <Type>: ...`); a stub may carry a row of exception classes, `def <op>(...) -> <Type> / [<Classes>]: ...`, giving the `OperationDef` its `row` (1.7; Milestone 7, 2026-11-06)
     *   `class <Name>(Handler[<Effect>]):` with field declarations (`<name>: <Type> [= <int or str literal, or [] for a list field>]`) and one method per operation (`def <op>(self, ...) -> <Type> [/ [<Effects>]]: <suite>`), giving a `HandlerDef` node (1.5; Milestone 5, 2026-10-31)
     *   `@dataclass` on the line above `class <Name>:` with field declarations as a handler class has them, a default being an `int`, `str`, or `bool` literal, `[]`, or `{}`, giving a `DataDef` node; a method in the body, another decorator name, and a class with no base and no decorator are refused by name (1.19; Milestone 19, 2026-11-11)
+    *   `<expr>.<attr>` where the expression is no name, a `FieldRead` node, and `<expr>.<attr> = <expr>` and `<expr>.<attr> op= <expr>`, a `FieldAssign` node with an empty or a given operator; a name on the left still gives `AttrRead` and `AttrAssign` (1.20; Milestone 20, 2026-11-12)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -1686,6 +1694,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `TupleLiteral` and `Unpack` (1.17; Milestone 17, 2026-11-11): a literal has the type `tuple[T1, T2, ...]` of its elements, which `require_scalar` keeps to the three scalars; `check_unpack` needs a tuple with as many elements as names and gives each name its element's type, or the unknown type for a value of unknown type; `check_index` gives `t[0]` its element's type for an `int` literal index (`tuple_element`); `require_mutable` refuses a store; and `merged` gives `tuple[...] | None` for a tuple type and `None` (`can_be_absent`).
         *   Narrowing through a test (1.18; Milestone 18, 2026-11-11): `facts(test, when)` lists what a test says about its names and `None` where it is true and where it is false, through `IsNone`, `Not`, and a `BoolOp` on the side where both operands are known; `narrow` applies a list, for the branches of an `if` (`check_if`), the body of a `while` (`check_loop_body`), and the right operand of a `BoolOp` (`type_of`), after which `widen_back` restores the names and marks one a perform point widened as `spoiled` for the statement.
         *   Data classes (1.19; Milestone 19, 2026-11-11): Pass 1 records each `DataDef` as a `HandlerInfo` with no effect and the kind "data class", in `Checker.records`, and `collect_field` serves both kinds of class, with `bool` a field type; `info_of` answers for a handler class or a data class where a constructor call, a field read, or a field store asks, and `check_handle` reads the handler classes alone; `require_type` holds each `list[T]`, `dict[str, T]`, and `T | None` written in a signature or a field to a scalar or a data class; `can_be_absent` accepts a class name, so `merged` gives `Task | None`; `comparable` refuses `==` on two lists of instances and `in` on one; and a field read on a name of unknown type is left to the runtime and noted.
+        *   `FieldRead` and `FieldAssign` (1.20; Milestone 20, 2026-11-12): `check_field_read` types the target and reads the field from its class, leaves a target of unknown type to the runtime, and refuses any other type; `check_field_assign` types the value and then the target for `=`, needs an instance of a known class, and holds the value to the field as `AttrAssign` does, or the field and the value to the operator for an augmented store.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2398,7 +2407,10 @@ EffectPython/
         *   `class Task:` with no decorator, `@other`, and `@dataclass(frozen=True)` are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 20. **Milestone 20: a field through any expression (1.20)**
-    *   *Designed 2026-11-12.*
+    *   *Designed and done 2026-11-12.* The two open questions of 1.20 are settled as recommended.
+    *   *Done 2026-11-12.*
+        `ast_nodes.py` has `FieldRead` and `FieldAssign`; `parser.py` builds them in `attr_read`, `assign`, and `aug_assign`; `checker.py` has `check_field_read` and `check_field_assign`; `interpreter.py` has `field_owner` and `exec_field_assign`.
+        `data_class.epy` reads `by_title["Emma"].title` and `books[0].read` in one expression each.
     *   *Implementation (planned):* the parser's `attr_read`, `assign`, and `aug_assign` build the two nodes for a target that is no name; the checker and the interpreter get a branch for each.
     *   *Acceptance test:*
         *   `data_class.epy` reads `by_title["Emma"].title` in one expression, and its recorded output does not change.

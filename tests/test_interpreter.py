@@ -1025,3 +1025,37 @@ def test_a_data_class_misuse_is_a_runtime_error(statement, msg):
         run_main_body(EITHER_POINT + '    ' + statement
                       + '\n    return 0\n', POINT)
     assert info.value.msg == msg
+
+# --- A field through any expression (Milestone 20) ---------------------------
+
+PICK = ('def pick(ps: list[Point]) -> int:\n    print("pick")\n'
+        '    return 0\n')
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print(ps[1].x, d["a"].tag)', ['2 p']),
+    ('ps[0].x = 7\n    print(ps[0].x)', ['7']),
+    ('ps[pick(ps)].x += 5\n    print(ps[0].x)', ['pick', '6']),
+    ('ps[0].seen.append(3)\n    print(ps[0].seen, ps[1].seen)',
+     ['[3] []']),
+    ('ps[pick(ps)].x = pick(ps) + 9\n    print(ps[0].x)',
+     ['pick', 'pick', '9']),
+], ids=['read', 'store', 'augmented-once', 'method', 'store-order'])
+def test_a_field_through_an_expression(statement, printed):
+    exit_code, lines = run_main_body(
+        '    ps = [Point(1), Point(2)]\n    d = {"a": Point(3)}\n    '
+        + statement + '\n    return 0\n', POINT + PICK)
+    assert (exit_code, lines) == (0, printed)
+
+@pytest.mark.parametrize('statement, msg', [
+    ('print(xs[0].x)', "'int' object has no attribute 'x'"),
+    ('xs[0].x = 1', "'int' object has no attribute 'x'"),
+    ('xs[0].x += 1', "'int' object has no attribute 'x'"),
+    ('xs = [Point(1)]\n    print(xs[0].nope)',
+     "data class 'Point' has no field 'nope'"),
+], ids=['read', 'store', 'augmented', 'no-field'])
+def test_a_field_through_an_expression_runtime_error(statement, msg):
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    xs = [1]\n    ' + statement
+                      + '\n    return 0\n', POINT)
+    assert info.value.msg == msg
+

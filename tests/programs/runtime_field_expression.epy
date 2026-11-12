@@ -1,0 +1,16 @@
+# Runtime-only: an if leaves ps with two types, so the checker lets
+# the field read through the subscript pass; field_owner finds the int.
+
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    x: int
+
+def main() -> int:
+    if 1 == 1:
+        ps = [1]
+    else:
+        ps = [Point(1)]
+    print(ps[0].x)
+    return 0

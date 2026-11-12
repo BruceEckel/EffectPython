@@ -214,6 +214,21 @@ class AttrAssign(Stmt):
         self.attr = attr      # str
         self.value = value    # Expr
 
+class FieldAssign(Stmt):
+    """target.attr = value or target.attr op= value where target is
+       an expression rather than a name, such as ts[0].seconds += 1
+       (plan 1.20). op is empty for a plain store. The augmented
+       form is a node and not a store over a BinOp so that the
+       target is evaluated once, as IndexAugAssign's is."""
+    _attrs_ = ['op', 'target', 'attr', 'value']
+
+    def __init__(self, op, target, attr, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.op = op          # str: "" or an operator
+        self.target = target  # Expr
+        self.attr = attr      # str
+        self.value = value    # Expr
+
 class IndexAssign(Stmt):
     """target[index] = value on a list (plan 1.9)"""
     _attrs_ = ['target', 'index', 'value']
@@ -548,6 +563,17 @@ class AttrRead(Expr):
     def __init__(self, target, attr, lineno=0):
         Node.__init__(self, lineno)
         self.target = target  # str: a variable name
+        self.attr = attr      # str
+
+class FieldRead(Expr):
+    """target.attr where target is an expression rather than a name,
+       such as ts[0].name or make().name: a field of an instance
+       (plan 1.20)."""
+    _attrs_ = ['target', 'attr']
+
+    def __init__(self, target, attr, lineno=0):
+        Node.__init__(self, lineno)
+        self.target = target  # Expr
         self.attr = attr      # str
 
 class Resume(Expr):

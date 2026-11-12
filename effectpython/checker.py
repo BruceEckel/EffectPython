@@ -138,7 +138,10 @@ them and in on one are refused where the element type is known
 (comparable). A field read on a name of unknown type is left to the
 runtime, as a subscript is, so the first pass over a loop may read
 best.pages where `best = None` stands before it; a field store is a
-typed slot and needs the class.
+typed slot and needs the class. A field read or store through an
+expression that is no name, ts[0].name, is a FieldRead or a
+FieldAssign with the same rules (check_field_read,
+check_field_assign; plan 1.20).
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -965,6 +968,8 @@ class Checker(object):
                     "cannot assign %s" % (stmt.attr, info.kind, info.name,
                                           expected, actual))
             self.hand_over(stmt.value, expected, scope)
+        elif isinstance(stmt, ast.FieldAssign):
+            self.check_field_assign(stmt, scope, effects)
         elif isinstance(stmt, ast.IndexAssign):
             self.check_index_assign(stmt, scope, effects)
         elif isinstance(stmt, ast.IndexAugAssign):
@@ -981,6 +986,59 @@ class Checker(object):
             self.check_try(stmt, scope, effects)
         else:
             raise InvalidProgram(stmt.lineno, "unknown statement node")
+
+    def check_field_assign(self, stmt, scope, effects):
+        """target.attr = value through an expression (plan 1.20): the
+        value is typed first, as the runtime evaluates it first, and
+        the target must be an instance of a class the checker knows,
+        since a store is a typed slot. The augmented form types the
+        target first and holds the field and the value to the
+        operator."""
+        actual = UNKNOWN
+        if stmt.op == "":
+            actual = self.type_of(stmt.value, scope, effects)
+        held = self.type_of(stmt.target, scope, effects)
+        info = self.info_of(held)
+        if info is None:
+            if held == UNKNOWN:
+                held = "a value of unknown type"
+            raise InvalidProgram(
+                stmt.lineno, "a field store needs an instance, not %s"
+                % held)
+        expected = self.require_field(info, stmt.attr, stmt.lineno)
+        if stmt.op != "":
+            actual = self.type_of(stmt.value, scope, effects)
+            self.check_operands(stmt.op, expected, actual, stmt.lineno)
+            return
+        self.require_known(
+            stmt.value, actual, expected,
+            "field '%s' of %s '%s' must be %s" %
+            (stmt.attr, info.kind, info.name, expected), stmt.lineno)
+        if not matches(actual, expected):
+            raise InvalidProgram(
+                stmt.lineno, "field '%s' of %s '%s' is %s; "
+                "cannot assign %s" % (stmt.attr, info.kind, info.name,
+                                      expected, actual))
+        self.hand_over(stmt.value, expected, scope)
+
+    def check_field_read(self, expr, scope, effects):
+        """target.attr through an expression (plan 1.20): the field's
+        type where the target is an instance, unknown where the
+        target is, and CPython's words for any other type."""
+        held = self.type_of(expr.target, scope, effects)
+        info = self.info_of(held)
+        if info is not None:
+            return self.require_field(info, expr.attr, expr.lineno)
+        if held == UNKNOWN:
+            self._note_unknown(INDEX, expr.lineno)
+            return UNKNOWN
+        if is_optional(held):
+            raise InvalidProgram(
+                expr.lineno, "the value is %s; a field read needs a "
+                "test against None first" % held)
+        raise InvalidProgram(
+            expr.lineno, "'%s' object has no attribute '%s'" %
+            (held, expr.attr))
 
     def check_if(self, stmt, scope, effects):
         """Each branch starts from the types before the if, and a name
@@ -1885,6 +1943,8 @@ class Checker(object):
             raise InvalidProgram(
                 expr.lineno, "operation %s.%s has no parameter '%s'" %
                 (binding.effect, op.name, expr.attr))
+        elif isinstance(expr, ast.FieldRead):
+            return self.check_field_read(expr, scope, effects)
         elif isinstance(expr, ast.Resume):
             binding = self.require_binding(scope, expr.target,
                                            expr.lineno)

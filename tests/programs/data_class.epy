@@ -32,7 +32,6 @@ def main() -> int / []:
     by_title = {}
     for book in books:
         by_title[book.title] = book
-    emma = by_title["Emma"]
-    print(emma.title, emma.read)
+    print(by_title["Emma"].title, books[0].read)
     print(longest([]))
     return 0

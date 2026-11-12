@@ -815,12 +815,9 @@ def test_unary_minus(source, expected):
 @pytest.mark.parametrize('source, msg', [
     ('def main() -> int:\n    f(1) = 2\n',
      'line 2, column 10: cannot assign to this expression'),
-    ('def main() -> int:\n    xs[0].y\n',
-     'line 2, column 10: an attribute read needs a name on the left '
-     'of the dot'),
     ('class Fake(Handler[Log]):\n    entries: list[int] = [1]\n',
      "line 2, column 24: a list field's default must be []"),
-], ids=['assign-call', 'attr-on-index', 'list-default'])
+], ids=['assign-call', 'list-default'])
 def test_list_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
@@ -1293,3 +1290,30 @@ def test_data_class_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse(source)
     assert info.value.msg == msg
+
+# --- A field through any expression (Milestone 20) ---------------------------
+
+FIRST = ('Index', ('Name', 'ts'), ('IntLiteral', 0))
+
+@pytest.mark.parametrize('source, expected', [
+    ('x = ts[0].name', ('Assign', 'x', ('FieldRead', FIRST, 'name'))),
+    ('x = make().name',
+     ('Assign', 'x', ('FieldRead', ('Call', 'make', []), 'name'))),
+    ('x = t.name', ('Assign', 'x', ('AttrRead', 't', 'name'))),
+    ('ts[0].n = 4',
+     ('FieldAssign', '', FIRST, 'n', ('IntLiteral', 4))),
+    ('ts[0].n += 4',
+     ('FieldAssign', '+', FIRST, 'n', ('IntLiteral', 4))),
+    ('ts[0].needs.append(1)',
+     ('ExprStmt', ('MethodCall', ('FieldRead', FIRST, 'needs'),
+                   'append', [('IntLiteral', 1)]))),
+    ('x = p.ts[0].name',
+     ('Assign', 'x',
+      ('FieldRead', ('Index', ('AttrRead', 'p', 'ts'),
+                     ('IntLiteral', 0)), 'name'))),
+], ids=['index', 'call', 'name', 'store', 'augmented', 'method',
+        'through-a-field'])
+def test_field_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    assert shape(module.functions[0].body[0]) == expected
+
