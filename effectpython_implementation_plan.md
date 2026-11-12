@@ -1529,6 +1529,7 @@ The augmented form needs a node of its own for the reason `IndexAugAssign` does 
 `FieldRead` types its target and reads the field from the class (`info_of`, `require_field`).
 A target of unknown type is left to the runtime and noted, as 1.19 has it for a name; an optional is refused with 1.19's message, worded for a value; and any other type is refused in CPython's words, "'int' object has no attribute 'name'".
 `FieldAssign` types the value first for `=`, since the runtime evaluates it first, then the target, which must be an instance of a known class: a store is a typed slot.
+`AttrAssign` does it the other way round, in the checker (`require_instance` before `type_of`) and in `exec_stmt` (`self.instance` before `eval_expr`); looking a name up has no effect, so the order shows only if a clause rebinds the name during a perform in the value, and the new node takes Python's order where the target can perform.
 The value goes through `require_known`, `matches`, and `hand_over`, as `AttrAssign`'s does.
 For an augmented store the target is typed first, and the field's type and the value's go to `check_operands`.
 The target's effects count, so `perform(...)` inside it reaches the row.
@@ -1563,14 +1564,18 @@ CPython gives `-2 ** 2` as `-4`, `2 ** 3 ** 2` as `512`, `2 ** -1` as `0.5`, and
     On a `{}` no store has refined, the result has no known type.
 *   `xs.append(v)` is as it was.
 
-A target of unknown type is left to the runtime, which looks at the value, and the call is noted in `Checker.unknowns`; `join()` is then still `str`, and `get()` has no known type.
+A target of unknown type is left to the runtime, which looks at the value; `join()` is then still `str`, and `get()` has no known type.
+`check_append` does not note an `append` on a target of unknown type in `Checker.unknowns`, whose kinds are an operator, a test, a subscript, and `len()` or `str()`; `join()` and `get()` on one are noted under the last kind, and `append` stays as it is.
+A method name that is none of the three keeps today's order of tests, so `n.pop()` on an `int` is still "'n' is not a list".
 Any other method name is refused by the target's kind, "a str has no method 'upper'" beside the existing "a list has no method 'pop'", and a method on the wrong kind is "join() needs a str on the left of the dot, not list[str]".
 The interpreter's `list_method` grows the same way.
 At runtime a `join()` of a list that holds anything but `str` is CPython's "sequence item 0: expected str instance, int found".
 
 **`**`.**
 `**` is a new token, with `**=` beside the other augmented operators.
-It binds tighter than a unary minus on its left and groups to the right, so the grammar gets a layer between `term` and `postfix`: `power : postfix | postfix ** power | postfix ** - power`, and `term` reads `power` where it read `postfix`.
+It binds tighter than a unary minus on its left and groups to the right, so the grammar gets a layer between `term` and `postfix`: `power : postfix | postfix ** power | postfix ** - power`, and `term` reads `power` in its three productions (`term : postfix`, `term : MINUS postfix`, `term : term mulop postfix`).
+The lexer's rules are ordered so that a longer operator precedes its prefix, so `**=` and `**` go before `*=` and `*`.
+The augmented form needs nothing more: `aug_assign` takes the operator from the token's text less its last character.
 `-2 ** 2` is then the existing fold of a minus over a non-literal, `0 - (2 ** 2)`.
 Both operands are `int` and so is the result (`OPERATORS`).
 A negative exponent would give a `float`, which the dialect lacks, so the runtime refuses it: "a negative exponent needs a float, which the dialect lacks".
