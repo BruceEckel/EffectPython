@@ -1908,6 +1908,57 @@ The syntax errors are the parser's own: `1 if c` is "unexpected end of line", an
 An arm the facts rule out leaves its notes of unknown operands behind, as the right operand of `and` does (1.18); under a loop the next pass drops them.
 `settings_none.epy` prints the timeout in the Python version's words, and `conditional.epy` runs a perform in an arm that is not taken, a narrowed arm, and a chain through the binary.
 
+### 1.28 Annotated assignment (designed 2026-11-13)
+
+The Python version of the build program starts its two dicts with their types,
+
+```python
+    status: dict[str, str] = {}
+    tries: dict[str, int] = {}
+```
+
+and the port writes `status = {}`, with `tries` a handler field, the one place the dialect lets a `{}` be declared.
+A `{}` or `[]` in a name takes its type from the first store (1.9, 1.12), so a wrong first store is found where the container is next used and not where it went wrong.
+
+**Today (probed against the binary, 2026-11-13).**
+`d: dict[str, str] = {}` in a function is "line 2, column 6: unexpected ':'", and so is a bare `x: int`.
+With `d = {}`, then `d["a"] = "s"`, then `take(d)` for a `dict[str, int]` parameter, the error is at the call: "argument 1 of take() must be dict[str, int], not dict[str, str]".
+A parameter of a type no class has, `x: Foo`, is accepted.
+CPython 3.14: an annotation in a function is not evaluated, so `x: int = "s"` and `y: undefined_name = 1` run; `x: int` alone binds nothing, and a read after it is "cannot access local variable 'x' where it is not associated with a value"; `x, y: int = 1, 2` is "only single target (not tuple) can be annotated"; `x: int += 1` is "invalid syntax"; and `a.b: int = 1` and `a[0]: int = 1` are legal.
+
+**Syntax.**
+`<name>: <type> = <expr>` is a simple statement in a suite, an `AnnAssign` node holding the name, the type as written, and the value.
+The type is what a parameter's may be (2.1).
+The target is a name; a field or a subscript on the left is refused by the parser (open question 2), and so is the form without a value (open question 1).
+
+**Meaning.**
+The value is assigned to the name, as `<name> = <expr>` assigns it.
+The annotation is for the checker, and the runtime does not look at it.
+
+**Checker.**
+The type is held to the rule a parameter's is, by `require_type`.
+The value must match it, as an argument must match a parameter: a value of unknown type is refused, "'n' must be int, but 'v' has no known type", and one of another type, "'n' must be int, not str".
+The name then has the declared type and not the value's: `xs: list[int] = []` is a `list[int]` from the start, so `xs.append("s")` is refused at the `append`, and `best: int | None = None` is an optional where `best = None` is a `None`.
+A value that is a name holding `[]` or `{}` is handed over with the declared type (`hand_over`).
+The declaration is this statement's: a later `n = "s"` retypes the name as it does any other (open question 3).
+A module constant's name is refused, through `rebind`.
+
+**Runtime.**
+`exec_stmt` treats an `AnnAssign` as an `Assign`.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether `x: int` without a value is accepted.*
+    In Python it binds nothing and tells a type checker what a later assignment will hold.
+    *The design refuses it: the checker types a name from its assignments in source order, and a declaration that binds nothing would be the first statement that types a name without one.*
+2.  *Whether a field or a subscript may be the target.*
+    *The design takes a name alone: a field has its type from its class, and an element from its container.*
+3.  *Whether the declared type holds for the rest of the function, so that a later `n = "s"` is refused.*
+    A Python type checker refuses it.
+    *The design lets the later assignment retype the name, as it does after `n = 1`: one rule for what a name holds, the last assignment's, and the fixpoints keep the meaning they have.*
+4.  *Whether a module constant may be annotated, `RETRIES: Final[int] = 3`.*
+    *The design leaves 1.26 as it is, by its second open question.*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2828,4 +2879,14 @@ EffectPython/
         *   Reject a test that is no `bool`, arms of two types, the result handed to a slot of another type, and a use of an optional in the arm where it is not narrowed.
         *   `x = 1 if c`, `[x for x in a if b else c]`, and `1 if c else` are syntax errors.
         *   The arm not taken is not evaluated, and the test is evaluated once and first.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+28. **Milestone 28: annotated assignment (1.28)**
+    *   *Designed 2026-11-13.*
+    *   *Implementation (planned):* the parser's production and `AnnAssign`; the checker's branch of `dispatch_stmt`; the interpreter's branch of `exec_stmt`.
+        The change is to how a name is typed by an assignment, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   `build_plan.epy` has `status: dict[str, str] = {}`, with its recorded output unchanged.
+        *   Accept an annotated `int`, `str`, `bool`, list, dict, tuple, optional, and data class; an empty list or dict given its type; an optional given `None` and then narrowed; and a name holding `[]` assigned to an annotated name.
+        *   Reject a value of another type, a value of unknown type, a store of another type into an annotated empty container, a type that names no class for its element, and a module constant's name.
+        *   `x: int`, `a.b: int = 1`, `xs[0]: int = 1`, `x, y: int = 1, 2`, and `x: int += 1` are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
