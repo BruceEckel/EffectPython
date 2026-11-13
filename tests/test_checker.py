@@ -3349,6 +3349,124 @@ def test_an_instance_name_survives_a_second_pass_over_its_suite():
             '    return 0\n')
     check_source(body)
 
+# --- Conditional expressions (Milestone 27) ----------------------------------
+
+COND = (DATA + 'class Num(Effect):\n    def get() -> int: ...\n'
+        'def maybe(n: int) -> int | None:\n    if n > 0:\n'
+        '        return n\n    return None\n'
+        'def want(n: int | None) -> int:\n    return 0\n'
+        'def total(ns: list[int]) -> int:\n    return len(ns)\n'
+        'def name(s: str) -> str:\n    return s\n')
+
+@pytest.mark.parametrize('body', [
+    'def f(c: bool) -> int:\n'
+    '    x = 1 if c else 2\n'
+    '    return take(x)\n',
+    'def f(c: bool) -> int:\n'
+    '    return take(1) if c else take(2)\n',
+    'def f(c: bool) -> int:\n'
+    '    return take(1 if c else 2)\n',
+    'def f(c: bool) -> int:\n'
+    '    print(name(f"{1 if c else 2:>3}"))\n'
+    '    return total([n if n > 1 else 0 for n in [1, 2]])\n',
+    'def f(c: bool, d: bool) -> str:\n'
+    '    return name("a" if c else "b" if d else "c")\n',
+    'def f(c: bool) -> int / [Num]:\n'
+    '    return take(perform(Num.get()) if c else 0)\n',
+    'def f(c: bool) -> int:\n'
+    '    return want(None if c else 1) + want(1 if c else None)\n',
+    'def f() -> int:\n'
+    '    m = maybe(1)\n'
+    '    return take(0 if m is None else m) + want(m)\n',
+    'def f() -> int:\n'
+    '    m = maybe(1)\n'
+    '    return take(m if m is not None else 0)\n',
+    'def f() -> int:\n'
+    '    best = None\n'
+    '    for i in range(3):\n'
+    '        best = i if best is None else best + i\n'
+    '    return want(best)\n',
+    'def f(c: bool) -> int:\n'
+    '    xs = []\n'
+    '    n = total(xs if c else [1])\n'
+    '    xs.append(2)\n'
+    '    return total(xs)\n',
+    'def f(c: bool) -> int:\n'
+    '    t = Task("a", []) if c else Task("b", ["a"])\n'
+    '    return take(t.seconds)\n',
+], ids=['assigned', 'returned', 'argument', 'field-and-element', 'chain',
+        'performs', 'optional', 'narrowed-else', 'narrowed-body',
+        'none-before-a-loop', 'empty-list-arm', 'instances'])
+def test_a_conditional_expression_is_accepted(body):
+    check_source(COND + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n'
+     '    return 1 if 3 else 2\n',
+     'line 31: if needs a bool, not int'),
+    ('def f(c: bool) -> int:\n'
+     '    x = "a" if c else 2\n'
+     '    return 0\n',
+     'line 31: the arms of a conditional expression must share a type: '
+     'str and int'),
+    ('def f(c: bool) -> int:\n'
+     '    x = [1] if c else None\n'
+     '    return 0\n',
+     'line 31: the arms of a conditional expression must share a type: '
+     'list[int] and None'),
+    ('def f(c: bool) -> int:\n'
+     '    return take("a" if c else "b")\n',
+     'line 31: argument 1 of take() must be int, not str'),
+    ('def f(c: bool) -> int:\n'
+     '    return take(None if c else 1)\n',
+     'line 31: argument 1 of take() must be int, not int | None'),
+    ('def f() -> int:\n'
+     '    m = maybe(1)\n'
+     '    return take(m if m is None else 0)\n',
+     'line 32: argument 1 of take() must be int, not int | None'),
+    ('def f(c: bool) -> int:\n'
+     '    m = maybe(1)\n'
+     '    return take(m + 1 if c else 0)\n',
+     'line 32: unsupported operand types for +: int | None and int'),
+    ('def f() -> int:\n'
+     '    m = maybe(1)\n'
+     '    x = 1 if m is None else 2\n'
+     '    return take(m)\n',
+     'line 33: argument 1 of take() must be int, not int | None'),
+    ('def f(c: bool) -> int:\n'
+     '    xs = []\n'
+     '    ys = [1]\n'
+     '    zs = xs if c else ys\n'
+     '    xs.append("s")\n'
+     '    return 0\n',
+     'line 34: argument 1 of append() must be int, not str'),
+    ('def f(c: bool) -> int:\n'
+     '    x = v if c else 2\n'
+     '    return 0\n',
+     "line 31: name 'v' is not defined"),
+], ids=['test-type', 'two-types', 'list-or-none', 'slot', 'optional-slot',
+        'wrong-arm', 'not-narrowed', 'narrowed-in-the-arms-alone',
+        'empty-list-arm', 'unbound-arm'])
+def test_a_conditional_expression_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(COND + body)
+    assert info.value.msg == msg
+
+def test_an_arm_widens_a_name_its_perform_point_reaches():
+    source = (COND + 'def f(c: bool) -> int / []:\n'
+              '    n = 1\n    try:\n        with handle(Num):\n'
+              '            m = perform(Num.get()) if c else 0\n'
+              '            print(n + 1)\n'
+              '    except Num.get as eff:\n        n = "s"\n'
+              '        eff.resume(1)\n    return 0\n')
+    assert unknowns_in(EFFECTS + source) == [(35, checker.OPERANDS)]
+
+def test_two_empty_list_arms_lose_their_types():
+    source = (COND + 'def f(c: bool) -> int:\n    xs = []\n    ys = []\n'
+              '    zs = xs if c else ys\n    zs.append(1)\n'
+              '    xs.append("s")\n    return len(xs)\n')
+    assert unknowns_in(EFFECTS + source) == [(36, checker.BUILTIN)]
+
 # --- second passes over a suite (verification pass of 2026-11-08) -----------
 
 PASSES = ('class Log(Effect):\n    def note(text: str) -> int: ...\n'

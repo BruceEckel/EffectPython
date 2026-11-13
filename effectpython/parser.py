@@ -47,7 +47,11 @@ is a TupleLiteral, and a, b = value an Unpack, whose targets are
 names (plan 1.17). A for whose iterable is a call to range becomes a ForRange,
 and a unary minus is folded into the literal it negates or into
 0 - x (plan 1.9). break and continue are simple statements giving
-Break and Continue nodes (plan 1.10).
+Break and Continue nodes (plan 1.10). body if test else orelse is an
+IfExp, the top layer of expr, with an expr for its else arm so that
+a chain nests to the right; a comprehension's iterable and condition
+are or_test, as in Python's grammar, so an if after the iterable is
+the filter (plan 1.27).
 
 One nonterminal, try_stmt, reads every try statement, because
 separate ones for a handler installation and an ordinary try/except
@@ -861,6 +865,11 @@ def except_clause(p):
 def pass_through_expr(p):
     return p[0]
 
+@pg.production('expr : or_test IF or_test ELSE expr')
+def if_exp(p):
+    body = _expr(p[0])
+    return ast.IfExp(_expr(p[2]), body, _expr(p[4]), body.lineno)
+
 @pg.production('or_test : or_test OR and_test')
 @pg.production('and_test : and_test AND not_test')
 def bool_op(p):
@@ -1062,12 +1071,13 @@ def list_literal(p):
     assert isinstance(elements, _ExprList)
     return ast.ListLiteral(elements.items, _line(p[0]))
 
-@pg.production('atom : LBRACKET expr FOR NAME IN expr RBRACKET')
+@pg.production('atom : LBRACKET expr FOR NAME IN or_test RBRACKET')
 def list_comp(p):
     return ast.ListComp(_expr(p[1]), _text(p[3]), _expr(p[5]), None,
                         _line(p[0]))
 
-@pg.production('atom : LBRACKET expr FOR NAME IN expr IF expr RBRACKET')
+@pg.production('atom : LBRACKET expr FOR NAME IN or_test IF or_test'
+               ' RBRACKET')
 def list_comp_filtered(p):
     return ast.ListComp(_expr(p[1]), _text(p[3]), _expr(p[5]),
                         _expr(p[7]), _line(p[0]))

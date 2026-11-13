@@ -1537,3 +1537,46 @@ def test_module_constant_syntax_errors(source, msg):
         parse(source)
     assert info.value.msg == msg
 
+
+# --- Conditional expressions (Milestone 27) ----------------------------------
+
+A = ('Name', 'a')
+B = ('Name', 'b')
+C = ('Name', 'c')
+
+@pytest.mark.parametrize('source, expected', [
+    ('a if c else b', ('IfExp', C, A, B)),
+    ('a if c else b if x else xs',
+     ('IfExp', C, A, ('IfExp', X, B, XS))),
+    ('not a if b or c else x',
+     ('IfExp', ('BoolOp', 'or', B, C), ('Not', A), X)),
+    ('a or b if c else x',
+     ('IfExp', C, ('BoolOp', 'or', A, B), X)),
+    ('a if c else b + 1',
+     ('IfExp', C, A, ('BinOp', '+', B, ONE))),
+    ('(a if c else b) + 1',
+     ('BinOp', '+', ('IfExp', C, A, B), ONE)),
+    ('(a, b if c else x)',
+     ('TupleLiteral', [A, ('IfExp', C, B, X)])),
+    ('[a if c else b for x in xs if c]',
+     ('ListComp', ('IfExp', C, A, B), 'x', XS, C)),
+    ('f"{a if c else b:>3}"',
+     ('FString', ['', ''], [('Formatted', ('IfExp', C, A, B), '', '>', False, 3, '')])),
+], ids=['plain', 'chain', 'not-and-or', 'or-in-the-body', 'else-takes-all',
+        'parenthesized', 'tuple', 'element', 'field'])
+def test_if_exp_shapes(source, expected):
+    module = parse('def main() -> int:\n    return %s\n' % source)
+    assert shape(module.functions[0].body[0]) == ('Return', expected)
+
+@pytest.mark.parametrize('source, msg', [
+    ('1 if c', 'line 2, column 18: unexpected end of line'),
+    ('1 if c else', 'line 2, column 23: unexpected end of line'),
+    ('[x for x in a if b else c]', "line 2, column 31: unexpected 'else'"),
+    ('[x for x in a if c else b if c]',
+     "line 2, column 31: unexpected 'else'"),
+    ('1 if c else 2 if d', 'line 2, column 30: unexpected end of line'),
+], ids=['no-else', 'no-arm', 'filter', 'iterable', 'chain-without-else'])
+def test_if_exp_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    return %s\n' % source)
+    assert info.value.msg == msg

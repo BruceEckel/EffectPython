@@ -1,0 +1,33 @@
+# Conditional expressions (plan 1.27): the test is evaluated first
+# and then one arm, so the perform in the arm not taken does not
+# happen; an arm is narrowed by what the test says about None; and a
+# chain nests in the else arm.
+
+from effectpython import Effect, Handler, perform, handle
+
+class Price(Effect):
+    def of(item: str) -> int | None: ...
+
+class Catalog(Handler[Price]):
+    prices: dict[str, int]
+    asked: int = 0
+    def of(self, item: str) -> int | None:
+        self.asked += 1
+        return self.prices[item] if item in self.prices else None
+
+def label(n: int) -> str:
+    return "free" if n == 0 else "cheap" if n < 10 else "dear"
+
+def cost(item: str, known: bool) -> str / [Price]:
+    price = perform(Price.of(item)) if known else None
+    return "unknown" if price is None else f"{price} ({label(price)})"
+
+def main() -> int / []:
+    catalog = Catalog({"pen": 3, "book": 20, "flyer": 0})
+    with handle(catalog):
+        for item in ["pen", "book", "flyer", "ink"]:
+            print(item, cost(item, True))
+        print("map", cost("map", False))
+    print("asked", catalog.asked)
+    print([n if n > 0 else -n for n in [3, -4, 0]])
+    return 0

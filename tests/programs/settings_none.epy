@@ -6,7 +6,9 @@
 # turns a miss into Missing where a setting is required and unpacks
 # the pair, and address() and main() test is None where a miss is
 # ordinary. first_set() keeps the first value a loop finds, the name
-# that starts as None before the loop.
+# that starts as None before the loop. The timeout is printed through
+# a conditional expression, as the Python version prints it (plan
+# 1.27).
 
 from effectpython import Effect, Handler, perform, handle
 
@@ -82,10 +84,8 @@ def main() -> int / []:
                             except Missing as e:
                                 print("no setting for", e)
                         timeout = perform(Lookup.get("timeout"))
-                        if timeout is None:
-                            print("timeout unset")
-                        else:
-                            print("timeout", timeout[0])
+                        print("timeout",
+                              "unset" if timeout is None else timeout[0])
                         print(first_set(["login", "user", "host"]),
                               first_set(["login", "token"]))
     except Lookup.get as eff:

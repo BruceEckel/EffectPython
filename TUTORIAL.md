@@ -962,6 +962,7 @@ The test may be part of a larger one.
 The right operand of `and` and `or` runs only where the left one has not decided, and is checked that way: in `x is not None and x > 0`, the `x` of `x > 0` is an `int`.
 A `while` test narrows its names for the body, so `while n is not None:` walks until a function returns `None`; `tests/programs/narrowed_tests.epy` has each of these.
 The narrowed name is a local variable, and nothing is narrowed after a `while` loop.
+A conditional expression, `"unset" if t is None else t[0]`, evaluates its test and then one arm, and narrows each arm as an `if` narrows its branches; the arms share a type, with `None` and an `int` giving `int | None`, and `tests/programs/conditional.epy` runs the forms.
 `is` has no other use: `x is y` is a syntax error.
 A handler class field, a list element, and a dict value cannot be optional.
 `tests/programs/settings_none.epy` is a longer program with the same forms, and `tests/programs/settings_layers.epy` does its job with a thrown exception in place of `None`.

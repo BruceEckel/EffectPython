@@ -1,0 +1,8 @@
+exit 0
+pen 3 (cheap)
+book 20 (dear)
+flyer 0 (free)
+ink unknown
+map unknown
+asked 4
+[3, 4, 0]

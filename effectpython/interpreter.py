@@ -55,7 +55,8 @@ is a None that construct_slots fills from the default. A ListComp
 its name back in a finally (eval_list_comp). The module constants
 (plan 1.26) are evaluated once into Interpreter.globals, the parent
 of every call's Environment, so a read that finds no local finds
-the constant.
+the constant. An IfExp (plan 1.27) evaluates its test and then
+one arm.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -1025,6 +1026,10 @@ class Interpreter(object):
                 return wrap_bool(left)
             return wrap_bool(truth(self.eval_expr(expr.right, env),
                                    expr.op))
+        elif isinstance(expr, ast.IfExp):
+            if truth(self.eval_expr(expr.test, env), "if"):
+                return self.eval_expr(expr.body, env)
+            return self.eval_expr(expr.orelse, env)
         elif isinstance(expr, ast.Not):
             return wrap_bool(not truth(self.eval_expr(expr.operand, env),
                                        "not"))

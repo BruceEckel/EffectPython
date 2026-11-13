@@ -1848,7 +1848,7 @@ A field read on a constant is "'int' object has no attribute 'x'", and a field s
 The runtime has no refusal of its own: a `define` writes the function's table and hides the constant for that call, which the checker makes unreachable (`unreachable_constant_bound.epy`), and which `tests/test_interpreter.py` shows on a module it does not check.
 `build_plan.epy` has `RETRIES = 3` and `range(1, RETRIES + 1)`, as the Python version does.
 
-### 1.27 Conditional expressions (designed 2026-11-12)
+### 1.27 Conditional expressions (designed and implemented 2026-11-12, open questions taken as recommended and not yet settled)
 
 The Python version of the settings program prints a setting that may be absent in one line,
 
@@ -1899,6 +1899,15 @@ The name takes the `list[T]` the arms share, or loses its type where they share 
 3.  *Whether the test takes Python's truthiness, so that `"unset" if not xs else xs[0]` works on a list.*
     *The design keeps `bool`, the rule of every other test (1.11, open question 1).*
 
+The implementation takes all three as recommended; none has been settled.
+
+**As implemented (2026-11-12).**
+The grammar has no conflict with `expr : or_test IF or_test ELSE expr` once the comprehension's iterable and condition are `or_test`.
+The syntax errors are the parser's own: `1 if c` is "unexpected end of line", and `[x for x in a if b else c]` is "unexpected 'else'".
+`check_if_exp` hands each arm over after the merge, so where both arms are names holding `[]` both lose their types and the expression is unknown.
+An arm the facts rule out leaves its notes of unknown operands behind, as the right operand of `and` does (1.18); under a loop the next pass drops them.
+`settings_none.epy` prints the timeout in the Python version's words, and `conditional.epy` runs a perform in an arm that is not taken, a narrowed arm, and a chain through the binary.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1920,6 +1929,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   a format spec in an f-string field, `{<expr>:<spec>}` with the spec `[[fill]align][0][width][d or s]`: the lexer splits the field at its first colon outside a string literal and emits the spec as one `FSTRING_SPEC` token, and the parser reads it into a `Formatted` node around the field's expression (1.24; Milestone 24, 2026-11-12)
     *   list comprehensions `[<expr> for <name> in <expr>]` and `[<expr> for <name> in <expr> if <expr>]`, a `ListComp` node with the condition or nothing (1.25; Milestone 25, 2026-11-12)
     *   `<NAME> = <literal>` at module level, a `ConstantDef` node, where the literal is an `int`, a `str`, or a `bool` (1.26; Milestone 26, 2026-11-12)
+    *   `<or_test> if <or_test> else <expr>`, an `IfExp` node and the top layer of `expr`; a comprehension's iterable and condition are `or_test` (1.27; Milestone 27, 2026-11-12)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -2009,6 +2019,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `Formatted` (1.24; Milestone 24, 2026-11-12): `check_fstring` hands a field with a spec to `check_formatted`, which types the expression and holds it to `int` or `str` and to the spec's type letter; a value of unknown type passes to the runtime.
         *   `ListComp` (1.25; Milestone 25, 2026-11-12): `check_list_comp` types the iterable once, binds the name to its element type (`element_for`, which the `For` statement shares, or `int` for a call to `range`), and checks the condition and the element from the types before and again from those merged with what a pass left, until nothing changes; the condition's facts narrow the element; the name gets back its type, its unbound state, and its clause binding before each merge; and the result is `list[T]` of the element, or unknown.
         *   Module constants (1.26; Milestone 26, 2026-11-12): Pass 1 records each `ConstantDef` with its literal's type (`collect_constant`); a `Name`, and the name left of a method call's dot, is the constant where there is one; and `require_local` refuses a binding of a constant's name, from `rebind`, which every binding of a local but a parameter's and a comprehension's goes through, at the line `check_stmt` or a clause check last noted in `Checker.line`.
+        *   `IfExp` (1.27; Milestone 27, 2026-11-12): `check_if_exp` holds the test to `bool`, types each arm from the types after the test with the test's facts for its side applied (`narrow`, `widen_back`, from a copy of the spoiled names), merges the types the arms left, leaving out an arm the facts rule out, and gives the type the arms share by `merged`, refusing two known types that share none; an arm that is a name holding `[]` or `{}` is handed over with the result's type (`hand_over`).
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2806,7 +2817,9 @@ EffectPython/
         *   `X = [1]`, `X = f()`, and `X = Y` at module level are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 27. **Milestone 27: conditional expressions (1.27)**
-    *   *Designed 2026-11-12.*
+    *   *Designed and done 2026-11-12.* The three open questions of 1.27 are taken as recommended and not yet settled.
+    *   *Done 2026-11-12.*
+        `ast_nodes.py` has `IfExp`; `parser.py` has `if_exp` and `or_test` in the two comprehension productions; `checker.py` has `check_if_exp`; `interpreter.py` has the `IfExp` branch of `eval_expr`.
     *   *Implementation (planned):* the parser's `expr` production over `or_test`, with `or_test` for a comprehension's iterable and condition, and `IfExp`; `check_if_exp` with the narrowing and the merge of the arms; the interpreter's branch of `eval_expr`.
         The change is to how a name's type changes across two paths, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*

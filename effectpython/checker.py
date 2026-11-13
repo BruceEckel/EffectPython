@@ -159,6 +159,11 @@ a loop body is (check_list_comp, plan 1.25). A module constant,
 NAME = literal, has its literal's type in every function and
 method, and no function may bind its name, by assignment, loop,
 clause, comprehension, or parameter (require_local, plan 1.26).
+The arms of a conditional expression are the branches of an if in
+small: each is typed with what the test says about a name and None
+on its side, the types after it are the merge of what the arms
+left, and its type is the one the arms share (check_if_exp,
+plan 1.27).
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -1180,6 +1185,52 @@ class Checker(object):
                 scope.types[name] = merged(narrowing.before[i], current)
                 self.spoiled[name] = True
 
+    def check_if_exp(self, expr, scope, effects):
+        """body if test else orelse (plan 1.27). Each arm starts
+        from the types after the test, narrowed by what the test
+        says on its side, and one arm runs, so the types after the
+        expression are the merge of those the arms left: an arm
+        assigns no name, but a perform point, a [] handed to a
+        slot, and an append to a [] each retype one. An arm the
+        facts rule out is typed and then left out of the merge and
+        of the result, as check_if leaves out such a branch. The
+        arms must share a type, by merged(), so None and a T give
+        T | None. An arm that is a name holding [] or {} is handed
+        over with that type: the expression's value may be that
+        list, and whoever receives it may append to it."""
+        self.require_bool(self.type_of(expr.test, scope, effects),
+                          "if", expr.lineno)
+        spoiled = self.spoiled.copy()
+        before = scope.types.copy()
+        narrowing = self.narrow(facts(expr.test, True), scope, spoiled)
+        body = self.type_of(expr.body, scope, effects)
+        self.widen_back(narrowing, scope)
+        body_types = scope.types
+        scope.types = before
+        other = self.narrow(facts(expr.test, False), scope, spoiled)
+        orelse = self.type_of(expr.orelse, scope, effects)
+        self.widen_back(other, scope)
+        if narrowing.dead:
+            result = orelse
+        elif other.dead:
+            scope.types = body_types
+            result = body
+        else:
+            scope.types = merge_types(body_types, scope.types)
+            if body == UNKNOWN or orelse == UNKNOWN:
+                result = UNKNOWN
+            else:
+                result = merged(body, orelse)
+                if result == UNKNOWN:
+                    raise InvalidProgram(
+                        expr.lineno, "the arms of a conditional "
+                        "expression must share a type: %s and %s" %
+                        (body, orelse))
+        lost = self.hand_over(expr.body, result, scope)
+        if self.hand_over(expr.orelse, result, scope) or lost:
+            return UNKNOWN
+        return result
+
     def check_return(self, stmt, scope, effects):
         """The value must have the declared return type; a bare return
         gives None."""
@@ -2157,6 +2208,8 @@ class Checker(object):
                               expr.op, expr.lineno)
             self.widen_back(narrowing, scope)
             return "bool"
+        elif isinstance(expr, ast.IfExp):
+            return self.check_if_exp(expr, scope, effects)
         elif isinstance(expr, ast.Not):
             self.require_bool(self.type_of(expr.operand, scope, effects),
                               "not", expr.lineno)

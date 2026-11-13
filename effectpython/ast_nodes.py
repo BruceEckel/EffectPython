@@ -556,6 +556,17 @@ class BoolOp(Expr):
         self.left = left    # Expr
         self.right = right  # Expr
 
+class IfExp(Expr):
+    """body if test else orelse (plan 1.27): the test is evaluated
+       first, and then one arm"""
+    _attrs_ = ['test', 'body', 'orelse']
+
+    def __init__(self, test, body, orelse, lineno=0):
+        Node.__init__(self, lineno)
+        self.test = test      # Expr
+        self.body = body      # Expr
+        self.orelse = orelse  # Expr
+
 class Not(Expr):
     """not operand (plan 1.11)"""
     _attrs_ = ['operand']

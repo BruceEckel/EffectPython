@@ -1276,3 +1276,31 @@ def test_a_module_constant(statement, printed):
         '    ' + statement + '\n    return 0\n', CONSTANTS)
     assert (exit_code, lines) == (0, printed)
 
+
+# --- Conditional expressions (Milestone 27) ----------------------------------
+
+@pytest.mark.parametrize('statement, printed', [
+    ('print(1 if xs[0] == 1 else 2, 1 if xs[0] == 2 else 2)', ['1 2']),
+    ('print(say(1) if say(2) > 1 else say(3))',
+     ['say 2', 'say 1', '1']),
+    ('print(say(1) if say(2) > 2 else say(3))',
+     ['say 2', 'say 3', '3']),
+    ('print(1 if xs[0] > 1 else 2 if xs[0] > 0 else 3)', ['2']),
+    ('v = None\n    print("unset" if v is None else v)', ['unset']),
+    ('print(f"{1 if xs[0] > 1 else 22:>3}|",'
+     ' [x if x > 1 else 0 for x in xs])', [' 22| [0, 2, 3]']),
+    ('ys = xs if xs[0] == 1 else []\n    ys.append(4)\n    print(xs)',
+     ['[1, 2, 3, 4]']),
+], ids=['both-arms', 'test-first', 'else-arm-alone', 'chain', 'none',
+        'field-and-element', 'the-arm-itself'])
+def test_a_conditional_expression(statement, printed):
+    exit_code, lines = run_main_body(
+        '    xs = [1, 2, 3]\n    ' + statement + '\n    return 0\n', SAY)
+    assert (exit_code, lines) == (0, printed)
+
+def test_a_conditional_expression_needs_a_bool_test():
+    with pytest.raises(EffectPythonRuntimeError) as info:
+        run_main_body('    if 1 == 1:\n        v = 1\n    else:\n'
+                      '        v = "s"\n    print(1 if v else 2)\n'
+                      '    return 0\n')
+    assert info.value.msg == 'if needs a bool, not int'
