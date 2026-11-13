@@ -5,6 +5,8 @@
 # Milestone 19 the tasks were four parallel lists and a dict; Task is
 # now the data class the Python version has, and str.join(),
 # dict.get(), 2 ** n, and the format spec {name:8} are Python's own.
+# The dicts in build() and main() start with their types, as the
+# Python version's do (plan 1.28).
 
 from dataclasses import dataclass
 from effectpython import Effect, Handler, perform, handle
@@ -63,7 +65,7 @@ def run(task: Task) -> bool / [Work, Clock, Log]:
     return False
 
 def build(tasks: list[Task]) -> dict[str, str] / [Work, Clock, Log]:
-    status = {}
+    status: dict[str, str] = {}
     for task in tasks:
         blocked = [n for n in task.needs if status.get(n, "") != "ok"]
         if len(blocked) > 0:
@@ -90,11 +92,11 @@ def main() -> int / []:
             status = build(tasks)
     for line in report.lines:
         print(line)
-    counts = {}
+    counts: dict[str, int] = {}
     for name, result in status.items():
         print(f"{name:8} {result}")
         counts[result] = counts.get(result, 0) + 1
-    ordered = {}
+    ordered: dict[str, int] = {}
     for result in ["failed", "ok", "skipped"]:
         if result in counts:
             ordered[result] = counts[result]

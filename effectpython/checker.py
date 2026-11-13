@@ -163,7 +163,10 @@ The arms of a conditional expression are the branches of an if in
 small: each is typed with what the test says about a name and None
 on its side, the types after it are the merge of what the arms
 left, and its type is the one the arms share (check_if_exp,
-plan 1.27).
+plan 1.27). An annotated assignment holds its value to the declared
+type as a parameter holds an argument, and gives the name that type
+for this statement: a [] is a list[int] from the start (check_ann_assign,
+plan 1.28).
 
 A return value must have the function's declared return type, and a
 bare return has the type None (check_return). A function whose
@@ -1004,6 +1007,8 @@ class Checker(object):
                 actual = UNKNOWN
             scope.set_type(stmt.name, actual)
             self.rebind(scope, stmt.name)
+        elif isinstance(stmt, ast.AnnAssign):
+            self.check_ann_assign(stmt, scope, effects)
         elif isinstance(stmt, ast.Unpack):
             self.check_unpack(stmt, scope, effects)
         elif isinstance(stmt, ast.AttrAssign):
@@ -1184,6 +1189,27 @@ class Checker(object):
             else:
                 scope.types[name] = merged(narrowing.before[i], current)
                 self.spoiled[name] = True
+
+    def check_ann_assign(self, stmt, scope, effects):
+        """name: declared = value (plan 1.28). The value must match
+        the declared type as an argument matches a parameter, a
+        value of unknown type refused, and the name then has the
+        declared type and not the value's: a [] is a list[int] from
+        the start, and a None an int | None. The declaration is this
+        statement's, so a later assignment retypes the name as it
+        does any other."""
+        expected = stmt.declared
+        self.require_type(expected, stmt.lineno)
+        actual = self.type_of(stmt.value, scope, effects)
+        demand = "'%s' must be %s" % (stmt.name, expected)
+        self.require_known(stmt.value, actual, expected, demand,
+                           stmt.lineno)
+        if not matches(actual, expected):
+            raise InvalidProgram(
+                stmt.lineno, "%s, not %s" % (demand, actual))
+        self.hand_over(stmt.value, expected, scope)
+        scope.set_type(stmt.name, expected)
+        self.rebind(scope, stmt.name)
 
     def check_if_exp(self, expr, scope, effects):
         """body if test else orelse (plan 1.27). Each arm starts

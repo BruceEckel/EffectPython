@@ -56,7 +56,7 @@ its name back in a finally (eval_list_comp). The module constants
 (plan 1.26) are evaluated once into Interpreter.globals, the parent
 of every call's Environment, so a read that finds no local finds
 the constant. An IfExp (plan 1.27) evaluates its test and then
-one arm.
+one arm. An AnnAssign (plan 1.28) is an Assign to the runtime.
 
 Exceptions (plan 1.6) need one mechanism, RaisedException, an
 EffectError that carries the W_Exception. A raise statement raises
@@ -543,6 +543,8 @@ class Interpreter(object):
         elif isinstance(stmt, ast.Continue):
             raise ContinueSignal()
         elif isinstance(stmt, ast.Assign):
+            env.define(stmt.name, self.eval_expr(stmt.value, env))
+        elif isinstance(stmt, ast.AnnAssign):
             env.define(stmt.name, self.eval_expr(stmt.value, env))
         elif isinstance(stmt, ast.Unpack):
             items_w = unpacked(self.eval_expr(stmt.value, env),

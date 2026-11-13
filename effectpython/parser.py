@@ -51,7 +51,9 @@ Break and Continue nodes (plan 1.10). body if test else orelse is an
 IfExp, the top layer of expr, with an expr for its else arm so that
 a chain nests to the right; a comprehension's iterable and condition
 are or_test, as in Python's grammar, so an if after the iterable is
-the filter (plan 1.27).
+the filter (plan 1.27). name: type = value in a suite is an AnnAssign;
+its target is read as a postfix, as a plain assignment's is, and the
+action refuses one that is no name (plan 1.28).
 
 One nonterminal, try_stmt, reads every try statement, because
 separate ones for a handler installation and an ordinary try/except
@@ -644,6 +646,14 @@ def assign(p):
         return ast.IndexAssign(target.target, target.index, value,
                                target.lineno)
     raise _error(p[1], "cannot assign to this expression")
+
+@pg.production('simple_stmt : postfix COLON type EQUALS expr')
+def annotated_assign(p):
+    target = _expr(p[0])
+    if not isinstance(target, ast.Name):
+        raise _error(p[1], "only a name can be annotated")
+    return ast.AnnAssign(target.id, _type(p[2]), _expr(p[4]),
+                         target.lineno)
 
 @pg.production('simple_stmt : postfix COMMA arg_list EQUALS expr')
 def unpack(p):

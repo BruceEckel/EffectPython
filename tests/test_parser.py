@@ -1580,3 +1580,34 @@ def test_if_exp_syntax_errors(source, msg):
     with pytest.raises(InvalidSyntax) as info:
         parse('def main() -> int:\n    return %s\n' % source)
     assert info.value.msg == msg
+
+# --- Annotated assignment (Milestone 28) -------------------------------------
+
+@pytest.mark.parametrize('source, expected', [
+    ('x: int = 1', ('AnnAssign', 'x', 'int', ONE)),
+    ('x: dict[str, int] = {}',
+     ('AnnAssign', 'x', 'dict[str, int]', ('DictLiteral', [], []))),
+    ('x: int | None = a if c else b',
+     ('AnnAssign', 'x', 'int | None', ('IfExp', C, A, B))),
+    ('x: tuple[int, str] = (1, a)',
+     ('AnnAssign', 'x', 'tuple[int, str]', ('TupleLiteral', [ONE, A]))),
+], ids=['scalar', 'dict', 'optional', 'tuple'])
+def test_ann_assign_shapes(source, expected):
+    module = parse('def main() -> int:\n    %s\n' % source)
+    assert shape(module.functions[0].body[0]) == expected
+
+@pytest.mark.parametrize('source, msg', [
+    ('x: int', 'line 2, column 11: unexpected end of line'),
+    ('a.b: int = 1', 'line 2, column 8: only a name can be annotated'),
+    ('xs[0]: int = 1', 'line 2, column 10: only a name can be annotated'),
+    ('x, y: int = 1, 2', "line 2, column 9: unexpected ':'"),
+    ('x: int += 1', "line 2, column 12: unexpected '+='"),
+    ('x: int = y: int = 1', "line 2, column 15: unexpected ':'"),
+    ('x: list = []', 'line 2, column 8: list needs an element type: '
+     'list[int], list[str], or list[bool]'),
+], ids=['no-value', 'field', 'subscript', 'two-names', 'augmented',
+        'chained', 'bare-list'])
+def test_ann_assign_syntax_errors(source, msg):
+    with pytest.raises(InvalidSyntax) as info:
+        parse('def main() -> int:\n    %s\n' % source)
+    assert info.value.msg == msg

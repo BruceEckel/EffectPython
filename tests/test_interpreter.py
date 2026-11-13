@@ -1304,3 +1304,12 @@ def test_a_conditional_expression_needs_a_bool_test():
                       '        v = "s"\n    print(1 if v else 2)\n'
                       '    return 0\n')
     assert info.value.msg == 'if needs a bool, not int'
+
+# --- Annotated assignment (Milestone 28) -------------------------------------
+
+def test_an_annotated_assignment_assigns():
+    exit_code, lines = run_main_body(
+        '    d: dict[str, int] = {}\n    d["a"] = 1\n    n: int = 2\n'
+        '    n: str = "the runtime does not look"\n    print(d, n)\n'
+        '    return 0\n')
+    assert (exit_code, lines) == (0, ["{'a': 1} the runtime does not look"])

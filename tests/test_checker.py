@@ -3467,6 +3467,111 @@ def test_two_empty_list_arms_lose_their_types():
               '    xs.append("s")\n    return len(xs)\n')
     assert unknowns_in(EFFECTS + source) == [(36, checker.BUILTIN)]
 
+# --- Annotated assignment (Milestone 28) -------------------------------------
+
+@pytest.mark.parametrize('body', [
+    'def f() -> int:\n'
+    '    n: int = 1\n'
+    '    s: str = "a"\n'
+    '    b: bool = True\n'
+    '    p: tuple[int, str] = (1, "a")\n'
+    '    t: Task = Task("a", [])\n'
+    '    print(name(s), b, p)\n'
+    '    return take(n) + take(t.seconds)\n',
+    'def f() -> int:\n'
+    '    xs: list[int] = []\n'
+    '    d: dict[str, int] = {}\n'
+    '    xs.append(1)\n'
+    '    d["a"] = 2\n'
+    '    return total(xs) + take(d["a"])\n',
+    'def f() -> int:\n'
+    '    xs: list[int] = []\n'
+    '    return total(xs) + len(xs)\n',
+    'def f() -> int:\n'
+    '    best: int | None = None\n'
+    '    for i in range(3):\n'
+    '        if best is None or i > best:\n'
+    '            best = i\n'
+    '    if best is None:\n'
+    '        return 0\n'
+    '    return take(best)\n',
+    'def f() -> int:\n'
+    '    m: int | None = 1\n'
+    '    return want(m)\n',
+    'def f() -> int:\n'
+    '    ys = []\n'
+    '    xs: list[int] = ys\n'
+    '    ys.append(1)\n'
+    '    return total(ys)\n',
+    'def f() -> str:\n'
+    '    n: int = 1\n'
+    '    n = "s"\n'
+    '    return name(n)\n',
+], ids=['scalars-tuple-instance', 'empty-containers', 'empty-list-read',
+        'optional-narrowed', 'optional-of-a-value', 'empty-name',
+        'retyped-later'])
+def test_an_annotated_assignment_is_accepted(body):
+    check_source(COND + body)
+
+@pytest.mark.parametrize('body, msg', [
+    ('def f() -> int:\n'
+     '    n: int = "s"\n'
+     '    return 0\n',
+     "line 31: 'n' must be int, not str"),
+    ('def f() -> int:\n'
+     '    n: int = maybe(1)\n'
+     '    return 0\n',
+     "line 31: 'n' must be int, not int | None"),
+    ('def f(c: bool) -> int:\n'
+     '    if c:\n'
+     '        v = 1\n'
+     '    else:\n'
+     '        v = "s"\n'
+     '    n: int = v\n'
+     '    return 0\n',
+     "line 35: 'n' must be int, but 'v' has no known type"),
+    ('def f() -> int:\n'
+     '    d: dict[str, int] = {}\n'
+     '    d["a"] = "s"\n'
+     '    return 0\n',
+     'line 32: the dict holds int; cannot assign str'),
+    ('def f() -> int:\n'
+     '    xs: list[int] = []\n'
+     '    xs.append("s")\n'
+     '    return 0\n',
+     'line 32: argument 1 of append() must be int, not str'),
+    ('def f() -> int:\n'
+     '    m: int | None = 1\n'
+     '    return take(m)\n',
+     'line 32: argument 1 of take() must be int, not int | None'),
+    ('def f() -> int:\n'
+     '    ys = []\n'
+     '    xs: list[int] = ys\n'
+     '    ys.append("s")\n'
+     '    return 0\n',
+     'line 33: argument 1 of append() must be int, not str'),
+    ('def f() -> int:\n'
+     '    xs: list[Foo] = []\n'
+     '    return 0\n',
+     'line 31: list[Foo] is not a type; the element type is int, str, '
+     'bool, or a data class'),
+    ('def f() -> int:\n'
+     '    t: Foo = Task("a", [])\n'
+     '    return 0\n',
+     "line 31: 't' must be Foo, not Task"),
+    ('LIMIT = 3\n'
+     'def f() -> int:\n'
+     '    LIMIT: int = 4\n'
+     '    return 0\n',
+     "line 32: 'LIMIT' is a module constant; a function cannot bind it"),
+], ids=['value-type', 'optional-value', 'unknown-value', 'dict-store',
+        'list-append', 'declared-wider', 'empty-name', 'element-type',
+        'no-such-class', 'constant'])
+def test_an_annotated_assignment_misuse_is_rejected(body, msg):
+    with pytest.raises(InvalidProgram) as info:
+        check_source(COND + body)
+    assert info.value.msg == msg
+
 # --- second passes over a suite (verification pass of 2026-11-08) -----------
 
 PASSES = ('class Log(Effect):\n    def note(text: str) -> int: ...\n'

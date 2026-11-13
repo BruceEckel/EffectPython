@@ -1908,7 +1908,7 @@ The syntax errors are the parser's own: `1 if c` is "unexpected end of line", an
 An arm the facts rule out leaves its notes of unknown operands behind, as the right operand of `and` does (1.18); under a loop the next pass drops them.
 `settings_none.epy` prints the timeout in the Python version's words, and `conditional.epy` runs a perform in an arm that is not taken, a narrowed arm, and a chain through the binary.
 
-### 1.28 Annotated assignment (designed 2026-11-13)
+### 1.28 Annotated assignment (designed and implemented 2026-11-13, open questions taken as recommended and not yet settled)
 
 The Python version of the build program starts its two dicts with their types,
 
@@ -1960,6 +1960,14 @@ A module constant's name is refused, through `rebind`.
 4.  *Whether a module constant may be annotated, `RETRIES: Final[int] = 3`.*
     *The design leaves 1.26 as it is, by its second open question.*
 
+The implementation takes all four as recommended; none has been settled.
+
+**As implemented (2026-11-13).**
+The grammar has no conflict.
+`x: int` is "unexpected end of line", `x, y: int = 1, 2` is "unexpected ':'" at the colon, and `x: int += 1` is "unexpected '+='".
+With `d: dict[str, int] = {}`, the store `d["a"] = "s"` is "the dict holds int; cannot assign str" at its own line, where the probe above was refused at the call two lines on.
+`build_plan.epy` has `status: dict[str, str] = {}` in `build()`, as the Python version does, and the two dicts `main()` counts into are annotated as well.
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -1982,6 +1990,7 @@ The frontend guarantees at compile-time that no effect is triggered without a ma
     *   list comprehensions `[<expr> for <name> in <expr>]` and `[<expr> for <name> in <expr> if <expr>]`, a `ListComp` node with the condition or nothing (1.25; Milestone 25, 2026-11-12)
     *   `<NAME> = <literal>` at module level, a `ConstantDef` node, where the literal is an `int`, a `str`, or a `bool` (1.26; Milestone 26, 2026-11-12)
     *   `<or_test> if <or_test> else <expr>`, an `IfExp` node and the top layer of `expr`; a comprehension's iterable and condition are `or_test` (1.27; Milestone 27, 2026-11-12)
+    *   `<name>: <type> = <expr>` in a suite, an `AnnAssign` node; the target is parsed as a postfix and must be a name (1.28; Milestone 28, 2026-11-13)
     *   `def <name>(<params>) -> <ReturnType> [/ [<Effects>]]: <suite>`
     *   `return <expr>`, a bare `return`, `pass`, assignment `<name> = <expr>`, expression statements
     *   attribute assignment `<name>.<attr> = <expr>`, for `self.<field>` inside a handler method (Milestone 5, 2026-10-31)
@@ -2072,6 +2081,7 @@ The static analyzer runs in three passes over the AST before execution:
         *   `ListComp` (1.25; Milestone 25, 2026-11-12): `check_list_comp` types the iterable once, binds the name to its element type (`element_for`, which the `For` statement shares, or `int` for a call to `range`), and checks the condition and the element from the types before and again from those merged with what a pass left, until nothing changes; the condition's facts narrow the element; the name gets back its type, its unbound state, and its clause binding before each merge; and the result is `list[T]` of the element, or unknown.
         *   Module constants (1.26; Milestone 26, 2026-11-12): Pass 1 records each `ConstantDef` with its literal's type (`collect_constant`); a `Name`, and the name left of a method call's dot, is the constant where there is one; and `require_local` refuses a binding of a constant's name, from `rebind`, which every binding of a local but a parameter's and a comprehension's goes through, at the line `check_stmt` or a clause check last noted in `Checker.line`.
         *   `IfExp` (1.27; Milestone 27, 2026-11-12): `check_if_exp` holds the test to `bool`, types each arm from the types after the test with the test's facts for its side applied (`narrow`, `widen_back`, from a copy of the spoiled names), merges the types the arms left, leaving out an arm the facts rule out, and gives the type the arms share by `merged`, refusing two known types that share none; an arm that is a name holding `[]` or `{}` is handed over with the result's type (`hand_over`).
+        *   `AnnAssign` (1.28; Milestone 28, 2026-11-13): `check_ann_assign` holds the declared type to `require_type`, refuses a value of unknown type (`require_known`) and one that does not match (`matches`), hands over a value that is a name holding `[]` or `{}`, and gives the name the declared type through `set_type` and `rebind`, as an `Assign` gives it the value's.
         *   `Break` and `Continue` (1.10; Milestone 10, 2026-11-07) produce no effects and are rejected outside a loop of the same function, counted by `loop_depth`.
         *   `DictLiteral` and `In` (1.12; Milestone 12, 2026-11-08): the dict types `dict[str, int]`, `dict[str, str]`, and `dict[str, bool]` join the list types, with `{}` the element-less `dict` that the first store or the slot it is handed to refines; a dict's keys are `str` in a literal, a subscript, a store, and an `in` test, `x in xs` needs the list's element type, `in` is `bool`, `len()` takes a dict, and a `for` over a dict binds `str`.
         *   `FString` (1.13; Milestone 13, 2026-11-08) has the type `str`; each field is typed in order with its effects counted and must be `int`, `str`, or `bool` where known, as the argument of `str()` must (`check_fstring`), else "an f-string field needs an int, str, or bool, not list[int]".
@@ -2882,7 +2892,9 @@ EffectPython/
         *   The arm not taken is not evaluated, and the test is evaluated once and first.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 28. **Milestone 28: annotated assignment (1.28)**
-    *   *Designed 2026-11-13.*
+    *   *Designed and done 2026-11-13.* The four open questions of 1.28 are taken as recommended and not yet settled.
+    *   *Done 2026-11-13.*
+        `ast_nodes.py` has `AnnAssign`; `parser.py` has `annotated_assign`; `checker.py` has `check_ann_assign`; `interpreter.py` has the `AnnAssign` branch of `exec_stmt`.
     *   *Implementation (planned):* the parser's production and `AnnAssign`; the checker's branch of `dispatch_stmt`; the interpreter's branch of `exec_stmt`.
         The change is to how a name is typed by an assignment, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
     *   *Acceptance test:*

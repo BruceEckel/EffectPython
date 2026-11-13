@@ -220,6 +220,17 @@ class Assign(Stmt):
         self.name = name    # str
         self.value = value  # Expr
 
+class AnnAssign(Stmt):
+    """name: declared = value (plan 1.28): an assignment whose name
+       has the declared type for the checker"""
+    _attrs_ = ['name', 'declared', 'value']
+
+    def __init__(self, name, declared, value, lineno=0):
+        Node.__init__(self, lineno)
+        self.name = name          # str
+        self.declared = declared  # str: the type as written
+        self.value = value        # Expr
+
 class Unpack(Stmt):
     """name1, name2, ... = value: binds each name to an element of a
        tuple (plan 1.17)"""

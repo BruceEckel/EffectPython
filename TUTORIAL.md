@@ -889,6 +889,7 @@ True False True
 ```
 
 `{}` starts a dict of no value type yet, and the first store `d[k] = v` settles it, as the first `append` settles a `[]`.
+An annotated assignment says the type at the start, `status: dict[str, str] = {}` or `xs: list[int] = []`, and a store of another type is then refused where it is written; the value must match the annotation, and `best: int | None = None` makes the name an optional.
 `d[k]` reads, `d[k] = v` stores, `k in d` and `k not in d` test for a key, `len(d)` counts, and `for k in d` walks the keys in the order they were stored, or `for k, v in d.items()` the keys with their values;
 `in` also tests a list for an element.
 A key the dict lacks is a runtime error, `key 'b' not found`, so a program tests with `in` first or asks with `get`:
