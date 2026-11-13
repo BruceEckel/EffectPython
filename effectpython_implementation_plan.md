@@ -1848,6 +1848,54 @@ A field read on a constant is "'int' object has no attribute 'x'", and a field s
 The runtime has no refusal of its own: a `define` writes the function's table and hides the constant for that call, which the checker makes unreachable (`unreachable_constant_bound.epy`), and which `tests/test_interpreter.py` shows on a module it does not check.
 `build_plan.epy` has `RETRIES = 3` and `range(1, RETRIES + 1)`, as the Python version does.
 
+### 1.27 Conditional expressions (designed 2026-11-12)
+
+The Python version of the settings program prints a setting that may be absent in one line,
+
+```python
+    print("timeout", "unset" if timeout is None else timeout[0])
+```
+
+and `settings_none.epy` has an `if`, an `else`, and two `print()` calls for it.
+1.16 quoted the line when it brought `None` in, and 1.25 noted that the dialect has no conditional expression.
+
+**Today (probed against the binary, 2026-11-12).**
+`x = "a" if v == 1 else "b"` is "line 3, column 13: unexpected 'if'", and so is the form in a `return` and in an f-string field.
+CPython 3.14: the test is evaluated first and then one arm, the other not at all; `1 if False else 2 if False else 3` is `3`, the `else` arm taking a conditional expression of its own; `not True if False else "e"` and `False or True if False else "e"` are `"e"`, the test and the first arm each ending below `if`; `1 if True else 2 + 3` is `1`; `1, 2 if False else 3` is `(1, 3)`; `[n if n > 1 else 0 for n in [1, 2, 3]]` is `[0, 2, 3]`; `[x for x in a if b else c]` is "invalid syntax"; and `x = 1 if c` is "expected 'else' after 'if' expression".
+
+**Syntax.**
+`<or_test> if <or_test> else <expr>` is an `IfExp` node holding the test and the two arms, and it is the top layer of `expr`, above `or`.
+The `else` arm is an `expr`, so a chain nests to the right, as Python's does.
+A comprehension's iterable and its condition are `expr` today and become `or_test`, which is Python's grammar and what keeps `[x for x in a if b]` one reading: an `if` after the iterable is the filter.
+The element stays an `expr`.
+
+**Meaning.**
+The test is evaluated, and then the first arm where it is true and the `else` arm where it is false.
+The test must be a `bool`, as an `if` statement's must (1.11).
+
+**Checker.**
+The test is typed and held to `bool` with the statement's word: "if needs a bool, not int".
+The arms are the branches of an `if` statement in small.
+Each is typed from the types after the test, the first with what the test says about a name and `None` where it is true and the other with what it says where it is false (1.18), so `timeout[0]` above is a subscript of a tuple.
+The names get their types back after each arm, through `widen_back`, so a perform point in an arm that a clause's assignment reaches spoils the name as it does in the right operand of `and`.
+An arm assigns no name but may retype one, by the three ways 1.25 lists, and one arm runs, so the types after the expression are the merge of the types each arm left.
+An arm the test's facts rule out (`best = None`, then `i if best is None else best + i`) is typed with the name unknown and left out of the merge and of the result, as 1.16 does for a branch.
+The expression has the type its arms share; `None` and a `T` that may be absent give `T | None`, by `merged`; an arm of unknown type makes it unknown; and two arms of known types that do not merge are refused (open question 1): "the arms of a conditional expression must share a type: str and int".
+`facts` says nothing for an `IfExp` as a test.
+
+**Runtime.**
+`eval_expr` evaluates the test through `truth(..., "if")` and then the one arm.
+
+**Open questions (recommendations in italics).**
+
+1.  *Whether the arms may have two types.*
+    `print("none" if n == 0 else n)` is legal Python, and `print()` would take the unknown.
+    *The design refuses it, as a list literal refuses two element types: the value would be unknown to every slot after it, and `str(n)` in the arm says what was meant.*
+2.  *Whether a conditional expression as the test of an `if` narrows.*
+    *The design gives it no facts: `if (a is None if c else b is None):` is nothing a program writes.*
+3.  *Whether the test takes Python's truthiness, so that `"unset" if not xs else xs[0]` works on a list.*
+    *The design keeps `bool`, the rule of every other test (1.11, open question 1).*
+
 ---
 
 ## Phase 2: The Frontend (Parser and Static Effect Checker)
@@ -2753,4 +2801,15 @@ EffectPython/
         *   Accept a constant read in a function, in a method, and in a clause, above and below its definition, passed to a slot of its type, and as the target of `join()`.
         *   Reject an assignment, an augmented assignment, a `for`, an unpacking, an `except ... as`, a comprehension, and a parameter with a constant's name; a constant handed to a slot of another type; a constant defined twice or named as a function, a class, or a built-in.
         *   `X = [1]`, `X = f()`, and `X = Y` at module level are syntax errors.
+        *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
+27. **Milestone 27: conditional expressions (1.27)**
+    *   *Designed 2026-11-12.*
+    *   *Implementation (planned):* the parser's `expr` production over `or_test`, with `or_test` for a comprehension's iterable and condition, and `IfExp`; `check_if_exp` with the narrowing and the merge of the arms; the interpreter's branch of `eval_expr`.
+        The change is to how a name's type changes across two paths, so `pypy2 tests/enumerate_programs.py 2 3` runs against a binary translated from it and the counts go in the commit message.
+    *   *Acceptance test:*
+        *   `settings_none.epy` prints the timeout with `"unset" if timeout is None else timeout[0]`, with its recorded output unchanged.
+        *   Accept the expression as an assignment's value, a `return`'s, an argument, an f-string field, and a comprehension's element; a chain in the `else` arm; an arm that performs; `None` in one arm handed to a `T | None` slot; and a narrowed name in each arm.
+        *   Reject a test that is no `bool`, arms of two types, the result handed to a slot of another type, and a use of an optional in the arm where it is not narrowed.
+        *   `x = 1 if c`, `[x for x in a if b else c]`, and `1 if c else` are syntax errors.
+        *   The arm not taken is not evaluated, and the test is evaluated once and first.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
