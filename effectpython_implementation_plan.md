@@ -1930,13 +1930,14 @@ CPython 3.14: an annotation in a function is not evaluated, so `x: int = "s"` an
 `<name>: <type> = <expr>` is a simple statement in a suite, an `AnnAssign` node holding the name, the type as written, and the value.
 The type is what a parameter's may be (2.1).
 The target is a name; a field or a subscript on the left is refused by the parser (open question 2), and so is the form without a value (open question 1).
+The production is `postfix COLON type EQUALS expr`, as the plain assignment's is `postfix EQUALS expr`, since a `NAME` on the left would have to be told from the start of an expression statement before the colon is seen; the action refuses a target that is no name, "only a name can be annotated", at the colon.
 
 **Meaning.**
 The value is assigned to the name, as `<name> = <expr>` assigns it.
 The annotation is for the checker, and the runtime does not look at it.
 
 **Checker.**
-The type is held to the rule a parameter's is, by `require_type`.
+The type is held to the rule a parameter's is, by `require_type`, which looks inside a list, a dict, and an optional and takes a plain name as written: `xs: list[Foo] = []` is "list[Foo] is not a type; the element type is int, str, bool, or a data class", and `t: Foo = Task("a")` has no refusal of the type and fails as a value that does not match, "'t' must be Foo, not Task".
 The value must match it, as an argument must match a parameter: a value of unknown type is refused, "'n' must be int, but 'v' has no known type", and one of another type, "'n' must be int, not str".
 The name then has the declared type and not the value's: `xs: list[int] = []` is a `list[int]` from the start, so `xs.append("s")` is refused at the `append`, and `best: int | None = None` is an optional where `best = None` is a `None`.
 A value that is a name holding `[]` or `{}` is handed over with the declared type (`hand_over`).
