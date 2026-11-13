@@ -1848,7 +1848,7 @@ A field read on a constant is "'int' object has no attribute 'x'", and a field s
 The runtime has no refusal of its own: a `define` writes the function's table and hides the constant for that call, which the checker makes unreachable (`unreachable_constant_bound.epy`), and which `tests/test_interpreter.py` shows on a module it does not check.
 `build_plan.epy` has `RETRIES = 3` and `range(1, RETRIES + 1)`, as the Python version does.
 
-### 1.27 Conditional expressions (designed and implemented 2026-11-12, open questions taken as recommended and not yet settled)
+### 1.27 Conditional expressions (designed and implemented 2026-11-12, open questions settled as recommended)
 
 The Python version of the settings program prints a setting that may be absent in one line,
 
@@ -1899,7 +1899,7 @@ The name takes the `list[T]` the arms share, or loses its type where they share 
 3.  *Whether the test takes Python's truthiness, so that `"unset" if not xs else xs[0]` works on a list.*
     *The design keeps `bool`, the rule of every other test (1.11, open question 1).*
 
-The implementation takes all three as recommended; none has been settled.
+All three were settled as recommended on 2026-11-13, after the implementation had taken them so.
 
 **As implemented (2026-11-12).**
 The grammar has no conflict with `expr : or_test IF or_test ELSE expr` once the comprehension's iterable and condition are `or_test`.
@@ -2817,7 +2817,7 @@ EffectPython/
         *   `X = [1]`, `X = f()`, and `X = Y` at module level are syntax errors.
         *   The enumeration at sizes 2 and 3 gives the counts of the run before the change.
 27. **Milestone 27: conditional expressions (1.27)**
-    *   *Designed and done 2026-11-12.* The three open questions of 1.27 are taken as recommended and not yet settled.
+    *   *Designed and done 2026-11-12.* The three open questions of 1.27 are settled as recommended (2026-11-13).
     *   *Done 2026-11-12.*
         `ast_nodes.py` has `IfExp`; `parser.py` has `if_exp` and `or_test` in the two comprehension productions; `checker.py` has `check_if_exp`; `interpreter.py` has the `IfExp` branch of `eval_expr`.
     *   *Implementation (planned):* the parser's `expr` production over `or_test`, with `or_test` for a comprehension's iterable and condition, and `IfExp`; `check_if_exp` with the narrowing and the merge of the arms; the interpreter's branch of `eval_expr`.
