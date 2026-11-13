@@ -1882,6 +1882,9 @@ An arm assigns no name but may retype one, by the three ways 1.25 lists, and one
 An arm the test's facts rule out (`best = None`, then `i if best is None else best + i`) is typed with the name unknown and left out of the merge and of the result, as 1.16 does for a branch.
 The expression has the type its arms share; `None` and a `T` that may be absent give `T | None`, by `merged`; an arm of unknown type makes it unknown; and two arms of known types that do not merge are refused (open question 1): "the arms of a conditional expression must share a type: str and int".
 `facts` says nothing for an `IfExp` as a test.
+`widen_back` writes a spoiled name into the checker's one table, and the `else` arm is not evaluated after the first, so the table is copied once the test is typed and both arms are narrowed from the copy; the enclosing statement still sees what either arm spoiled.
+An arm that is a name holding `[]` or `{}` is handed over with the expression's type, by `hand_over`, which looks at a bare name alone and so would not see the name inside the expression: until now a name was the one expression whose value could be a local's untyped list, and `zs = xs if c else ys` followed by `zs.append(1)` and `xs.append("s")` would leave `xs` typed `list[str]` with an `int` in it.
+The name takes the `list[T]` the arms share, or loses its type where they share none, and the expression is then unknown, as `zs = xs` is today.
 
 **Runtime.**
 `eval_expr` evaluates the test through `truth(..., "if")` and then the one arm.
